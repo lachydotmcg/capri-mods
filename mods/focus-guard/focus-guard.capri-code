@@ -1,0 +1,256 @@
+// capri-mod: 1
+// id: focus-guard
+// name: Focus Guard
+// version: 1.0.0
+// author: flaque
+// description: Te garde focus et chope les distractions. "focus mode 30 minutes", "focus stats", "am I focused".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class FocusGuard : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex FocusStart = new Regex(@"\bfocus\s+(?:mode|on|up|time)\b|\bstart\s+focus\b|\bno\s+distract", Plain);
+    private static readonly Regex FocusEnd = new Regex(@"\bfocus\s+(?:off|end|stop|done)\b|\bstop\s+focus\b|\bbreak\s+time\b", Plain);
+    private static readonly Regex FocusCheck = new Regex(@"\bam\s+i\s+focused\b|\bfocus\s+(?:check|status)\b|\bhow\s+focused\b", Plain);
+    private static readonly Regex FocusStats = new Regex(@"\bfocus\s+stats?\b|\bdistract(?:ion|ions)\s+stats?\b|\bhow\s+distracted\b", Plain);
+    private static readonly Regex FocusHelp = new Regex(@"\bfocus\s+help\b|\bhelp\s+focus\b", Plain);
+    private static readonly Regex Minutes = new Regex(@"\b(\d+)\s*(?:min(?:ute)?s?|m)\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private string statsFile;
+    private bool focusMode;
+    private DateTime focusStart;
+    private int focusDuration; // minutes
+    private int distractionsThisSession;
+    private int totalDistractions;
+    private int totalFocusSessions;
+    private int totalFocusMinutes;
+    private DateTime lastWarning;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = host.Folder;
+        statsFile = Path.Combine(dataFolder, "focus-stats.txt");
+        focusMode = false;
+        LoadStats();
+        capri.Log("Focus Guard started.");
+    }
+
+    public void Stop()
+    {
+        if (focusMode)
+            EndFocus(true);
+        SaveStats();
+        capri.Log("Focus Guard stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (FocusHelp.IsMatch(said))
+            return "Commandes focus: 'focus mode 30 minutes' pour démarrer, 'focus off' pour arrêter, 'am I focused' pour check, 'focus stats' pour tes distractions.";
+
+        if (FocusStart.IsMatch(said))
+            return StartFocus(said);
+
+        if (FocusEnd.IsMatch(said))
+            return EndFocus(false);
+
+        if (FocusCheck.IsMatch(said))
+            return CheckFocus();
+
+        if (FocusStats.IsMatch(said))
+            return ShowStats();
+
+        // Check for distracting keywords if in focus mode
+        if (focusMode)
+            CheckDistraction(said);
+
+        return null;
+    }
+
+    private string StartFocus(string said)
+    {
+        if (focusMode)
+            return "Déjà en focus mode. " + GetRemainingTime() + " restant.";
+
+        Match m = Minutes.Match(said);
+        int minutes = 30; // default
+        if (m.Success)
+            int.TryParse(m.Groups[1].Value, out minutes);
+
+        minutes = Math.Max(5, Math.Min(240, minutes)); // 5 to 240 minutes
+
+        focusMode = true;
+        focusStart = DateTime.Now;
+        focusDuration = minutes;
+        distractionsThisSession = 0;
+        totalFocusSessions++;
+
+        return "Focus mode on pour " + minutes + " minutes. Je te surveille. Pas de slack.";
+    }
+
+    private string EndFocus(bool auto)
+    {
+        if (!focusMode)
+            return auto ? null : "Pas en focus mode là.";
+
+        TimeSpan elapsed = DateTime.Now - focusStart;
+        int actualMinutes = (int)elapsed.TotalMinutes;
+        totalFocusMinutes += actualMinutes;
+
+        focusMode = false;
+
+        string reply = "Session focus terminée. ";
+        if (actualMinutes >= focusDuration)
+            reply += "Full " + focusDuration + " minutes done! ";
+        else
+            reply += actualMinutes + " minutes sur " + focusDuration + ". ";
+
+        if (distractionsThisSession == 0)
+            reply += "Zéro distraction. Clean.";
+        else if (distractionsThisSession == 1)
+            reply += "Une distraction choppée.";
+        else
+            reply += distractionsThisSession + " distractions. Fais mieux.";
+
+        SaveStats();
+        return reply;
+    }
+
+    private string CheckFocus()
+    {
+        if (!focusMode)
+            return "Pas en focus mode. Dis 'focus mode' pour start.";
+
+        TimeSpan elapsed = DateTime.Now - focusStart;
+        int remaining = focusDuration - (int)elapsed.TotalMinutes;
+
+        if (remaining <= 0)
+            return EndFocus(false);
+
+        string reply = GetRemainingTime() + " restant. ";
+        if (distractionsThisSession == 0)
+            reply += "Aucune distraction pour l'instant. Continue.";
+        else
+            reply += distractionsThisSession + " distraction" + (distractionsThisSession == 1 ? "" : "s") + " choppée" + (distractionsThisSession == 1 ? "" : "s") + ".";
+
+        return reply;
+    }
+
+    private string ShowStats()
+    {
+        if (totalFocusSessions == 0)
+            return "Pas de sessions focus. Dis 'focus mode' pour tracker.";
+
+        StringBuilder reply = new StringBuilder();
+        reply.Append(totalFocusSessions).Append(" session").Append(totalFocusSessions == 1 ? "" : "s").Append(" focus, ");
+        reply.Append(totalFocusMinutes).Append(" minutes total. ");
+        reply.Append(totalDistractions).Append(" distraction").Append(totalDistractions == 1 ? "" : "s"). Append(". ");
+
+        if (totalFocusMinutes > 0)
+        {
+            double ratio = (double)totalDistractions / (totalFocusMinutes / 60.0);
+            reply.Append("Soit ").Append(ratio.ToString("F1")).Append(" distractions par heure.");
+        }
+
+        return reply.ToString();
+    }
+
+    private void CheckDistraction(string said)
+    {
+        // Check for distraction keywords
+        string lower = said.ToLowerInvariant();
+        bool distracted = lower.Contains("youtube") || lower.Contains("twitter") || lower.Contains("reddit") ||
+                         lower.Contains("instagram") || lower.Contains("tiktok") || lower.Contains("facebook") ||
+                         lower.Contains("game") || lower.Contains("video") || lower.Contains("stream");
+
+        if (distracted)
+        {
+            TimeSpan sinceWarning = DateTime.Now - lastWarning;
+            if (sinceWarning.TotalMinutes >= 2) // Don't spam warnings
+            {
+                distractionsThisSession++;
+                totalDistractions++;
+                lastWarning = DateTime.Now;
+
+                string[] warnings = {
+                    "Yo, focus mode tu te rappelles?",
+                    "C'est une distraction ça. Retourne bosser.",
+                    "Focus. Tu m'as demandé de te surveiller.",
+                    "Je t'ai choppé. Reviens au boulot.",
+                    "Non. C'est focus time. T'as setup ça toi-même."
+                };
+
+                capri.Say(warnings[distractionsThisSession % warnings.Length]);
+            }
+        }
+    }
+
+    private string GetRemainingTime()
+    {
+        TimeSpan elapsed = DateTime.Now - focusStart;
+        int remaining = focusDuration - (int)elapsed.TotalMinutes;
+        return remaining + (remaining == 1 ? " minute" : " minutes");
+    }
+
+    private void LoadStats()
+    {
+        try
+        {
+            if (!File.Exists(statsFile))
+                return;
+
+            string[] lines = File.ReadAllLines(statsFile);
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("SESSIONS:"))
+                    int.TryParse(line.Substring(9), out totalFocusSessions);
+                else if (line.StartsWith("MINUTES:"))
+                    int.TryParse(line.Substring(8), out totalFocusMinutes);
+                else if (line.StartsWith("DISTRACTIONS:"))
+                    int.TryParse(line.Substring(13), out totalDistractions);
+            }
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error loading focus stats: " + ex.Message);
+        }
+    }
+
+    private void SaveStats()
+    {
+        try
+        {
+            StringBuilder content = new StringBuilder();
+            content.AppendLine("SESSIONS:" + totalFocusSessions);
+            content.AppendLine("MINUTES:" + totalFocusMinutes);
+            content.AppendLine("DISTRACTIONS:" + totalDistractions);
+            File.WriteAllText(statsFile, content.ToString());
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving focus stats: " + ex.Message);
+        }
+    }
+}

@@ -1,0 +1,170 @@
+// capri-mod: 1
+// id: duo-commentary
+// name: Duo Commentary
+// version: 1.0.0
+// author: flaque
+// description: Capri commente ce que tu fais en live. "comment this", "roast mode", "serious mode", "stop commenting".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class DuoCommentary : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex CommentStart = new Regex(@"\bcomment\s+(?:this|on\s+this|what\s+you\s+see)\b|\bstart\s+commentary\b|\bnarrate\b", Plain);
+    private static readonly Regex CommentStop = new Regex(@"\bstop\s+comment(?:ing|ary)?\b|\bshut\s+up\b|\bsilence\b", Plain);
+    private static readonly Regex RoastMode = new Regex(@"\broast\s+mode\b|\broast\s+me\b|\bsavage\s+mode\b", Plain);
+    private static readonly Regex SeriousMode = new Regex(@"\bserious\s+mode\b|\bprofessional\s+mode\b|\bno\s+roast\b", Plain);
+    private static readonly Regex CommentHelp = new Regex(@"\bcomment(?:ary)?\s+help\b|\bhelp\s+comment\b", Plain);
+    private static readonly Regex ExplainThis = new Regex(@"\bexplain\s+(?:this|what\s+you\s+see)\b|\bwhat\s+am\s+i\s+(?:looking\s+at|doing)\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private bool commentaryActive;
+    private bool roastMode;
+    private DateTime lastComment;
+    private int commentCount;
+    private Random random;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = host.Folder;
+        commentaryActive = false;
+        roastMode = false;
+        random = new Random();
+        capri.Log("Duo Commentary started.");
+    }
+
+    public void Stop()
+    {
+        capri.Log("Duo Commentary stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (CommentHelp.IsMatch(said))
+            return "Commentary commands: 'comment this' for live narration, 'roast mode' for savage takes, 'serious mode' for professional, 'explain this' for one-time analysis, 'stop commenting' to end.";
+
+        if (CommentStart.IsMatch(said))
+            return StartCommentary();
+
+        if (CommentStop.IsMatch(said))
+            return StopCommentary();
+
+        if (RoastMode.IsMatch(said))
+            return SetRoastMode(true);
+
+        if (SeriousMode.IsMatch(said))
+            return SetRoastMode(false);
+
+        if (ExplainThis.IsMatch(said))
+            return ExplainScreen();
+
+        return null;
+    }
+
+    private string StartCommentary()
+    {
+        if (commentaryActive)
+            return "Already commenting. Tell me to stop if you want silence.";
+
+        commentaryActive = true;
+        commentCount = 0;
+        lastComment = DateTime.Now;
+
+        if (roastMode)
+            return "Commentary mode: roast edition. This is gonna be good, choom.";
+        else
+            return "Commentary mode on. I'll narrate what I see. Professional style.";
+    }
+
+    private string StopCommentary()
+    {
+        if (!commentaryActive)
+            return "Wasn't commenting anyway.";
+
+        commentaryActive = false;
+        return commentCount > 0 
+            ? "Commentary off. That was " + commentCount + " comments. You're welcome." 
+            : "Commentary off.";
+    }
+
+    private string SetRoastMode(bool roast)
+    {
+        roastMode = roast;
+        
+        if (roast)
+            return commentaryActive 
+                ? "Switching to roast mode. Let's get savage." 
+                : "Roast mode ready. Say 'comment this' and I'll destroy you.";
+        else
+            return commentaryActive 
+                ? "Switching to serious mode. Professional commentary only." 
+                : "Serious mode ready. Say 'comment this' for clean narration.";
+    }
+
+    private string ExplainScreen()
+    {
+        // Single commentary without activating continuous mode
+        commentCount++;
+        
+        if (roastMode)
+            return GetRoastComment();
+        else
+            return GetSeriousComment();
+    }
+
+    private string GetRoastComment()
+    {
+        string[] roasts = {
+            "I see you're working hard on... wait, is that a game? Classic.",
+            "That code? Yeah, I've seen worse. Not much worse, but I've seen it.",
+            "You know there's a StackOverflow for this, right? Just checking.",
+            "Oh we're gaming again. Third hour straight. Bold strategy.",
+            "That's certainly one way to do it. Not the best way, but one way.",
+            "I'd explain what's wrong here but we don't have that kind of time, choom.",
+            "You're really committed to this approach. Respect. It's wrong, but respect.",
+            "Gaming during work hours? I'm not your mom, do what you want.",
+            "That error message is pretty clear but sure, keep clicking randomly.",
+            "I see YouTube's open. For research, obviously. Sure."
+        };
+
+        return roasts[random.Next(roasts.Length)];
+    }
+
+    private string GetSeriousComment()
+    {
+        string[] comments = {
+            "I see code on screen. Multiple files open. Looks like active development.",
+            "Browser with documentation open. Good practice, checking references.",
+            "Game running. Taking a break, or is this the actual task?",
+            "Terminal visible. Command line work, looks productive.",
+            "Lots of tabs open. Either research or distraction, hard to tell.",
+            "Text editor front and center. Writing mode, I respect it.",
+            "Debugging session in progress. Stack traces visible.",
+            "Design work showing. Visual elements being arranged.",
+            "Testing interface. QA work or trying to break something.",
+            "Communication app visible. Collaboration or procrastination?"
+        };
+
+        return comments[random.Next(comments.Length)];
+    }
+}
