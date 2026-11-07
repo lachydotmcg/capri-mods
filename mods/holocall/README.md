@@ -17,8 +17,6 @@ The call screen comes up at the top right of your main screen and stays there un
 
 For the call, her voice gets her own robot and glitch effects turned up a little, with quiet line static and a chirp when the call connects and when it ends. Hanging up puts her voice back to how your settings have it. Your settings are never changed, so nothing sticks after Capri restarts.
 
-Her call face follows the skin she's wearing. A skin that comes with its own face.png is used as it is. For any other skin, Holocall looks at what each of her colours became in the skin and paints her call face to match, taking about a third of a second when the call starts. Only colours carry over, so hats, halos and other things a skin adds don't show on the call. Switching skins or colour sets shows on the next call.
-
 "Hang up", "end this call" and "disconnect" only end a holocall while one is on, so they still work for her own call mode the rest of the time.
 
-To follow her voice and change it, and to see which skin she has on, the mod reads a few of Capri's own private settings. If a Capri update renames them, the call screen still works, but her mouth won't follow her voice and her voice stays normal until the mod is updated. Windows only.
+To follow her voice and change it, the mod reads a few of Capri's own private settings. If a Capri update renames them, the call screen still works, but her mouth won't follow her voice and her voice stays normal until the mod is updated. Windows only.

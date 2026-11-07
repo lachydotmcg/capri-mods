@@ -1,7 +1,7 @@
 // capri-mod: 1
 // id: holocall
 // name: Holocall
-// version: 1.2.0
+// version: 1.2.1
 // author: Issei
 // description: Say "holo call" and she stays on a little call screen in the corner, glitchy face, call-line voice and all, until you say "hang up".
 
@@ -12,7 +12,6 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
-using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
@@ -294,7 +293,6 @@ internal sealed class Call
     private CallScreen screen;
     private Line line, draining;
     private Look look;
-    private string faceKey;   // which skin and colours her call face was made in
     private bool live, ending, heardEnd;
     private double started, shownAt = -1, leavingAt = -1, lastTalk = -10, endAt, last, lastCheck, lastTop;
     private double level, nextIdle;
@@ -310,27 +308,13 @@ internal sealed class Call
 
     internal void Begin()
     {
-        // a new call: her face in the skin she has on now, made again only if her skin or colours changed
-        if (!live)
-        {
-            string key = SkinFace.Key(capri);
-            if (look != null && key != faceKey) { look.Dispose(); look = null; }
-            faceKey = key;
-        }
         if (look == null)
         {
-            Bitmap face = null;
-            try { face = SkinFace.Make(capri); }
-            catch (Exception error) { capri.Log("holocall: her face in this skin: " + error.Message); }
-            if (face == null) face = capri.Art("face");
+            Bitmap face = capri.Art("face");
             if (face == null) throw new Exception("her face art is missing");
-            float k = Math.Max(0.8f, Math.Min(2.6f, Screen.PrimaryScreen.Bounds.Height / 1080f));
-            using (face) look = new Look(face, k);
-        }
-        if (screen == null)
-        {
             Rectangle work = Screen.PrimaryScreen.WorkingArea;
             float k = Math.Max(0.8f, Math.Min(2.6f, Screen.PrimaryScreen.Bounds.Height / 1080f));
+            look = new Look(face, k);
             int m = (int)(22 * k);
             screen = new CallScreen(new Rectangle(work.Right - look.Width - m, work.Top + m, look.Width, look.Height));
             screen.Begin();
@@ -1335,219 +1319,4 @@ internal static class Native
         Rectangle screen = Screen.FromRectangle(area).Bounds;
         return rect.Contains(screen);
     }
-}
-
-// Her face for the call in the skin she's wearing. Her call face is its own portrait, not one of her animation frames,
-// so a skin only changes it if the skin has its own face.png. When it doesn't, this works out what each of her colours
-// became in the skin's sheets, compared pixel for pixel with her own, and paints her portrait with that. Her face gets
-// a second map learned only around her eyes, so a face mask can go a different colour from the rest of her.
-// Shapes a skin adds, like hats, can't carry over this way: only colours do.
-internal static class SkinFace
-{
-    private const BindingFlags Any = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static;
-    private static readonly string[] Sheets = { "idle", "perch", "blink", "laydown", "walk" };
-    private const int Near = 16;      // how far from her eyes, in sheet pixels, counts as her face
-    private const int Fewest = 8;     // a colour needs this many pixels to be learned
-    // her eyes on the 400 x 400 portrait, and how far around them her face reaches
-    private static readonly float[][] Eyes = { new float[] { 170, 207.5f }, new float[] { 211.5f, 197.5f } };
-    private const float FaceFull = 38, FaceEnd = 58, CloseEnough = 48;
-
-    // Which skin she has on, or null with none. Read from Capri's own field; if it can't be read, known is false.
-    internal static string Folder(out bool known)
-    {
-        known = false;
-        try
-        {
-            Type her = typeof(ICapriHost).Assembly.GetType("CapriDesktop.Companion");
-            FieldInfo f = her == null ? null : her.GetField("SkinFolder", Any);
-            if (f == null) return null;
-            known = true;
-            return (string)f.GetValue(null);
-        }
-        catch (Exception) { return null; }
-    }
-
-    // What she looks like now, to tell whether her call face needs making again: her skin and her idle sheet's pixels.
-    internal static string Key(ICapriHost capri)
-    {
-        bool known;
-        string folder = Folder(out known);
-        int hash = 17;
-        using (Bitmap idle = capri.Art("idle"))
-            if (idle != null)
-            {
-                int[] px = Argb(idle);
-                for (int i = 0; i < px.Length; i += 7) hash = unchecked(hash * 31 + px[i]);
-            }
-        return (known ? folder ?? "none" : "?") + "|" + hash;
-    }
-
-    internal static Bitmap Make(ICapriHost capri)
-    {
-        bool known;
-        string folder = Folder(out known);
-        // no skin, or a skin with its own face: Capri's face is right as it is (with any colour set already on it)
-        if (known && (folder == null || File.Exists(Path.Combine(folder, "face.png")))) return capri.Art("face");
-        using (Bitmap stockFace = Stock("face"))
-        {
-            if (stockFace == null) return capri.Art("face");
-            Learner all = new Learner(), face = new Learner();
-            foreach (string name in Sheets)
-                using (Bitmap stock = Stock(name))
-                using (Bitmap worn = capri.Art(name))
-                {
-                    if (stock == null || worn == null || stock.Size != worn.Size) continue;
-                    Learn(Argb(stock), Argb(worn), stock.Width, stock.Height, all, face);
-                }
-            if (all.Count == 0) return capri.Art("face");
-            return Paint(stockFace, all.Done(), face.Done());
-        }
-    }
-
-    private static void Learn(int[] a, int[] b, int w, int h, Learner all, Learner face)
-    {
-        // how far each pixel is from her eyes, counting steps across and down
-        int[] far = new int[a.Length];
-        for (int i = 0; i < a.Length; i++) far[i] = IsEye(a[i]) ? 0 : 1 << 20;
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++)
-            {
-                int i = y * w + x;
-                if (x > 0 && far[i - 1] + 1 < far[i]) far[i] = far[i - 1] + 1;
-                if (y > 0 && far[i - w] + 1 < far[i]) far[i] = far[i - w] + 1;
-            }
-        for (int y = h - 1; y >= 0; y--)
-            for (int x = w - 1; x >= 0; x--)
-            {
-                int i = y * w + x;
-                if (x < w - 1 && far[i + 1] + 1 < far[i]) far[i] = far[i + 1] + 1;
-                if (y < h - 1 && far[i + w] + 1 < far[i]) far[i] = far[i + w] + 1;
-            }
-        for (int i = 0; i < a.Length; i++)
-        {
-            if (((a[i] >> 24) & 255) < 250 || ((b[i] >> 24) & 255) < 250) continue;
-            all.Add(a[i], b[i]);
-            if (far[i] <= Near) face.Add(a[i], b[i]);
-        }
-    }
-
-    private static bool IsEye(int c)
-    {
-        int al = (c >> 24) & 255, r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
-        return al > 200 && bl > 150 && g > 110 && r < 130;
-    }
-
-    private static Bitmap Paint(Bitmap stockFace, Learned all, Learned face)
-    {
-        int w = stockFace.Width, h = stockFace.Height;
-        float u = w / 400f;
-        int[] px = Argb(stockFace);
-        Dictionary<int, float[]> seenAll = new Dictionary<int, float[]>(), seenFace = new Dictionary<int, float[]>();
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++)
-            {
-                int i = y * w + x, c = px[i];
-                int al = (c >> 24) & 255;
-                if (al == 0) continue;
-                float d = float.MaxValue;
-                foreach (float[] e in Eyes) d = Math.Min(d, (float)Math.Sqrt(Sq(x / u - e[0]) + Sq(y / u - e[1])));
-                float wf = Math.Max(0, Math.Min(1, (FaceEnd - d) / (FaceEnd - FaceFull)));
-                int rgb = c & 0xFFFFFF;
-                float[] g = Mapped(rgb, all, seenAll);
-                float r0 = g[0], g0 = g[1], b0 = g[2];
-                if (wf > 0 && face.Count > 0)
-                {
-                    float[] f = Mapped(rgb, face, seenFace);
-                    if (f[3] < CloseEnough)
-                    {
-                        r0 += (f[0] - r0) * wf; g0 += (f[1] - g0) * wf; b0 += (f[2] - b0) * wf;
-                    }
-                }
-                px[i] = (al << 24) | (Byte(r0) << 16) | (Byte(g0) << 8) | Byte(b0);
-            }
-        Bitmap made = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-        BitmapData data = made.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-        Marshal.Copy(px, 0, data.Scan0, px.Length);
-        made.UnlockBits(data);
-        return made;
-    }
-
-    // A portrait colour in the skin: the skin colour of the nearest learned colour of hers, keeping its own light and
-    // dark. The fourth number is how far that nearest colour was.
-    private static float[] Mapped(int rgb, Learned map, Dictionary<int, float[]> seen)
-    {
-        float[] got;
-        if (seen.TryGetValue(rgb, out got)) return got;
-        float r = (rgb >> 16) & 255, g = (rgb >> 8) & 255, b = rgb & 255;
-        int best = 0;
-        float bestD = float.MaxValue;
-        for (int k = 0; k < map.Count; k++)
-        {
-            float d = Sq(r - map.From[k * 3]) + Sq(g - map.From[k * 3 + 1]) + Sq(b - map.From[k * 3 + 2]);
-            if (d < bestD) { bestD = d; best = k; }
-        }
-        float lit = Math.Max(0.6f, Math.Min(1.6f, (Lum(r, g, b) + 8) / (Lum(map.From[best * 3], map.From[best * 3 + 1], map.From[best * 3 + 2]) + 8)));
-        got = new float[] { map.To[best * 3] * lit, map.To[best * 3 + 1] * lit, map.To[best * 3 + 2] * lit, (float)Math.Sqrt(bestD) };
-        seen[rgb] = got;
-        return got;
-    }
-
-    private static float Lum(float r, float g, float b) { return r * 0.3f + g * 0.59f + b * 0.11f; }
-    private static float Sq(float v) { return v * v; }
-    private static int Byte(float v) { return v <= 0 ? 0 : v >= 255 ? 255 : (int)(v + 0.5f); }
-
-    // Her own picture, straight from Capri, before any skin or colour set.
-    private static Bitmap Stock(string name)
-    {
-        using (Stream s = typeof(ICapriHost).Assembly.GetManifestResourceStream("Capri.Sprite." + name + ".png"))
-            return s == null ? null : new Bitmap(s);
-    }
-
-    private static int[] Argb(Bitmap b)
-    {
-        BitmapData d = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-        int[] px = new int[b.Width * b.Height];
-        Marshal.Copy(d.Scan0, px, 0, px.Length);
-        b.UnlockBits(d);
-        return px;
-    }
-
-    // Counts, for each of her colours (to 32 levels a channel), the colours those pixels have in the skin.
-    private sealed class Learner
-    {
-        private sealed class Bucket { internal long R, G, B; internal int N; internal readonly int[] Seen = new int[768]; }
-        private readonly Dictionary<int, Bucket> buckets = new Dictionary<int, Bucket>();
-        internal int Count;
-
-        internal void Add(int from, int to)
-        {
-            int r = (from >> 16) & 255, g = (from >> 8) & 255, b = from & 255;
-            int key = (r >> 3) << 10 | (g >> 3) << 5 | (b >> 3);
-            Bucket k;
-            if (!buckets.TryGetValue(key, out k)) { k = new Bucket(); buckets[key] = k; }
-            k.R += r; k.G += g; k.B += b; k.N++;
-            k.Seen[(to >> 16) & 255]++; k.Seen[256 + ((to >> 8) & 255)]++; k.Seen[512 + (to & 255)]++;
-            Count++;
-        }
-
-        // her colour, as the average of its pixels, and the skin colour most of them became (the middle of each channel)
-        internal Learned Done()
-        {
-            List<float> from = new List<float>(), to = new List<float>();
-            foreach (Bucket k in buckets.Values)
-            {
-                if (k.N < Fewest) continue;
-                from.Add(k.R / (float)k.N); from.Add(k.G / (float)k.N); from.Add(k.B / (float)k.N);
-                for (int c = 0; c < 3; c++)
-                {
-                    int half = (k.N + 1) / 2, sum = 0, v = 0;
-                    for (; v < 255; v++) { sum += k.Seen[c * 256 + v]; if (sum >= half) break; }
-                    to.Add(v);
-                }
-            }
-            return new Learned { From = from.ToArray(), To = to.ToArray(), Count = from.Count / 3 };
-        }
-    }
-
-    private sealed class Learned { internal float[] From, To; internal int Count; }
 }
