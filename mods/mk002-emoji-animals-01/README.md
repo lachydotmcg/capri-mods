@@ -1,0 +1,169 @@
+Emoji Pack : Animals & Nature 1
+Adds more emojis to use in Mirit0's Caprichat
+
+* Kind: code
+
+* Made by: Mirit0
+
+160 emojis in this pack:
+
+🐵  monkey face
+🐒  monkey
+🦍  gorilla
+🦧  orangutan
+🐶  dog face
+🐕  dog
+🦮  guide dog
+🐕‍🦺  service dog
+🐩  poodle
+🐺  wolf
+🦊  fox
+🦝  raccoon
+🐱  cat face
+🐈  cat
+🐈‍⬛  black cat
+🦁  lion
+🐯  tiger face
+🐅  tiger
+🐆  leopard
+🐴  horse face
+🫎  moose
+🫏  donkey
+🐎  horse
+🦄  unicorn
+🦓  zebra
+🦌  deer
+🦬  bison
+🐮  cow face
+🐂  ox
+🐃  water buffalo
+🐄  cow
+🐷  pig face
+🐖  pig
+🐗  boar
+🐽  pig nose
+🐏  ram
+🐑  ewe
+🐐  goat
+🐪  camel
+🐫  two-hump camel
+🦙  llama
+🦒  giraffe
+🐘  elephant
+🦣  mammoth
+🦏  rhinoceros
+🦛  hippopotamus
+🐭  mouse face
+🐁  mouse
+🐀  rat
+🐹  hamster
+🐰  rabbit face
+🐇  rabbit
+🐿️  chipmunk
+🦫  beaver
+🦔  hedgehog
+🦇  bat
+🐻  bear
+🐻‍❄️  polar bear
+🐨  koala
+🐼  panda
+🦥  sloth
+🦦  otter
+🦨  skunk
+🦘  kangaroo
+🦡  badger
+🐾  paw prints
+🦃  turkey
+🐔  chicken
+🐓  rooster
+🐣  hatching chick
+🐤  baby chick
+🐥  front-facing baby chick
+🐦  bird
+🐧  penguin
+🕊️  dove
+🦅  eagle
+🦆  duck
+🦢  swan
+🦉  owl
+🦤  dodo
+🪶  feather
+🦩  flamingo
+🦚  peacock
+🦜  parrot
+🪽  wing
+🐦‍⬛  black bird
+🪿  goose
+🐦‍🔥  phoenix
+🐸  frog
+🐊  crocodile
+🐢  turtle
+🦎  lizard
+🐍  snake
+🐲  dragon face
+🐉  dragon
+🦕  sauropod
+🦖  T-Rex
+🐳  spouting whale
+🐋  whale
+🐬  dolphin
+🫍  orca
+🦭  seal
+🐟  fish
+🐠  tropical fish
+🐡  blowfish
+🦈  shark
+🐙  octopus
+🐚  spiral shell
+🪸  coral
+🪼  jellyfish
+🦀  crab
+🦞  lobster
+🦐  shrimp
+🦑  squid
+🦪  oyster
+🐌  snail
+🦋  butterfly
+🐛  bug
+🐜  ant
+🐝  honeybee
+🪲  beetle
+🐞  lady beetle
+🦗  cricket
+🪳  cockroach
+🕷️  spider
+🕸️  spider web
+🦂  scorpion
+🦟  mosquito
+🪰  fly
+🪱  worm
+🦠  microbe
+💐  bouquet
+🌸  cherry blossom
+💮  white flower
+🪷  lotus
+🏵️  rosette
+🌹  rose
+🥀  wilted flower
+🌺  hibiscus
+🌻  sunflower
+🌼  blossom
+🌷  tulip
+🪻  hyacinth
+🌱  seedling
+🪴  potted plant
+🌲  evergreen tree
+🌳  deciduous tree
+🌴  palm tree
+🌵  cactus
+🌾  sheaf of rice
+🌿  herb
+☘️  shamrock
+🍀  four leaf clover
+🍁  maple leaf
+🍂  fallen leaf
+🍃  leaf fluttering in wind
+🪹  empty nest
+🪺  nest with eggs
+🍄  mushroom
+🪾  leafless tree
