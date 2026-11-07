@@ -1,0 +1,130 @@
+// capri-mod: 1
+// id: medal-clip
+// name: Medal Clip
+// version: 1.0.0
+// author: Capri fan
+// description: Say "clip that" and she presses your Medal clip hotkey, then checks the clip saved. Tells you if she can't.
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class MedalClip : ICapriMod
+{
+    private static readonly Regex ClipThat = new Regex(@"\bclip\s+that\b", RegexOptions.IgnoreCase);
+    private static readonly Regex NotAsking = new Regex(@"\b(don'?t|do\s+not|never|how\s+(do|to|can)\b.*)\s+clip\s+that\b", RegexOptions.IgnoreCase);
+    private static readonly string Local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    private static readonly string Roaming = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    private ICapriHost capri;
+    private int busy;
+
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
+    private const uint KeyUp = 2;
+
+    public void Start(ICapriHost host) { capri = host; }
+
+    public void Stop() { }
+
+    public bool Heard(string words)
+    {
+        if (!Wants(words)) return false;
+        if (Interlocked.Exchange(ref busy, 1) == 1) { capri.Say("Already on it, one clip at a time."); return true; }
+        new Thread(Clip) { IsBackground = true }.Start();
+        return true;
+    }
+
+    public static bool Wants(string words)
+    {
+        return words != null && ClipThat.IsMatch(words) && !NotAsking.IsMatch(words);
+    }
+
+    private void Clip()
+    {
+        try { capri.Say(TryClip()); }
+        catch (Exception error) { capri.Log(error.ToString()); capri.Say("Something went wrong trying to clip that with Medal."); }
+        finally { Interlocked.Exchange(ref busy, 0); }
+    }
+
+    private string TryClip()
+    {
+        bool running = Process.GetProcessesByName("Medal").Length > 0;
+        if (!running && !File.Exists(Path.Combine(Path.Combine(Local, "Medal"), "Medal.exe")))
+            return "You don't have Medal installed, so I can't clip that.";
+        if (!running) return "Medal isn't open, so I can't clip that. Start Medal and ask me again.";
+
+        string hotkey = MedalHotkey(Path.Combine(Roaming, @"Medal\store\settings.json")) ?? "F8";
+        byte[] keys = ParseHotkey(hotkey);
+        if (keys == null) return "I can't press your Medal clip hotkey, " + hotkey + ". Set it to a normal key in Medal's settings.";
+
+        DateTime pressed = DateTime.Now.AddSeconds(-1);
+        foreach (byte key in keys) keybd_event(key, 0, 0, UIntPtr.Zero);
+        Thread.Sleep(60);
+        for (int i = keys.Length - 1; i >= 0; i--) keybd_event(keys[i], 0, KeyUp, UIntPtr.Zero);
+
+        // shortcut: only checks Medal's usual clip folders; a custom capture folder means she can't confirm the save.
+        string[] folders = { @"C:\Medal\Clips", Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), @"Medal\Clips") };
+        string folder = Array.Find(folders, Directory.Exists);
+        if (folder == null) return "I pressed " + hotkey + " for Medal, but I can't find your clips folder to check it saved.";
+        for (int waited = 0; waited < 25; waited++)
+        {
+            Thread.Sleep(1000);
+            if (NewClip(folder, pressed)) return "Clipped it! It's saved in Medal.";
+        }
+        return "I pressed " + hotkey + " for Medal, but no clip showed up. Check Medal is recording.";
+    }
+
+    private static bool NewClip(string folder, DateTime since)
+    {
+        try
+        {
+            foreach (string file in Directory.GetFiles(folder, "*.mp4", SearchOption.AllDirectories))
+                if (File.GetLastWriteTime(file) >= since) return true;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return false;
+    }
+
+    // Medal keeps its hotkeys in settings.json as flat objects like {"action":"clip;length=30",...,"inputs":"F8"}.
+    public static string MedalHotkey(string settings)
+    {
+        if (!File.Exists(settings)) return null;
+        string text;
+        try { text = File.ReadAllText(settings); }
+        catch (IOException) { return null; }
+        catch (UnauthorizedAccessException) { return null; }
+        foreach (Match item in Regex.Matches(text, @"\{[^{}]*""action""\s*:\s*""clip[;""][^{}]*\}"))
+        {
+            if (!Regex.IsMatch(item.Value, @"""device""\s*:\s*""keyboard""")) continue;
+            Match inputs = Regex.Match(item.Value, @"""inputs""\s*:\s*""([^""]+)""");
+            if (inputs.Success) return inputs.Groups[1].Value.Trim();
+        }
+        return null;
+    }
+
+    // "ALT + SHIFT + d" -> virtual keys, modifiers first. Null when a part isn't a key she can press.
+    public static byte[] ParseHotkey(string hotkey)
+    {
+        string[] parts = hotkey.Split('+');
+        byte[] keys = new byte[parts.Length];
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string part = parts[i].Trim().ToUpperInvariant();
+            Keys key;
+            if (part == "CTRL" || part == "CONTROL") key = Keys.ControlKey;
+            else if (part == "ALT") key = Keys.Menu;
+            else if (part == "SHIFT") key = Keys.ShiftKey;
+            else if (part == "WIN" || part == "META" || part == "SUPER") key = Keys.LWin;
+            else if (part.Length == 1 && char.IsDigit(part[0])) key = Keys.D0 + (part[0] - '0');
+            else if (!Enum.TryParse(part, true, out key) || (int)key <= 0 || (int)key > 254) return null;
+            keys[i] = (byte)key;
+        }
+        return keys;
+    }
+}
