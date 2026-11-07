@@ -1,0 +1,11 @@
+# Validation and runtime limits
+
+Version 1.9.3 is the public packaging update of the reviewed 1.9.2 bridge. It changes author metadata to NoxEterna, removes the personal default game path, requires an explicit game root in the installer and packages a self-contained client/bridge folder. Gameplay mechanics are unchanged. The publishing checkout is separate from the installed game and Capri files.
+
+The publication build passed **222 game-side mocked checks**, **189 Capri/protocol checks** (including real-file C#/Lua cross-process fixtures), Lua syntax checks and guarded installation/rollback fixtures. The public setup checks verify that a fresh Capri import stays in its own unconfigured data path and preserves an existing game selection. The C# mod also compiled against the installed Capri 0.8.5 executable. `Build.ps1` reproduces these checks; installed-Capri compilation is optional when that executable is absent. Build output records the exact totals.
+
+The resource review bounded kill history (1,024 IDs), recent events (24), replay IDs (256), counter-victim IDs (128), report queue (3), recent spoken lines (4), pending UI report (1), pending command (1) and independent brain calls (1 per process/AppDomain). Cleanup retries are bounded and do not replay irreversible damage. Stop avoids the polling lock, publishing uses unique temporary files and lease cleanup checks ownership. Dashboard timers/fonts have explicit disposal.
+
+The internal `Brain.Aside` API exposes no cancellation handle. One detached provider call may remain until completion or provider timeout; the shared budget prevents repeated mod reloads from multiplying it. Capri's .NET Framework loader retains compiled assemblies in its default application domain until Capri exits. Restart Capri after repeated code-mod edits. See [Microsoft's assembly unloading documentation](https://learn.microsoft.com/en-us/dotnet/standard/assembly/load-unload).
+
+Automated checks are **not live gameplay, microphone, native HUD/effect validation or heap/CPU profiling**. Incoming hack cancellation, silent death/witness behavior, vehicle destruction, scanner outlines, provider/audio behavior and compatibility with other game mods still need live testing. No leak-free or flawless-gameplay claim is made.
