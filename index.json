@@ -322,6 +322,14 @@
       "about": "Capri in NCPD MaxTac gear, with a dark helmet and green lens clusters for eyes."
     },
     {
+      "folder": "medal-clip",
+      "file": "medal-clip.capri-code",
+      "name": "Medal Clip",
+      "kind": "code",
+      "author": "Palewoods",
+      "about": "Say \"clip that\" and she clips your screen with Medal, then tells you if it saved. If Medal isn't installed or open, she says so."
+    },
+    {
       "folder": "mk002-emoji-activities-01",
       "file": "MK002-Emoji-activities-01.capri-code",
       "name": "Emoji Activities 1",
@@ -544,6 +552,14 @@
       "kind": "code",
       "author": "Vocyn",
       "about": "Three start-up animations: Hijack, Shatter and Wake. She shuffles them each time she starts, or you pick one."
+    },
+    {
+      "folder": "study-buddy",
+      "file": "study-buddy.capri-code",
+      "name": "Study Buddy",
+      "kind": "code",
+      "author": "Potato",
+      "about": "A code mod for Capri: she stays her funny self, and gives you a real answer when you ask for one."
     },
     {
       "folder": "talia-capri",
