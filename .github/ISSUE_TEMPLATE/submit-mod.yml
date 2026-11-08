@@ -1,0 +1,68 @@
+name: Submit a mod
+description: Share a mod without git. A pull request gets opened for you, and Lachy reads every mod before it goes up.
+title: "Mod: "
+labels: ["mod-submission"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Fill this in and a pull request with your mod gets opened for you, with your GitHub username as the author. Lachy reads every mod before it goes up. To change anything later, edit this issue.
+  - type: input
+    id: name
+    attributes:
+      label: Mod name
+      description: What people see in Capri's mods window. Up to 60 characters.
+      placeholder: Neon Hearts
+    validations:
+      required: true
+  - type: input
+    id: mod-id
+    attributes:
+      label: Mod id
+      description: Lower-case letters, numbers and dashes. Your mod's folder and file get this name.
+      placeholder: neon-hearts
+    validations:
+      required: true
+  - type: input
+    id: description
+    attributes:
+      label: Short description
+      description: One line about what it does. It shows under the name in Capri.
+      placeholder: Pink neon hearts float around her when you say something nice.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options:
+        - Settings mod (.capri-mod)
+        - Code mod (.capri-code)
+        - Skin (.capri-skin)
+        - Skill (.capri-skill)
+    validations:
+      required: true
+  - type: textarea
+    id: mod-file
+    attributes:
+      label: Mod file
+      description: GitHub won't take a .capri file on its own, so zip it first (right-click it, then Compress to ZIP file) and drag the .zip in here. A skin can also be renamed from .capri-skin to .zip. Up to 25 MB.
+    validations:
+      required: true
+  - type: textarea
+    id: preview
+    attributes:
+      label: Preview picture
+      description: Optional. Drag in a PNG, around 16:9 and under 2 MB. Mods without one get a default picture.
+  - type: textarea
+    id: more
+    attributes:
+      label: More about it
+      description: Optional. Anything else for its README, like what to say to her. For a code mod, say what it reads or changes on the PC.
+  - type: checkboxes
+    id: permission
+    attributes:
+      label: Permission
+      options:
+        - label: This is my own work, or I have permission to share it.
+          required: true

@@ -19,6 +19,9 @@ In Capri 0.8.3 or newer, open Capri Mainframe and press Mods in the CAPRI band. 
 3. Add a picture called `preview.png`, around 16:9, if you have one. That picture is what people see in Capri's mods window. Mods without one get a default picture.
 4. Open a pull request.
 
+## Submit without git
+No git needed: fill in the [Submit a mod](https://github.com/lachydotmcg/capri-mods/issues/new?template=submit-mod.yml) form and drag your mod file in, zipped first. A pull request gets opened for you, with your GitHub username as the author, and it's read like any other mod before it goes up. To change something, edit your issue.
+
 ## Stay safe
 - Only install mods from here, or from people you trust.
 - Only get Capri itself from [capriai.app](https://capriai.app) or [its GitHub](https://github.com/lachydotmcg/capri-desktop/releases).
