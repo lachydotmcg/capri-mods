@@ -1,0 +1,205 @@
+// capri-mod: 1
+// id: quiet-thinking
+// name: Quiet Thinking
+// version: 1.0.0
+// author: Potato
+// description: Hides Capri's empty chat box while she thinks, so it only pops up once she has something to say. Shows three small dots instead. Say "thinking dots off" to hide those too.
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class QuietThinking : ICapriMod
+{
+    const BindingFlags Any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+    static readonly Regex DotsAsk = new Regex(@"^(?:(?:hey\s+)?capri[\s,]+)?(?:turn\s+|switch\s+)?(?:the\s+)?thinking\s+dots\s+(?<on>on|off)[\s.!]*$|^(?:(?:hey\s+)?capri[\s,]+)?(?:turn|switch)\s+(?<on>on|off)\s+(?:the\s+)?thinking\s+dots[\s.!]*$", RegexOptions.IgnoreCase);
+
+    ICapriHost capri;
+    Form window, box, dots;
+    Hook dotsHook;
+    Timer timer;
+    FieldInfo state, reply, opened;
+    PropertyInfo panel;
+    MethodInfo talkScale, present, plate;
+    Stopwatch clock;
+    Color pink = Color.FromArgb(255, 46, 136), cyan = Color.FromArgb(58, 214, 235);
+    string offFile;
+    bool cloaked, showDots = true;
+    int drawn = -1;
+    float drawnScale;
+
+    public bool Hiding { get { return cloaked; } }
+    public Form Dots { get { return dots; } }
+    public bool ShowDots { get { return showDots; } }
+
+    sealed class Hook : NativeWindow
+    {
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x02E0) return;
+            if (m.Msg == 0x0084) { m.Result = new IntPtr(-1); return; }
+            base.WndProc(ref m);
+        }
+    }
+
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        try
+        {
+            offFile = Path.Combine(host.Folder, "dots-off");
+            showDots = !File.Exists(offFile);
+            window = (Form)Need(host.GetType().GetField("capri", Any), "her window").GetValue(host);
+            Assembly app = typeof(ICapriMod).Assembly;
+            Type me = window.GetType(), speech = app.GetType("CapriDesktop.SpeechBox"), overlay = app.GetType("CapriDesktop.Overlay"), look = app.GetType("CapriDesktop.Look"), pill = app.GetType("CapriDesktop.TalkPill");
+            box = (Form)Need(me.GetField("box", Any), "Companion.box").GetValue(window);
+            state = Need(speech.GetField("State", Any), "SpeechBox.State");
+            reply = Need(speech.GetField("Reply", Any), "SpeechBox.Reply");
+            opened = Need(speech.GetField("Opened", Any), "SpeechBox.Opened");
+            panel = Need(speech.GetProperty("PanelOnScreen", Any), "SpeechBox.PanelOnScreen");
+            present = Need(overlay.GetMethod("Present", Any), "Overlay.Present");
+            FieldInfo clockField = me.GetField("clock", Any);
+            clock = clockField == null ? null : clockField.GetValue(window) as Stopwatch;
+            talkScale = me.GetMethod("TalkScale", Any, null, Type.EmptyTypes, null);
+            plate = pill == null ? null : pill.GetMethod("Plate", Any);
+            pink = Colour(look, "Pink", pink);
+            cyan = Colour(look, "Cyan", cyan);
+            OnUi(delegate
+            {
+                dots = (Form)Activator.CreateInstance(overlay, Any, null, new object[] { "Quiet Thinking" }, null);
+                dots.Owner = window;
+                dotsHook = new Hook();
+                dotsHook.AssignHandle(dots.Handle);
+                timer = new Timer { Interval = 30 };
+                timer.Tick += delegate { Tick(); };
+                timer.Start();
+            });
+        }
+        catch (Exception error) { host.Log("Quiet Thinking couldn't reach her chat box (" + error.Message + "), so it's not doing anything"); }
+    }
+
+    public bool Heard(string words)
+    {
+        Match m = DotsAsk.Match((words ?? "").Trim());
+        if (!m.Success) return false;
+        showDots = m.Groups["on"].Value.ToLowerInvariant() == "on";
+        try { if (showDots) File.Delete(offFile); else File.WriteAllText(offFile, ""); }
+        catch (Exception error) { capri.Log("Quiet Thinking couldn't save that: " + error.Message); }
+        capri.Say(showDots ? "Thinking dots on." : "Thinking dots off. I'll think in silence.");
+        return true;
+    }
+
+    public void Stop()
+    {
+        OnUi(delegate
+        {
+            if (timer != null) timer.Dispose();
+            timer = null;
+            Cloak(false);
+            if (dotsHook != null) dotsHook.ReleaseHandle();
+            dotsHook = null;
+            if (dots != null) dots.Dispose();
+            dots = null;
+        });
+    }
+
+    public void Tick()
+    {
+        if (box == null || box.IsDisposed) return;
+        bool empty = box.Visible && state.GetValue(box).ToString() == "Thinking" && string.IsNullOrEmpty(reply.GetValue(box) as string);
+        if (empty != cloaked)
+        {
+            if (!empty && box.Visible && clock != null) opened.SetValue(box, clock.Elapsed.TotalSeconds);
+            Cloak(empty);
+        }
+        if (dots == null || dots.IsDisposed) return;
+        if (!empty || !showDots) { if (dots.Visible) dots.Hide(); drawn = -1; return; }
+        float s = Scale();
+        int beat = (int)(Environment.TickCount / 280 % 4);
+        Rectangle at = (Rectangle)panel.GetValue(box, null);
+        Size size = Measure(s);
+        Point where = new Point(at.Left, at.Bottom - size.Height);
+        if (dots.Visible && beat == drawn && s == drawnScale && dots.Location == where) return;
+        drawn = beat;
+        drawnScale = s;
+        present.Invoke(dots, new object[] { Render(s, beat), where });
+    }
+
+    void Cloak(bool hide)
+    {
+        if (box == null || box.IsDisposed || !box.IsHandleCreated) { cloaked = false; return; }
+        int value = hide ? 1 : 0;
+        int result = DwmSetWindowAttribute(box.Handle, 13, ref value, 4);
+        cloaked = hide && result == 0;
+    }
+
+    public static Size Measure(float s) { return new Size((int)Math.Round(46 * s), (int)Math.Round(20 * s)); }
+
+    public Bitmap Render(float s, int beat)
+    {
+        Size size = Measure(s);
+        Bitmap image = new Bitmap(size.Width, size.Height, PixelFormat.Format32bppPArgb);
+        using (Graphics g = Graphics.FromImage(image))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            int margin = (int)Math.Round(2 * s);
+            Rectangle body = new Rectangle(margin, margin, size.Width - margin * 2, size.Height - margin * 2);
+            if (plate != null) plate.Invoke(null, new object[] { g, body, s, Rectangle.Empty, pink, cyan });
+            else using (Brush b = new SolidBrush(Color.FromArgb(240, 9, 11, 15))) g.FillRectangle(b, body);
+            float r = 2.3f * s, gap = 9 * s, x = size.Width / 2f - gap, y = size.Height / 2f;
+            for (int i = 0; i < 3; i++)
+            {
+                bool lit = i < beat;
+                using (Brush b = new SolidBrush(lit ? cyan : Color.FromArgb(70, 82, 100)))
+                    g.FillEllipse(b, x + i * gap - r, y - r, r * 2, r * 2);
+            }
+        }
+        return image;
+    }
+
+    float Scale()
+    {
+        try
+        {
+            float s = talkScale == null ? 1 : (float)talkScale.Invoke(window, null);
+            return s >= 0.5f && s <= 8 ? s : 1;
+        }
+        catch (Exception) { return 1; }
+    }
+
+    static Color Colour(Type look, string name, Color fallback)
+    {
+        if (look == null) return fallback;
+        FieldInfo f = look.GetField(name, Any);
+        if (f != null && f.FieldType == typeof(Color)) return (Color)f.GetValue(null);
+        PropertyInfo p = look.GetProperty(name, Any);
+        return p != null && p.PropertyType == typeof(Color) ? (Color)p.GetValue(null, null) : fallback;
+    }
+
+    static T Need<T>(T found, string name) where T : class
+    {
+        if (found == null) throw new MissingMemberException(name + " is missing from this Capri version");
+        return found;
+    }
+
+    void OnUi(Action work)
+    {
+        Action safe = delegate
+        {
+            try { work(); }
+            catch (Exception error) { capri.Log("Quiet Thinking: " + error.Message); }
+        };
+        try { if (window != null && window.IsHandleCreated && !window.IsDisposed && window.InvokeRequired) window.BeginInvoke(safe); else safe(); }
+        catch (InvalidOperationException) { safe(); }
+    }
+}
