@@ -546,6 +546,14 @@
       "about": "A skin for Capri with every effect, on every frame she has."
     },
     {
+      "folder": "quiet-thinking",
+      "file": "quiet-thinking.capri-code",
+      "name": "Quiet Thinking",
+      "kind": "code",
+      "author": "Potato",
+      "about": "Hides Capri's empty chat box while she thinks, so it only pops up once she has something to say."
+    },
+    {
       "folder": "rei-plugsuit",
       "file": "rei-plugsuit.capri-skin",
       "name": "Rei Plugsuit",
