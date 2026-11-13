@@ -440,10 +440,6 @@ public class WorkspaceUsageRing : ICapriMod
             Row(g, 102, "Weekly · all models", b);
 
             string foot = when == DateTime.MinValue ? "Waiting for first reading" : "Updated " + when.ToString("h:mm tt", CultureInfo.InvariantCulture);
-            using (var fb2 = new SolidBrush(Color.FromArgb(150, Dim))) g.DrawString(foot, small, fb2, 16, Height - 24);
-            const string credit = "MOD BY TOB7AS";
-            SizeF cs = g.MeasureString(credit, small);
-            using (var cb2 = new SolidBrush(Color.FromArgb(150, CyanDim))) g.DrawString(credit, small, cb2, Width - 20 - cs.Width, Height - 24);
-        }
+            using (var fb2 = new SolidBrush(Color.FromArgb(150, Dim))) g.DrawString(foot, small, fb2, 16, Height - 24);        }
     }
 }
