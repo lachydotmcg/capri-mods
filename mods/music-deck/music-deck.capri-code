@@ -1,0 +1,2381 @@
+// capri-mod: 1
+// id: music-deck
+// name: Music Deck
+// version: 1.1.0
+// author: Vocyn
+// description: Swaps her mini player for a glass deck: cover colours, a live visualizer, synced lyrics, history, app switching, mini disc mode, sleep timer, volume and hotkeys.
+// permissions: music, hotkeys, chat, tools
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class MusicDeck : ICapriMod
+{
+    private ICapriHost capri;
+    private Form owner;
+    private DeckWindow deck;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        owner = host.Ui.Window;
+        if (owner.InvokeRequired) owner.BeginInvoke(new Action(Open)); else Open();
+    }
+
+    private void Open()
+    {
+        if (deck != null) return;
+        deck = new DeckWindow(capri);
+        capri.Music.BuiltInPlayer = false;
+        capri.Music.Changed += deck.Changed;
+        capri.Music.Updated += deck.Updated;
+        capri.Ui.AddMenuItem("Music Deck", deck.ToggleShown);
+        capri.Ui.SetOptions("Music Deck", deck.Options);
+        capri.Chat.AddContext(deck.Context);
+        capri.Brain.AddTool("music_deck", "Her Music Deck, the music player on their screen: show or hide it, open its lyrics, history or sources, switch to its mini disc or full deck, or set a sleep timer that pauses the music.",
+            "one of: show, hide, lyrics, history, sources, mini, full, sleep <minutes>, sleep end (after this song), sleep off", deck.Tool);
+        Hotkey("Ctrl+Alt+Space", delegate { capri.Music.Toggle(); });
+        Hotkey("Ctrl+Alt+Right", delegate { capri.Music.Next(); });
+        Hotkey("Ctrl+Alt+Left", delegate { capri.Music.Previous(); });
+        Hotkey("Ctrl+Alt+Up", delegate { deck.Nudge(0.05); });
+        Hotkey("Ctrl+Alt+Down", delegate { deck.Nudge(-0.05); });
+        Hotkey("Ctrl+Alt+L", delegate { deck.ShowTab(0); });
+        Hotkey("Ctrl+Alt+M", deck.ToggleShown);
+        deck.Begin();
+    }
+
+    private void Hotkey(string keys, Action pressed)
+    {
+        try { if (!capri.Keys.Hotkey(keys, pressed)) capri.Log(keys + " is taken by another app, so the Music Deck can't use it."); }
+        catch (Exception error) { capri.Log(keys + ": " + error.Message); }
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        if (owner == null || owner.IsDisposed) return;
+        if (owner.InvokeRequired) { try { owner.Invoke(new Action(Close)); } catch (Exception) { } }
+        else Close();
+    }
+
+    private void Close()
+    {
+        if (deck == null) return;
+        try { capri.Music.Changed -= deck.Changed; capri.Music.Updated -= deck.Updated; } catch (Exception) { }
+        try { capri.Music.BuiltInPlayer = true; } catch (Exception) { }
+        deck.End();
+        deck = null;
+    }
+}
+
+// One line of lyrics, and when it starts when they're synced.
+public sealed class LyricLine
+{
+    public double At;
+    public string Text;
+}
+
+public sealed class LyricSet
+{
+    public bool Synced, Instrumental;
+    // How long lrclib says its version is, and how much to stretch its times to fit this one, like a slowed or sped-up edit.
+    public double Duration, Scale = 1;
+    public List<LyricLine> Lines = new List<LyricLine>();
+    public string Status = "";
+}
+
+public sealed class Played
+{
+    public string Title, Artist, App, AppId;
+    public DateTime At;
+}
+
+// Its settings, kept in the mod's store.
+public sealed class DeckSettings
+{
+    public bool CoverColours = true, Lyrics = true, Ticker = true, KeepUp, HideFullScreen = true, TellHer = true, HopOn = true;
+    public string Visualizer = "bars";
+    public double Size = 1;
+
+    public void Load(ICapriStore store)
+    {
+        CoverColours = store.Flag("coverColours", true);
+        Lyrics = store.Flag("lyrics", true);
+        Ticker = store.Flag("ticker", true);
+        KeepUp = store.Flag("keepUp", false);
+        HideFullScreen = store.Flag("hideFullScreen", true);
+        TellHer = store.Flag("tellHer", true);
+        HopOn = store.Flag("hopOn", true);
+        Visualizer = store.Get("visualizer", "bars");
+        if (Visualizer != "bars" && Visualizer != "wave" && Visualizer != "off") Visualizer = "bars";
+        Size = Math.Max(0.8, Math.Min(1.4, store.Number("size", 1)));
+    }
+
+    public void Save(ICapriStore store)
+    {
+        store.Set("coverColours", CoverColours);
+        store.Set("lyrics", Lyrics);
+        store.Set("ticker", Ticker);
+        store.Set("keepUp", KeepUp);
+        store.Set("hideFullScreen", HideFullScreen);
+        store.Set("tellHer", TellHer);
+        store.Set("hopOn", HopOn);
+        store.Set("visualizer", Visualizer);
+        store.Set("size", Size);
+    }
+}
+
+// The deck: a see-through window drawn whole each frame, with a soft shadow, the cover's colours behind glass, and her neon edge.
+public sealed class DeckWindow : Form
+{
+    // Modes and parts.
+    public const int Full = 0, Mini = 1;
+    public const int None = 0, Card = 1, Art = 2, Prev = 3, PlayPart = 4, NextPart = 5, Shuffle = 6, Repeat = 7, Heart = 8, Volume = 9, Seek = 10,
+        Expand = 11, Shrink = 12, CloseButton = 13, Tab = 20, Line = 40, Row = 300, Disc = 600, Sleep = 601, SyncLess = 602, SyncMore = 603;
+    public const float W = 440, H = 156, More = 264, M = 26, TickerGap = 8, TickerH = 30, DiscD = 100, DiscM = 36;
+    public static readonly Color Pink = Color.FromArgb(255, 46, 136), Cyan = Color.FromArgb(58, 214, 235), Ink = Color.FromArgb(8, 8, 13);
+    public static readonly string[] Tabs = { "LYRICS", "HISTORY", "SOURCES" };
+
+    public readonly ICapriHost host;
+    public readonly DeckSettings settings = new DeckSettings();
+    private readonly System.Windows.Forms.Timer ticker = new System.Windows.Forms.Timer();
+    private readonly Stopwatch clock = Stopwatch.StartNew();
+
+    // What it shows. Public so a preview can set it without Capri.
+    public CapriTrack track;
+    public Bitmap art, oldArt;
+    public string artKey;
+    public double artAt = -10;
+    public Color accent = Pink, accent2 = Cyan, accentGoal = Pink, accent2Goal = Cyan;
+    public float[] levels = new float[48];
+    public float loud;
+    public LyricSet lyrics;
+    public string lyricsKey;
+    public readonly List<Played> history = new List<Played>();
+    public CapriTrack[] sessions = new CapriTrack[0];
+    public string following;
+    public bool? liked;
+    public double volume = -1;
+    public bool muted, expanded;
+    public int mode = Full, tab;
+    public int hover, pressed;
+    public PointF mouse = new PointF(-1, -1);
+    public double seekDrag = -1;
+    public double titleAt = -10, volumeShownUntil = -10, sleepAt = -1;
+    public bool sleepAtEnd;
+    public string oldTitle;
+    public double lyricScroll, listScroll, spin;
+    // Their nudge to the lyrics' timing for this song, in seconds (later is positive), a scroll of their own through synced lyrics
+    // that eases back after a few seconds, and when the line playing changed, for its grow.
+    public double syncShift, lyricUser, userScrollAt = -10, lineSince = -10;
+    private int lineShown = -2;
+    public double now;
+    public float shown;
+    private float scale = 1;
+    private bool wanted, dismissed, dragging;
+    private string dismissedKey;
+    private Point dragFrom, windowFrom;
+    private double lastPlaying = -1000, lastFrame, artAskedAt = -10, fullScreenAt = -10, levelsAt = -10;
+    private bool fullScreen, discDoubled;
+    private double hopAt = -1, herAt = -10, layeredAt = -10;
+    private bool hopFailed;
+    public float legsFrom = -1, legsTo = -1, legsDown;
+    private double discClickAt = -1;
+    private Bitmap layer;
+    private string layerKey, layerArt;
+    private Bitmap fadingLayer;
+    private double fadingAt = -10;
+
+    public DeckWindow(ICapriHost capri)
+    {
+        host = capri;
+        FormBorderStyle = FormBorderStyle.None;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.Manual;
+        TopMost = true;
+        Text = "Music Deck";
+        ticker.Interval = 33;
+        ticker.Tick += delegate { Frame(); };
+    }
+
+    protected override CreateParams CreateParams
+    {
+        get
+        {
+            CreateParams made = base.CreateParams;
+            // Layered and always on top. Not a tool window and not no-activate, which Capri passes over when she looks for
+            // somewhere to sit; clicks still never take focus (WM_MOUSEACTIVATE below) and ShowInTaskbar keeps it off the taskbar
+            // and Alt+Tab. The mini disc is a tool window, so she doesn't try to sit on its round top.
+            made.ExStyle |= 0x00080000 | 0x00000008 | (mode == Mini ? 0x00000080 : 0);
+            return made;
+        }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        // WM_MOUSEACTIVATE: take the click without taking focus from what they're typing in.
+        if (m.Msg == 0x21) { m.Result = (IntPtr)3; return; }
+        base.WndProc(ref m);
+    }
+
+    // The mini disc is a tool window and the full deck isn't.
+    private void Restyle()
+    {
+        if (!IsHandleCreated) return;
+        int extended = GetWindowLong(Handle, -20);
+        int wanted = mode == Mini ? extended | 0x80 : extended & ~0x80;
+        if (wanted == extended) return;
+        SetWindowLong(Handle, -20, wanted);
+        SetWindowPos(Handle, IntPtr.Zero, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020);
+    }
+
+    // Just under her, so when she sits on it her legs hang over the card, not behind it.
+    private void UnderHer()
+    {
+        Form her = host.Ui.Window;
+        bool herOnTop = her != null && !her.IsDisposed && her.IsHandleCreated && (GetWindowLong(her.Handle, -20) & 0x8) != 0;
+        // Below her only while she's always on top herself, so the deck never drops out of the top band.
+        SetWindowPos(Handle, herOnTop ? her.Handle : new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0200);
+    }
+
+    protected override bool ShowWithoutActivation { get { return true; } }
+
+    public void Begin()
+    {
+        settings.Load(host.Store);
+        LoadHistory();
+        mode = host.Store.Get("mode", "full") == "mini" ? Mini : Full;
+        ticker.Start();
+    }
+
+    public void End()
+    {
+        ticker.Stop();
+        SaveHistory();
+        try { Close(); } catch (Exception) { }
+        Dispose();
+    }
+
+    // ---- What Capri tells it ----
+
+    public void Changed(CapriTrack fresh)
+    {
+        if (track != null && fresh != null) oldTitle = track.Title;
+        titleAt = now;
+        if (fresh != null && dismissed && dismissedKey != fresh.Key) dismissed = false;
+        if (fresh != null && fresh.Playing) Remember(fresh);
+        liked = null;
+        if (sleepAtEnd && track != null && fresh != null && fresh.Key != track.Key)
+        {
+            sleepAtEnd = false;
+            host.Music.Pause();
+            host.Ui.Bubble("Sleep timer's up, so I paused the music. Night!");
+        }
+        track = fresh;
+        lyricScroll = 0;
+        FindLyrics();
+    }
+
+    public void Updated(CapriTrack fresh)
+    {
+        if (fresh != null && track != null && fresh.Key == track.Key) track = fresh;
+        else if (fresh == null || track == null) track = fresh;
+        if (track != null && track.Playing) { lastPlaying = now; Remember(track); }
+        try
+        {
+            liked = host.Music.Liked;
+            if (!(volumeShownUntil > now)) { volume = host.Music.Volume; muted = host.Music.Muted; }
+            sessions = host.Music.Sessions;
+            following = host.Music.Following;
+        }
+        catch (Exception) { }
+        if (track != null && artKey != track.Key) AskArt();
+    }
+
+    private void Remember(CapriTrack played)
+    {
+        if (history.Count > 0 && history[0].Title == played.Title && history[0].Artist == played.Artist) return;
+        history.Insert(0, new Played { Title = played.Title, Artist = played.Artist, App = Label(played.App), AppId = played.AppId, At = DateTime.Now });
+        while (history.Count > 40) history.RemoveAt(history.Count - 1);
+        SaveHistory();
+    }
+
+    private void LoadHistory()
+    {
+        history.Clear();
+        foreach (string line in (host.Store.Get("history", "") ?? "").Split('\n'))
+        {
+            string[] parts = line.Split('\t');
+            long ticks;
+            if (parts.Length < 5 || !long.TryParse(parts[4], out ticks)) continue;
+            history.Add(new Played { Title = parts[0], Artist = parts[1], App = parts[2], AppId = parts[3], At = new DateTime(ticks) });
+        }
+    }
+
+    private void SaveHistory()
+    {
+        StringBuilder text = new StringBuilder();
+        foreach (Played played in history)
+            text.Append(Tabless(played.Title)).Append('\t').Append(Tabless(played.Artist)).Append('\t').Append(Tabless(played.App)).Append('\t').Append(Tabless(played.AppId)).Append('\t').Append(played.At.Ticks).Append('\n');
+        try { host.Store.Set("history", text.ToString()); } catch (Exception) { }
+    }
+
+    private static string Tabless(string text) { return (text ?? "").Replace('\t', ' ').Replace('\n', ' ').Replace('\r', ' '); }
+
+    private void AskArt()
+    {
+        if (now - artAskedAt < 0.5 || track == null) return;
+        artAskedAt = now;
+        byte[] bytes = null;
+        try { bytes = host.Music.Art; } catch (Exception) { }
+        if (bytes == null) return;
+        SetArt(bytes, track.Key);
+    }
+
+    public void SetArt(byte[] bytes, string key)
+    {
+        Bitmap made = null;
+        try
+        {
+            using (MemoryStream stream = new MemoryStream(bytes))
+            using (Image image = Image.FromStream(stream))
+                made = new Bitmap(image);
+        }
+        catch (Exception) { return; }
+        if (oldArt != null) oldArt.Dispose();
+        oldArt = art;
+        art = made;
+        artKey = key;
+        artAt = now;
+        Color[] picked = Palette.Pick(made);
+        if (settings.CoverColours) { accentGoal = picked[0]; accent2Goal = picked[1]; }
+    }
+
+    // ---- Lyrics ----
+
+    private void FindLyrics()
+    {
+        if (track == null || !settings.Lyrics) { lyrics = null; lyricsKey = null; return; }
+        string key = track.Key;
+        if (key == lyricsKey) return;
+        lyricsKey = key;
+        lyrics = new LyricSet { Status = "Looking for lyrics..." };
+        string title = track.Title, artist = track.Artist, album = track.Album;
+        double length = track.Length;
+        string cache = host.Folder;
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            LyricSet found;
+            try { found = LyricFinder.Find(title, artist, album, length, cache); }
+            catch (Exception) { found = new LyricSet { Status = "No lyrics for this one." }; }
+            try
+            {
+                Form window = host.Ui.Window;
+                if (!window.IsDisposed) window.BeginInvoke(new Action(delegate { if (lyricsKey == key) Loaded(found, key, length); }));
+            }
+            catch (Exception) { }
+        });
+    }
+
+    private void Loaded(LyricSet found, string key, double length)
+    {
+        // A version a different length from lrclib's, like a slowed or sped-up edit, has its times stretched to match.
+        if (found.Synced && found.Duration > 0 && length > 0)
+        {
+            double ratio = length / found.Duration;
+            if (Math.Abs(ratio - 1) > 0.03 && ratio > 0.5 && ratio < 2) found.Scale = ratio;
+        }
+        lyrics = found;
+        lyricScroll = 0;
+        lyricUser = 0;
+        listScroll = tab == 0 ? 0 : listScroll;
+        lineShown = -2;
+        syncShift = host.Store.Number("sync:" + LyricFinder.Short(key), 0);
+    }
+
+    // When a line starts in this song, with the stretch and their nudge.
+    public double LyricTime(int line) { return lyrics.Lines[line].At * lyrics.Scale + syncShift; }
+
+    public int LineAt(double position)
+    {
+        if (lyrics == null || !lyrics.Synced) return -1;
+        int at = -1;
+        for (int i = 0; i < lyrics.Lines.Count; i++) { if (LyricTime(i) <= position + 0.3) at = i; else break; }
+        return at;
+    }
+
+    // How far through the line playing it is, from 0 to 1. The words are mostly sung in the first part of the gap to the next line.
+    public double LineProgress(int line, double position)
+    {
+        if (lyrics == null || line < 0) return 0;
+        double start = LyricTime(line), end = line + 1 < lyrics.Lines.Count ? LyricTime(line + 1) : start + 5;
+        bool gap = lyrics.Lines[line].Text == "\u266a";
+        double length = Math.Max(0.4, (end - start) * (gap ? 1 : 0.85));
+        return Math.Max(0, Math.Min(1, (position + 0.3 - start) / length));
+    }
+
+    public string CurrentLine()
+    {
+        if (track == null) return null;
+        int at = LineAt(Position());
+        return at < 0 || lyrics.Lines[at].Text == "\u266a" ? null : lyrics.Lines[at].Text;
+    }
+
+    public void NudgeSync(double by)
+    {
+        if (track == null || lyrics == null || !lyrics.Synced) return;
+        syncShift = Math.Round((syncShift + by) * 4) / 4;
+        string key = "sync:" + LyricFinder.Short(track.Key);
+        if (Math.Abs(syncShift) < 0.01) { syncShift = 0; host.Store.Remove(key); }
+        else host.Store.Set(key, syncShift);
+    }
+
+    public double Position()
+    {
+        if (track == null) return 0;
+        if (seekDrag >= 0 && track.Length > 0) return seekDrag * track.Length;
+        return track.At();
+    }
+
+    // ---- Her brain and chat ----
+
+    public string Context()
+    {
+        if (!settings.TellHer || track == null) return null;
+        string said = "The Music Deck mod shows " + (track.Playing ? "this playing" : "this paused") + " in " + Label(track.App) + ": \"" + track.Title + "\"" + (track.Artist.Length > 0 ? " by " + track.Artist : "")
+            + (track.Length > 0 ? " (" + Clock(track.At()) + " of " + Clock(track.Length) + ")" : "") + ".";
+        string line = CurrentLine();
+        if (line != null && track.Playing) said += " The lyric playing now is \"" + line + "\".";
+        if (sleepAt > 0) said += " Its sleep timer pauses the music in " + Math.Max(1, (int)Math.Ceiling((sleepAt - now) / 60)) + " min.";
+        return said;
+    }
+
+    public string Tool(string asked)
+    {
+        string words = (asked ?? "").Trim().ToLowerInvariant();
+        string said = null;
+        Form window = host.Ui.Window;
+        if (window.InvokeRequired) window.Invoke(new Action(delegate { said = DoTool(words); }));
+        else said = DoTool(words);
+        return said;
+    }
+
+    private string DoTool(string words)
+    {
+        Match sleep = Regex.Match(words, @"^sleep\s+(\d{1,3})");
+        if (sleep.Success)
+        {
+            int minutes = Math.Max(1, int.Parse(sleep.Groups[1].Value));
+            SetSleep(minutes);
+            return "The Music Deck will pause the music in " + minutes + " minutes.";
+        }
+        switch (words)
+        {
+            case "show": dismissed = false; host.Store.Set("hidden", false); return track == null ? "The Music Deck will show when something plays." : "Showing the Music Deck.";
+            case "hide": Dismiss(); return "Hid the Music Deck until the next song.";
+            case "lyrics": ShowTab(0); return lyrics != null && lyrics.Lines.Count > 0 ? "Opened the lyrics." : "Opened the lyrics tab, but there are none for this song yet.";
+            case "history": ShowTab(1); return "Opened the deck's history.";
+            case "sources": ShowTab(2); return "Opened the deck's sources.";
+            case "mini": SetMode(Mini); return "Switched to the mini disc.";
+            case "full": SetMode(Full); return "Switched to the full deck.";
+            case "sleep end": sleepAtEnd = true; sleepAt = -1; return "The music pauses when this song ends.";
+            case "sleep off": sleepAt = -1; sleepAtEnd = false; return "Sleep timer off.";
+        }
+        return "The Music Deck takes show, hide, lyrics, history, sources, mini, full, sleep <minutes>, sleep end or sleep off.";
+    }
+
+    public void SetSleep(int minutes) { sleepAt = now + minutes * 60; sleepAtEnd = false; }
+
+    // ---- Things they do ----
+
+    public void ToggleShown()
+    {
+        if (Visible && wanted) Dismiss();
+        else { dismissed = false; if (track == null) host.Ui.Bubble("The Music Deck shows when something plays."); }
+    }
+
+    private void Dismiss() { dismissed = true; dismissedKey = track == null ? null : track.Key; }
+
+    public void ShowTab(int which)
+    {
+        dismissed = false;
+        SetMode(Full);
+        expanded = true;
+        tab = which;
+        listScroll = 0;
+    }
+
+    public void SetMode(int which)
+    {
+        if (mode == which) return;
+        Point anchor = CardOnScreen();
+        mode = which;
+        host.Store.Set("mode", which == Mini ? "mini" : "full");
+        layerKey = null;
+        Restyle();
+        Place(anchor);
+        if (which == Full) hopAt = now + 1.6;
+    }
+
+    public void Nudge(double by)
+    {
+        double level = volume < 0 ? 0.5 : volume;
+        volume = Math.Max(0, Math.Min(1, level + by));
+        host.Music.Volume = volume;
+        if (muted && by > 0) { muted = false; host.Music.Muted = false; }
+        volumeShownUntil = now + 1.6;
+    }
+
+    // ---- The frame loop ----
+
+    private void Frame()
+    {
+        now = clock.Elapsed.TotalSeconds;
+        double step = Math.Min(0.1, now - lastFrame);
+        lastFrame = now;
+        if (track != null && track.Playing) lastPlaying = now;
+        if (track != null && artKey != track.Key) AskArt();
+        if (discClickAt > 0 && now >= discClickAt) { discClickAt = -1; host.Music.Toggle(); }
+        if (sleepAt > 0 && now >= sleepAt)
+        {
+            sleepAt = -1;
+            host.Music.Pause();
+            host.Ui.Bubble("Sleep timer's up, so I paused the music. Night!");
+        }
+        if (settings.HideFullScreen && now - fullScreenAt > 1) { fullScreenAt = now; fullScreen = Screens.FullScreenApp(Handle); }
+        wanted = track != null && !dismissed && (track.Playing || settings.KeepUp || now - lastPlaying < 45 || Busy) && !(settings.HideFullScreen && fullScreen);
+        float goal = wanted ? 1 : 0;
+        shown += (goal - shown) * (float)Math.Min(1, step * 9);
+        if (Math.Abs(goal - shown) < 0.01f) shown = goal;
+        if (shown <= 0 && !wanted)
+        {
+            if (Visible) Hide();
+            ticker.Interval = 250;
+            return;
+        }
+        ticker.Interval = 33;
+        if (track != null && ShownArt() == null && art != null && artKey != track.Key) { accentGoal = Pink; accent2Goal = Cyan; }
+        accent = Blend(accent, accentGoal, (float)Math.Min(1, step * 4));
+        accent2 = Blend(accent2, accent2Goal, (float)Math.Min(1, step * 4));
+        if (settings.Visualizer != "off" || mode == Mini)
+        {
+            try { levels = host.Music.Levels(48); loud = host.Music.Loudness; } catch (Exception) { }
+        }
+        if (track != null && track.Playing) spin = (spin + step * 33.3 * 360 / 60) % 360;
+        int line = LineAt(Position());
+        if (line != lineShown) { lineShown = line; lineSince = now; }
+        // Their own scroll eases back to the line playing a few seconds after they stop.
+        if (now - userScrollAt > 3) lyricUser *= Math.Pow(0.02, step);
+        double goalScroll = Math.Max(0, RowOf(line)) * LyricRow + lyricUser;
+        lyricScroll += (goalScroll - lyricScroll) * Math.Min(1, step * 8);
+        // Lyrics without times scroll through with the song, unless they've scrolled them themselves.
+        if (expanded && tab == 0 && lyrics != null && !lyrics.Synced && track != null && track.Length > 0 && now - userScrollAt > 4)
+        {
+            double room = Math.Max(0, Rows().Count * LyricRow - (More - 54) * 0.55);
+            double along = Math.Max(0, Math.Min(1, Position() / track.Length)) * room;
+            listScroll += (along - listScroll) * Math.Min(1, step * 2);
+        }
+        if (!Visible)
+        {
+            scale = Dpi() * (float)settings.Size;
+            Place(Saved());
+            Show();
+            UnderHer();
+            // Like her own player: as it comes up she hops on, once the deck has been on screen long enough for her to see it.
+            hopAt = now + 1.6;
+        }
+        if (now - herAt > 0.2) { herAt = now; ReadHer(); }
+        if (now - layeredAt > 1) { layeredAt = now; UnderHer(); }
+        if (hopAt > 0 && now >= hopAt) { hopAt = -1; HopOn(); }
+        Push();
+    }
+
+    // Where she is, in the deck's own units, for keeping text out from under her legs when she sits on it.
+    private void ReadHer()
+    {
+        legsFrom = legsTo = -1;
+        legsDown = 0;
+        if (mode != Full) return;
+        Rectangle body;
+        try { body = host.Her.Bounds; } catch (Exception) { return; }
+        if (body.Width <= 0) return;
+        float left = (body.Left - Left) / scale + CropSide, right = (body.Right - Left) / scale + CropSide, bottom = (body.Bottom - Top) / scale + CropTop;
+        if (bottom < M + 4 || bottom > M + 110 || right < M || left > M + W) return;
+        legsFrom = left;
+        legsTo = right;
+        legsDown = bottom - M;
+    }
+
+    public bool HerOnTop { get { return legsFrom >= 0; } }
+
+    private void HopOn()
+    {
+        if (!settings.HopOn || mode != Full || !wanted || HerOnTop) return;
+        try
+        {
+            if (host.Her.Dragging || host.Her.State != "idle") return;
+            // Over the cover, so her legs hang over the art and not the song's name.
+            Point card = CardOnScreen();
+            host.Her.MoveTo(new Point(card.X + (int)(76 * scale), card.Y));
+        }
+        catch (Exception error) { if (!hopFailed) { hopFailed = true; host.Log("Music Deck couldn't hop her on: " + error.Message); } }
+    }
+
+    // The header's words, kept clear of her legs while she sits on it: they start after her legs, or stop before them.
+    private void TextSpan(float top, out float from, out float to)
+    {
+        from = TextLeft;
+        to = TextRight;
+        if (!HerOnTop || legsDown < top - M || legsTo < TextLeft || legsFrom > TextRight) return;
+        if (legsFrom - TextLeft > 150) to = legsFrom - 8;
+        else from = Math.Min(TextRight - 80, legsTo + 8);
+    }
+
+    public bool Busy { get { return dragging || seekDrag >= 0 || (mouse.X >= 0 && hover != None); } }
+
+    public const float LyricRow = 30;
+
+    // ---- Where it sits ----
+
+    private float Dpi()
+    {
+        try { return Math.Max(1f, GetDpiForWindow(Handle) / 96f); }
+        catch (Exception) { using (Graphics graphics = CreateGraphics()) return graphics.DpiX / 96f; }
+    }
+
+    public SizeF Logical()
+    {
+        if (mode == Mini) return new SizeF(DiscD + DiscM * 2, DiscD + DiscM * 2);
+        float tall = H + (expanded ? More : 0) + M * 2 + (TickerShown ? TickerGap + TickerH : 0);
+        return new SizeF(W + M * 2, tall);
+    }
+
+    public bool TickerShown { get { return mode == Full && !expanded && settings.Ticker && settings.Lyrics && lyrics != null && lyrics.Synced && lyrics.Lines.Count > 0; } }
+
+    // What's cut off the drawn frame before it goes on screen. In the full deck that's everything above the card, so the window's
+    // top edge is the card's own and she sits right on it, and most of the glow at the sides, so she can't sit on thin air.
+    public float CropTop { get { return mode == Mini ? 0 : M; } }
+    public float CropSide { get { return mode == Mini ? 0 : M - 8; } }
+    private float InsetX { get { return (mode == Mini ? DiscM : M) - CropSide; } }
+    private float InsetY { get { return (mode == Mini ? DiscM : M) - CropTop; } }
+
+    // The window's size on screen, after the crop.
+    private Size WindowSize()
+    {
+        SizeF logical = Logical();
+        return new Size((int)Math.Ceiling((logical.Width - CropSide * 2) * scale), (int)Math.Ceiling((logical.Height - CropTop) * scale));
+    }
+
+    // The card's top-left on screen: what's kept, so it stays put as it grows or shrinks.
+    private Point CardOnScreen()
+    {
+        return new Point(Left + (int)(InsetX * scale), Top + (int)(InsetY * scale));
+    }
+
+    private Point Saved()
+    {
+        int x = (int)host.Store.Number("x", int.MinValue), y = (int)host.Store.Number("y", int.MinValue);
+        Rectangle area = Screen.PrimaryScreen.WorkingArea;
+        if (x == int.MinValue) return new Point(area.Right - (int)((W + 24) * Dpi() * settings.Size), area.Bottom - (int)((H + 24) * Dpi() * settings.Size));
+        return new Point(x, y);
+    }
+
+    private void Place(Point card)
+    {
+        Location = new Point(card.X - (int)(InsetX * scale), card.Y - (int)(InsetY * scale));
+    }
+
+    // ---- Drawing ----
+
+    private void Push()
+    {
+        scale = Dpi() * (float)settings.Size;
+        Size size = WindowSize();
+        int insetX = (int)(InsetX * scale), insetY = (int)(InsetY * scale), below = (int)((mode == Mini ? DiscM : M) * scale);
+        // Kept on its screen as it grows.
+        Rectangle area = Screen.FromPoint(new Point(Left + size.Width / 2, Top + size.Height / 2)).WorkingArea;
+        int left = Math.Max(area.Left - insetX, Math.Min(Left, area.Right - size.Width + insetX));
+        int top = Math.Max(area.Top - insetY, Math.Min(Top, area.Bottom - size.Height + below));
+        if (!dragging && (left != Left || top != Top)) Location = new Point(left, top);
+        using (Bitmap frame = Render(scale))
+            Layered.Push(this, frame, (byte)(255 * Ease(shown)), new Point((int)(CropSide * scale), (int)(CropTop * scale)), size);
+    }
+
+    private static float Ease(float t) { return t * t * (3 - 2 * t); }
+
+    public Bitmap Render(float s)
+    {
+        this.scale = s;
+        SizeF logical = Logical();
+        Bitmap frame = new Bitmap(Math.Max(1, (int)Math.Ceiling(logical.Width * s)), Math.Max(1, (int)Math.Ceiling(logical.Height * s)), PixelFormat.Format32bppPArgb);
+        using (Graphics g = Graphics.FromImage(frame))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.Clear(Color.Transparent);
+            if (mode == Mini) PaintMini(g, s);
+            else PaintFull(g, s, logical);
+        }
+        return frame;
+    }
+
+    // The parts that only change with the song, the size or the colours, drawn once.
+    private Bitmap Layer(float s, SizeF logical, float cardH)
+    {
+        Bitmap cover = ShownArt();
+        string coverKey = cover == null ? null : artKey;
+        string key = mode + "|" + s + "|" + cardH + "|" + coverKey + "|" + (accentGoal.ToArgb() ^ accent2Goal.ToArgb());
+        if (key == layerKey && layer != null) return layer;
+        if (layer != null && layerArt != coverKey && layer.Size == new Size(Math.Max(1, (int)Math.Ceiling(logical.Width * s)), Math.Max(1, (int)Math.Ceiling(logical.Height * s))))
+        {
+            if (fadingLayer != null) fadingLayer.Dispose();
+            fadingLayer = layer;
+            fadingAt = now;
+        }
+        else if (layer != null) layer.Dispose();
+        layer = new Bitmap(Math.Max(1, (int)Math.Ceiling(logical.Width * s)), Math.Max(1, (int)Math.Ceiling(logical.Height * s)), PixelFormat.Format32bppPArgb);
+        layerKey = key;
+        layerArt = coverKey;
+        using (Graphics g = Graphics.FromImage(layer))
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            g.ScaleTransform(s, s);
+            RectangleF card = new RectangleF(M, M, W, cardH);
+            Draw.Shadow(g, card, 22, M);
+            using (GraphicsPath shape = Draw.Round(card, 22))
+            {
+                g.SetClip(shape);
+                using (Brush ink = new SolidBrush(Ink)) g.FillRectangle(ink, card);
+                if (cover != null)
+                {
+                    // The cover, shrunk to a few pixels and stretched back, is a soft wash of its colours.
+                    using (Bitmap wash = new Bitmap(5, 5))
+                    {
+                        using (Graphics small = Graphics.FromImage(wash)) { small.InterpolationMode = InterpolationMode.HighQualityBilinear; small.DrawImage(cover, new Rectangle(0, 0, 5, 5)); }
+                        using (ImageAttributes faded = new ImageAttributes())
+                        {
+                            faded.SetColorMatrix(new ColorMatrix { Matrix33 = 0.75f });
+                            faded.SetWrapMode(WrapMode.TileFlipXY);
+                            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                            g.DrawImage(wash, new Rectangle((int)card.X - 60, (int)card.Y - 60, (int)card.Width + 120, (int)card.Height + 120), 0, 0, 5, 5, GraphicsUnit.Pixel, faded);
+                            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        }
+                    }
+                }
+                else
+                    using (LinearGradientBrush glow = new LinearGradientBrush(card, Color.FromArgb(110, accentGoal), Color.FromArgb(40, accent2Goal), 25f))
+                        g.FillRectangle(glow, card);
+                using (LinearGradientBrush dark = new LinearGradientBrush(card, Color.FromArgb(150, 6, 6, 11), Color.FromArgb(225, 5, 5, 9), 90f)) g.FillRectangle(dark, card);
+                // A faint scanline grain, like her plate.
+                using (Pen scan = new Pen(Color.FromArgb(7, 255, 255, 255), 1 / s))
+                    for (float y = card.Y; y < card.Bottom; y += 3) g.DrawLine(scan, card.X, y, card.Right, y);
+                g.ResetClip();
+                using (Pen shine = new Pen(Color.FromArgb(30, 255, 255, 255), 1))
+                    g.DrawArc(shine, card.X + 0.5f, card.Y + 0.5f, 44, 44, 180, 90);
+            }
+        }
+        return layer;
+    }
+
+    private void DrawArt(Graphics g, RectangleF box, float radius, Bitmap image, int alpha)
+    {
+        using (GraphicsPath shape = Draw.Round(box, radius))
+        {
+            if (image == null)
+            {
+                using (LinearGradientBrush fill = new LinearGradientBrush(box, accentGoal, accent2Goal, 45f)) g.FillPath(fill, shape);
+                using (Font note = Icons.Font(box.Width * 0.38f)) Draw.Center(g, Icons.Note, note, Color.FromArgb(200, 255, 255, 255), box);
+                return;
+            }
+            Region was = g.Clip;
+            g.SetClip(shape, CombineMode.Intersect);
+            RectangleF crop = Draw.Cover(image.Size, box);
+            if (alpha >= 255) g.DrawImage(image, crop);
+            else
+                using (ImageAttributes see = new ImageAttributes())
+                {
+                    see.SetColorMatrix(new ColorMatrix { Matrix33 = alpha / 255f });
+                    g.DrawImage(image, Rectangle.Round(crop), 0, 0, image.Width, image.Height, GraphicsUnit.Pixel, see);
+                }
+            g.Clip = was;
+            using (Pen edge = new Pen(Color.FromArgb(40, 255, 255, 255), 1)) g.DrawPath(edge, shape);
+        }
+    }
+
+    // The cover for what's playing. A new song keeps the last cover for a moment while its own comes through.
+    public Bitmap ShownArt()
+    {
+        if (art == null) return null;
+        if (track != null && artKey == track.Key) return art;
+        return now - titleAt < 2.5 ? art : null;
+    }
+
+    public RectangleF CardBox() { return new RectangleF(M, M, W, H + (expanded ? More : 0)); }
+    public RectangleF ArtBox() { return new RectangleF(M + 20, M + 22, 112, 112); }
+    private float TextLeft { get { return M + 152; } }
+    private float TextRight { get { return M + W - 20; } }
+
+    // Where each part takes its clicks, in the deck's own units.
+    public RectangleF Box(int part)
+    {
+        float cy = M + 128, cx = (TextLeft + TextRight) / 2;
+        switch (part)
+        {
+            case Art: return ArtBox();
+            case PlayPart: return new RectangleF(cx - 19, cy - 19, 38, 38);
+            case Prev: return new RectangleF(cx - 62, cy - 15, 30, 30);
+            case NextPart: return new RectangleF(cx + 32, cy - 15, 30, 30);
+            case Shuffle: return new RectangleF(cx - 102, cy - 14, 28, 28);
+            case Repeat: return new RectangleF(cx + 74, cy - 14, 28, 28);
+            case Heart: return new RectangleF(TextLeft - 6, cy - 14, 28, 28);
+            case Volume: return new RectangleF(TextRight - 22, cy - 14, 28, 28);
+            case Seek: return new RectangleF(TextLeft, M + 88, TextRight - TextLeft, 14);
+            case CloseButton: return new RectangleF(M + W - 34, M + 12, 22, 22);
+            case Shrink: return new RectangleF(M + W - 58, M + 12, 22, 22);
+            case Expand: return new RectangleF(M + W - 82, M + 12, 22, 22);
+            case Sleep: return new RectangleF(M + W - 150, M + 14, 62, 18);
+            case SyncLess: return new RectangleF(M + 18, M + H + More - 30, 20, 18);
+            case SyncMore: return new RectangleF(M + 112, M + H + More - 30, 20, 18);
+        }
+        if (part >= Tab && part < Tab + Tabs.Length) { float wide = (W - 40) / Tabs.Length; return new RectangleF(M + 20 + (part - Tab) * wide, M + H + 6, wide, 28); }
+        return RectangleF.Empty;
+    }
+
+    public RectangleF Content() { return new RectangleF(M + 16, M + H + 42, W - 32, More - 54); }
+
+    private void PaintFull(Graphics g, float s, SizeF logical)
+    {
+        float cardH = H + (expanded ? More : 0);
+        g.DrawImageUnscaled(Layer(s, logical, cardH), 0, 0);
+        double fade = (now - fadingAt) / 0.6;
+        if (fadingLayer != null && fade < 1)
+            using (ImageAttributes see = new ImageAttributes())
+            {
+                see.SetColorMatrix(new ColorMatrix { Matrix33 = (float)(1 - fade) });
+                g.DrawImage(fadingLayer, new Rectangle(0, 0, fadingLayer.Width, fadingLayer.Height), 0, 0, fadingLayer.Width, fadingLayer.Height, GraphicsUnit.Pixel, see);
+            }
+        else if (fadingLayer != null) { fadingLayer.Dispose(); fadingLayer = null; }
+        g.ScaleTransform(s, s);
+        RectangleF card = new RectangleF(M, M, W, cardH);
+        using (GraphicsPath shape = Draw.Round(card, 22))
+        {
+            g.SetClip(shape);
+            if (settings.Visualizer != "off") PaintLevels(g, new RectangleF(M, M + H - 58, W, 58));
+            g.ResetClip();
+            // Her neon edge, brighter with the beat.
+            int glow = 90 + (int)(loud * 120);
+            using (LinearGradientBrush edge = new LinearGradientBrush(card, Color.FromArgb(Math.Min(255, glow), accent), Color.FromArgb(Math.Min(255, glow), accent2), 20f))
+            using (GraphicsPath inside = Draw.Round(new RectangleF(card.X, card.Y + 0.7f, card.Width, card.Height - 0.7f), 22))
+            using (Pen line = new Pen(edge, 1.3f)) g.DrawPath(line, inside);
+        }
+        // A sliver of her glitch on the corners.
+        using (Brush cyan = new SolidBrush(Color.FromArgb(200, accent2))) g.FillRectangle(cyan, M + W * 0.68f, M, 30, 1.6f);
+        using (Brush pink = new SolidBrush(Color.FromArgb(200, accent))) g.FillRectangle(pink, M + W * 0.12f, M + cardH + 1f, 22, 1.6f);
+        RectangleF artBox = ArtBox();
+        Bitmap cover = ShownArt();
+        // A shadow that glows faintly in the cover's colour.
+        using (GraphicsPath under = Draw.Round(new RectangleF(artBox.X + 4, artBox.Y + 8, artBox.Width - 8, artBox.Height - 4), 16))
+        using (Brush glow = new SolidBrush(Color.FromArgb(70 + (int)(loud * 60), Blend(Color.Black, accent, 0.35f)))) g.FillPath(glow, under);
+        if (cover != null && cover == art && now - artAt < 0.5)
+        {
+            if (oldArt != null) DrawArt(g, artBox, 16, oldArt, (int)(255 * (1 - (now - artAt) / 0.5)));
+            // The new cover pops in.
+            float pop = (float)Math.Min(1, (now - artAt) / 0.5);
+            float grow = 0.92f + 0.08f * Ease(pop);
+            RectangleF popped = new RectangleF(artBox.X + artBox.Width * (1 - grow) / 2, artBox.Y + artBox.Height * (1 - grow) / 2, artBox.Width * grow, artBox.Height * grow);
+            DrawArt(g, popped, 16, cover, (int)(255 * pop));
+        }
+        else DrawArt(g, artBox, 16, cover, 255);
+        if (hover == Art)
+            using (GraphicsPath shape = Draw.Round(artBox, 16))
+            using (Brush dim = new SolidBrush(Color.FromArgb(120, 0, 0, 0)))
+            {
+                g.FillPath(dim, shape);
+                using (Font icon = Icons.Font(20)) Draw.Center(g, Icons.Open, icon, Color.White, artBox);
+            }
+        PaintHeader(g);
+        PaintTitle(g);
+        PaintSeek(g);
+        PaintButtons(g);
+        if (expanded) PaintMore(g);
+        if (TickerShown) PaintTicker(g);
+    }
+
+    private void PaintLevels(Graphics g, RectangleF area)
+    {
+        float[] bands = levels ?? new float[0];
+        if (bands.Length == 0) return;
+        if (settings.Visualizer == "wave")
+        {
+            PointF[] top = new PointF[bands.Length + 2];
+            top[0] = new PointF(area.Left, area.Bottom);
+            for (int i = 0; i < bands.Length; i++) top[i + 1] = new PointF(area.Left + area.Width * i / (bands.Length - 1), area.Bottom - 4 - bands[i] * (area.Height - 6));
+            top[top.Length - 1] = new PointF(area.Right, area.Bottom);
+            using (GraphicsPath wave = new GraphicsPath())
+            {
+                wave.AddCurve(top, 0.5f);
+                wave.CloseFigure();
+                using (LinearGradientBrush fill = new LinearGradientBrush(area, Color.FromArgb(6, accent), Color.FromArgb(70, accent2), 90f)) g.FillPath(fill, wave);
+            }
+            return;
+        }
+        float gap = 2.2f, bar = (area.Width - gap * (bands.Length + 1)) / bands.Length;
+        using (LinearGradientBrush fill = new LinearGradientBrush(area, Color.FromArgb(0, accent), Color.FromArgb(105, accent), 90f))
+        {
+            ColorBlend blend = new ColorBlend(3);
+            blend.Colors = new[] { Color.FromArgb(0, accent2), Color.FromArgb(22, accent2), Color.FromArgb(78, accent) };
+            blend.Positions = new[] { 0f, 0.45f, 1f };
+            fill.InterpolationColors = blend;
+            for (int i = 0; i < bands.Length; i++)
+            {
+                float tall = Math.Max(2, bands[i] * area.Height);
+                RectangleF one = new RectangleF(area.Left + gap + i * (bar + gap), area.Bottom - tall, bar, tall + 4);
+                using (GraphicsPath shape = Draw.Round(one, Math.Min(bar / 2, 2.5f))) g.FillPath(fill, shape);
+            }
+        }
+    }
+
+    private void PaintHeader(Graphics g)
+    {
+        if (track == null) return;
+        // The app, as a little chip in its colours.
+        string app = Label(track.App).ToUpperInvariant();
+        using (Font chip = Fonts.Ui(9.5f, FontStyle.Bold))
+        {
+            SizeF size = Draw.Measure(g, app, chip);
+            float chipFrom, chipTo;
+            TextSpan(M + 16, out chipFrom, out chipTo);
+            RectangleF pill = new RectangleF(chipFrom, M + 16, size.Width + 22, 18);
+            using (GraphicsPath shape = Draw.Round(pill, 9))
+            using (Brush fill = new SolidBrush(Color.FromArgb(46, accent)))
+            using (Pen edge = new Pen(Color.FromArgb(110, accent), 1))
+            {
+                g.FillPath(fill, shape);
+                g.DrawPath(edge, shape);
+            }
+            // A live dot while it plays.
+            using (Brush dot = new SolidBrush(track.Playing ? Color.FromArgb(230, accent2) : Color.FromArgb(120, 255, 255, 255)))
+            {
+                float pulse = track.Playing ? 1 + loud * 0.8f : 1;
+                g.FillEllipse(dot, pill.X + 8 - 2.5f * pulse, pill.Y + 9 - 2.5f * pulse, 5 * pulse, 5 * pulse);
+            }
+            Draw.Text(g, app, chip, Color.FromArgb(235, 255, 255, 255), new PointF(pill.X + 15, pill.Y + 2.5f));
+        }
+        if (sleepAt > 0 || sleepAtEnd)
+        {
+            string left = sleepAtEnd ? "END" : Math.Max(1, (int)Math.Ceiling((sleepAt - now) / 60)) + "m";
+            RectangleF box = Box(Sleep);
+            using (Font icon = Icons.Font(11)) Draw.Text(g, Icons.Moon, icon, Color.FromArgb(220, accent2), new PointF(box.X + 22, box.Y + 3));
+            using (Font text = Fonts.Ui(10, FontStyle.Bold)) Draw.Text(g, left, text, Color.FromArgb(220, 255, 255, 255), new PointF(box.X + 37, box.Y + 1.5f));
+        }
+        bool near = hover != None || dragging;
+        if (near)
+        {
+            Small(g, Expand, expanded ? Icons.Up : Icons.Down);
+            Small(g, Shrink, Icons.Mini);
+            Small(g, CloseButton, Icons.Close);
+        }
+    }
+
+    private void Small(Graphics g, int part, string glyph)
+    {
+        RectangleF box = Box(part);
+        if (hover == part)
+            using (Brush lit = new SolidBrush(Color.FromArgb(pressed == part ? 60 : 34, 255, 255, 255))) g.FillEllipse(lit, box);
+        using (Font icon = Icons.Font(10)) Draw.Center(g, glyph, icon, Color.FromArgb(hover == part ? 255 : 170, 255, 255, 255), box);
+    }
+
+    private void PaintTitle(Graphics g)
+    {
+        if (track == null) return;
+        float titleFrom, titleTo;
+        TextSpan(M + 38, out titleFrom, out titleTo);
+        RectangleF area = new RectangleF(titleFrom, M + 38, titleTo - titleFrom, 50);
+        Region was = g.Clip;
+        g.SetClip(area);
+        float slide = (float)Math.Min(1, (now - titleAt) / 0.45);
+        float eased = Ease(slide);
+        if (slide < 1 && oldTitle != null)
+            using (Font title = Fonts.Ui(16.5f, FontStyle.Bold))
+                Draw.Text(g, Draw.Fit(g, oldTitle, title, area.Width), title, Color.FromArgb((int)(255 * (1 - eased)), 255, 255, 255), new PointF(area.X, area.Y - 22 * eased));
+        float rise = 18 * (1 - eased);
+        int alpha = (int)(255 * eased);
+        using (Font title = Fonts.Ui(16.5f, FontStyle.Bold))
+        {
+            float wide = Draw.Measure(g, track.Title, title).Width;
+            if (wide <= area.Width) Draw.Text(g, track.Title, title, Color.FromArgb(alpha, 255, 255, 255), new PointF(area.X, area.Y + rise));
+            else
+            {
+                // Too long: it waits, then drifts left and loops.
+                double run = wide + 48, cycle = 2.5 + run / 32;
+                double into = (now - titleAt) % cycle;
+                float x = into < 2.5 ? 0 : (float)((into - 2.5) * 32);
+                Draw.Text(g, track.Title, title, Color.FromArgb(alpha, 255, 255, 255), new PointF(area.X - x, area.Y + rise));
+                Draw.Text(g, track.Title, title, Color.FromArgb(alpha, 255, 255, 255), new PointF(area.X - x + (float)run, area.Y + rise));
+            }
+        }
+        string by = track.Artist + (track.Album.Length > 0 && track.Album != track.Title ? "  ·  " + track.Album : "");
+        using (Font artist = Fonts.Ui(12, FontStyle.Regular))
+            Draw.Text(g, Draw.Fit(g, by, artist, area.Width), artist, Color.FromArgb((int)(175 * eased), 255, 255, 255), new PointF(area.X, area.Y + 24 + rise * 0.7f));
+        g.Clip = was;
+    }
+
+    private void PaintSeek(Graphics g)
+    {
+        if (track == null) return;
+        RectangleF box = Box(Seek);
+        float y = box.Y + 4;
+        bool lit = hover == Seek || seekDrag >= 0;
+        float thick = lit ? 5 : 3.5f;
+        double length = track.Length, at = Position();
+        float part = length > 0 ? (float)Math.Max(0, Math.Min(1, at / length)) : 0;
+        RectangleF rail = new RectangleF(box.X, y - thick / 2, box.Width, thick);
+        using (GraphicsPath shape = Draw.Round(rail, thick / 2))
+        using (Brush back = new SolidBrush(Color.FromArgb(46, 255, 255, 255))) g.FillPath(back, shape);
+        if (part > 0)
+        {
+            RectangleF done = new RectangleF(rail.X, rail.Y, Math.Max(thick, rail.Width * part), thick);
+            using (GraphicsPath shape = Draw.Round(done, thick / 2))
+            using (LinearGradientBrush fill = new LinearGradientBrush(new RectangleF(rail.X - 1, rail.Y, rail.Width + 2, thick), accent, accent2, 0f))
+                g.FillPath(fill, shape);
+            // A glow at its head.
+            float head = rail.X + rail.Width * part;
+            using (GraphicsPath glow = new GraphicsPath())
+            {
+                glow.AddEllipse(head - 10, y - 10, 20, 20);
+                using (PathGradientBrush shine = new PathGradientBrush(glow) { CenterColor = Color.FromArgb(track.Playing ? 120 : 50, accent2), SurroundColors = new[] { Color.FromArgb(0, accent2) } })
+                    g.FillPath(shine, glow);
+            }
+            if (lit && track.CanSeek)
+                using (Brush knob = new SolidBrush(Color.White)) g.FillEllipse(knob, head - 6, y - 6, 12, 12);
+        }
+        using (Font time = Fonts.Digits(10.5f))
+        {
+            Color soft = Color.FromArgb(150, 255, 255, 255);
+            if (volumeShownUntil > now)
+            {
+                string said = muted ? "MUTED" : "VOLUME " + (int)Math.Round(Math.Max(0, volume) * 100) + "%";
+                Draw.Text(g, said, time, Color.FromArgb(220, accent2), new PointF(box.X, y + 6));
+            }
+            else
+            {
+                Draw.Text(g, Clock(at), time, soft, new PointF(box.X, y + 6));
+                if (length > 0)
+                {
+                    string left = "-" + Clock(Math.Max(0, length - at));
+                    Draw.Text(g, left, time, soft, new PointF(box.Right - Draw.Measure(g, left, time).Width, y + 6));
+                }
+                else
+                    Draw.Text(g, "LIVE", time, soft, new PointF(box.Right - Draw.Measure(g, "LIVE", time).Width, y + 6));
+            }
+            // Where a click would land, in a little tag over the bar.
+            if (hover == Seek && seekDrag < 0 && length > 0 && track.CanSeek && mouse.X >= box.X)
+            {
+                double over = Math.Max(0, Math.Min(1, (mouse.X - box.X) / box.Width)) * length;
+                string tag = Clock(over);
+                SizeF size = Draw.Measure(g, tag, time);
+                RectangleF pill = new RectangleF(Math.Max(box.X, Math.Min(box.Right - size.Width - 10, mouse.X - size.Width / 2 - 5)), y - 26, size.Width + 10, 18);
+                using (GraphicsPath shape = Draw.Round(pill, 6))
+                using (Brush fill = new SolidBrush(Color.FromArgb(235, 18, 18, 26)))
+                using (Pen edge = new Pen(Color.FromArgb(160, accent2), 1))
+                {
+                    g.FillPath(fill, shape);
+                    g.DrawPath(edge, shape);
+                }
+                Draw.Text(g, tag, time, Color.White, new PointF(pill.X + 5, pill.Y + 2));
+            }
+        }
+    }
+
+    private void PaintButtons(Graphics g)
+    {
+        if (track == null) return;
+        PaintButton(g, Prev, Icons.Previous, 13, track.CanBack, false);
+        PaintButton(g, NextPart, Icons.Next, 13, track.CanSkip, false);
+        PaintButton(g, Shuffle, Icons.Shuffle, 12, track.Shuffle.HasValue, track.Shuffle == true);
+        PaintButton(g, Repeat, track.Repeat == "one" ? Icons.RepeatOne : Icons.RepeatAll, 12, track.Repeat != null, track.Repeat == "one" || track.Repeat == "all");
+        if (track.App == "Spotify") PaintButton(g, Heart, liked == true ? Icons.HeartFull : Icons.Heart, 12, true, liked == true);
+        string speaker = muted || volume == 0 ? Icons.Muted : volume < 0 ? Icons.Speaker : volume < 0.34 ? Icons.Speaker1 : volume < 0.67 ? Icons.Speaker2 : Icons.Speaker3;
+        PaintButton(g, Volume, speaker, 12, true, false);
+        // Her play disc: filled in the cover's colour, with a ring that breathes with the music.
+        RectangleF play = Box(PlayPart);
+        float breathe = track.Playing ? loud * 7 : 0;
+        using (GraphicsPath halo = new GraphicsPath())
+        {
+            RectangleF wide = RectangleF.Inflate(play, 9 + breathe, 9 + breathe);
+            halo.AddEllipse(wide);
+            using (PathGradientBrush shine = new PathGradientBrush(halo) { CenterColor = Color.FromArgb(hover == PlayPart ? 150 : 95, accent), SurroundColors = new[] { Color.FromArgb(0, accent) } })
+                g.FillPath(shine, halo);
+        }
+        float press = pressed == PlayPart ? 2 : 0;
+        RectangleF disc = RectangleF.Inflate(play, -press, -press);
+        using (LinearGradientBrush fill = new LinearGradientBrush(disc, Color.White, Color.FromArgb(255, Blend(Color.White, accent, 0.25f)), 90f)) g.FillEllipse(fill, disc);
+        using (Pen pink = new Pen(Color.FromArgb(220, accent), 1.6f)) g.DrawArc(pink, disc, 110, 140);
+        using (Pen cyan = new Pen(Color.FromArgb(220, accent2), 1.6f)) g.DrawArc(cyan, disc, 290, 140);
+        using (Font icon = Icons.Font(15)) Draw.Center(g, track.Playing ? Icons.Pause : Icons.Play, icon, Ink, new RectangleF(disc.X + (track.Playing ? 0 : 1.5f), disc.Y, disc.Width, disc.Height));
+    }
+
+    private void PaintButton(Graphics g, int part, string glyph, float size, bool enabled, bool on)
+    {
+        RectangleF box = Box(part);
+        if (hover == part && enabled)
+            using (Brush lit = new SolidBrush(Color.FromArgb(pressed == part ? 56 : 30, 255, 255, 255))) g.FillEllipse(lit, box);
+        Color colour = !enabled ? Color.FromArgb(55, 255, 255, 255) : on ? accent2 : Color.FromArgb(hover == part ? 255 : 205, 255, 255, 255);
+        using (Font icon = Icons.Font(size)) Draw.Center(g, glyph, icon, colour, box);
+        if (on && enabled)
+            using (Brush dot = new SolidBrush(accent2)) g.FillEllipse(dot, box.X + box.Width / 2 - 1.5f, box.Bottom - 3, 3, 3);
+    }
+
+    private void PaintTicker(Graphics g)
+    {
+        string line = CurrentLine();
+        RectangleF pill = new RectangleF(M + 34, M + H + TickerGap, W - 68, TickerH);
+        using (GraphicsPath shape = Draw.Round(pill, TickerH / 2))
+        {
+            using (Brush fill = new SolidBrush(Color.FromArgb(215, 8, 8, 13))) g.FillPath(fill, shape);
+            using (LinearGradientBrush edge = new LinearGradientBrush(pill, Color.FromArgb(150, accent), Color.FromArgb(150, accent2), 0f))
+            using (Pen pen = new Pen(edge, 1)) g.DrawPath(pen, shape);
+        }
+        if (string.IsNullOrEmpty(line))
+        {
+            int at = LineAt(Position());
+            Dots(g, new PointF(pill.X + pill.Width / 2, pill.Y + pill.Height / 2), at >= 0 ? (float)LineProgress(at, Position()) : -1, 120);
+            return;
+        }
+        using (Font font = Fonts.Ui(12.5f, FontStyle.Bold))
+        {
+            string fitted = Draw.Fit(g, line, font, pill.Width - 30);
+            Draw.Center(g, fitted, font, Color.FromArgb(240, 255, 255, 255), pill);
+        }
+    }
+
+    private void PaintMore(Graphics g)
+    {
+        using (Pen rule = new Pen(Color.FromArgb(30, 255, 255, 255), 1)) g.DrawLine(rule, M + 20, M + H, M + W - 20, M + H);
+        using (Font font = Fonts.Ui(10, FontStyle.Bold))
+            for (int i = 0; i < Tabs.Length; i++)
+            {
+                RectangleF box = Box(Tab + i);
+                bool on = tab == i;
+                Draw.Center(g, Tabs[i], font, Color.FromArgb(on ? 255 : hover == Tab + i ? 210 : 120, 255, 255, 255), box);
+                if (on)
+                {
+                    float wide = Draw.Measure(g, Tabs[i], font).Width;
+                    using (LinearGradientBrush bar = new LinearGradientBrush(new RectangleF(box.X, 0, box.Width, 2), accent, accent2, 0f))
+                        g.FillRectangle(bar, box.X + (box.Width - wide) / 2, box.Bottom - 3, wide, 2);
+                }
+            }
+        RectangleF content = Content();
+        Region was = g.Clip;
+        g.SetClip(content);
+        if (tab == 0) PaintLyrics(g, content);
+        else if (tab == 1) PaintHistory(g, content);
+        else PaintSources(g, content);
+        g.Clip = was;
+    }
+
+    // Lyric lines broken to fit the deck: each row keeps the line it came from, so a long line lights up whole.
+    private List<KeyValuePair<int, string>> rows = new List<KeyValuePair<int, string>>();
+    private LyricSet rowsFor;
+    public const float LyricWidth = W - 48;
+
+    public List<KeyValuePair<int, string>> Rows()
+    {
+        if (rowsFor == lyrics) return rows;
+        rowsFor = lyrics;
+        rows = new List<KeyValuePair<int, string>>();
+        if (lyrics == null) return rows;
+        using (Bitmap one = new Bitmap(1, 1))
+        using (Graphics g = Graphics.FromImage(one))
+        using (Font font = Fonts.Ui(lyrics.Synced ? 15.5f : 13, lyrics.Synced ? FontStyle.Bold : FontStyle.Regular))
+        {
+            g.TextRenderingHint = TextRenderingHint.AntiAlias;
+            for (int i = 0; i < lyrics.Lines.Count; i++)
+                foreach (string piece in Wrap(g, lyrics.Lines[i].Text, font, LyricWidth)) rows.Add(new KeyValuePair<int, string>(i, piece));
+        }
+        return rows;
+    }
+
+    private static List<string> Wrap(Graphics g, string text, Font font, float width)
+    {
+        List<string> lines = new List<string>();
+        string line = "";
+        foreach (string word in (text ?? "").Split(' '))
+        {
+            if (word.Length == 0) continue;
+            string longer = line.Length == 0 ? word : line + " " + word;
+            if (line.Length > 0 && Draw.Measure(g, longer, font).Width > width) { lines.Add(line); line = word; }
+            else line = longer;
+        }
+        lines.Add(line);
+        return lines;
+    }
+
+    public int RowOf(int line)
+    {
+        List<KeyValuePair<int, string>> all = Rows();
+        for (int i = 0; i < all.Count; i++) if (all[i].Key == line) return i;
+        return -1;
+    }
+
+    private float LyricTop(RectangleF area) { return lyrics != null && lyrics.Synced ? area.Y + area.Height * 0.42f : area.Y + 22; }
+
+    private void PaintLyrics(Graphics g, RectangleF area)
+    {
+        if (!settings.Lyrics) { Quiet(g, area, "Lyrics are off in the Music Deck's options."); return; }
+        if (lyrics == null || lyrics.Lines.Count == 0) { Quiet(g, area, lyrics == null ? "Nothing playing." : lyrics.Status); return; }
+        float middle = LyricTop(area);
+        double position = Position();
+        int current = LineAt(position);
+        double progress = LineProgress(current, position);
+        double offset = lyrics.Synced ? lyricScroll : listScroll;
+        List<KeyValuePair<int, string>> all = Rows();
+        for (int i = 0; i < all.Count; i++)
+        {
+            float y = middle + (float)(i * LyricRow - offset);
+            if (y < area.Y - LyricRow || y > area.Bottom + LyricRow) continue;
+            int line = all[i].Key;
+            string words = all[i].Value;
+            RectangleF row = new RectangleF(area.X, y - LyricRow / 2, area.Width, LyricRow);
+            float distance = Math.Abs(y - middle);
+            bool isNow = lyrics.Synced && line == current;
+            // A pause in the words, or the intro before them: three dots that fill as it runs out.
+            if (words == "\u266a")
+            {
+                if (lyrics.Synced) Dots(g, new PointF(row.X + row.Width / 2, y), isNow ? (float)progress : -1, isNow ? 255 : Math.Max(30, 120 - (int)(distance * 1.2f)));
+                continue;
+            }
+            if (!lyrics.Synced)
+            {
+                // Without times, every line reads the same, fading out toward the edges.
+                int plainAlpha = Math.Max(40, 215 - (int)(Math.Max(0, Math.Max(area.Y + 30 - y, y - (area.Bottom - 40))) * 4));
+                using (Font font = Fonts.Ui(13, FontStyle.Regular)) Draw.Center(g, Draw.Fit(g, words, font, area.Width - 8), font, Color.FromArgb(plainAlpha, 255, 255, 255), row);
+                continue;
+            }
+            // Lines already sung fade more than the ones still to come.
+            bool sung = line < current;
+            int alpha = sung ? Math.Max(25, 100 - (int)(distance * 0.9f)) : Math.Max(35, 175 - (int)(distance * 1.15f));
+            if (hover == Line + line) alpha = Math.Max(alpha, 225);
+            float grow = isNow ? Ease((float)Math.Min(1, (now - lineSince) / 0.28)) : 0;
+            float size = (float)Math.Round((13 + 3 * grow) * 2) / 2f;
+            using (Font font = Fonts.Ui(size, isNow ? FontStyle.Bold : FontStyle.Regular))
+            {
+                string text = Draw.Fit(g, words, font, area.Width - 8);
+                if (!isNow) { Draw.Center(g, text, font, Color.FromArgb(alpha, 255, 255, 255), row); continue; }
+                // The line playing lights up left to right as it's sung, with a glow in the cover's colour behind it.
+                float part = RowProgress(all, i, line, progress);
+                float wide = Draw.Measure(g, text, font).Width, left = row.X + (row.Width - wide) / 2;
+                Draw.Center(g, text, font, Color.FromArgb(115, 255, 255, 255), row);
+                if (part > 0)
+                {
+                    Region was = g.Clip;
+                    g.SetClip(new RectangleF(left - 2, row.Y, wide * part + 2, row.Height), CombineMode.Intersect);
+                    Draw.Center(g, text, font, Color.FromArgb((int)(110 * grow), accent), new RectangleF(row.X + 0.8f, row.Y + 1, row.Width, row.Height));
+                    Draw.Center(g, text, font, Color.White, row);
+                    g.Clip = was;
+                }
+            }
+        }
+        using (Font tiny = Fonts.Ui(8.5f, FontStyle.Regular))
+        {
+            string credit = lyrics.Synced ? (lyrics.Scale != 1 ? "SYNCED \u00b7 STRETCHED \u00b7 LRCLIB" : "SYNCED \u00b7 LRCLIB") : "LRCLIB";
+            Draw.Text(g, credit, tiny, Color.FromArgb(80, 255, 255, 255), new PointF(area.Right - Draw.Measure(g, credit, tiny).Width - 2, area.Bottom - 14));
+        }
+        // Their nudge to the timing, when they're over the lyrics or have nudged this song.
+        bool over = mouse.X >= 0 && Content().Contains(mouse);
+        if (lyrics.Synced && (over || syncShift != 0)) PaintSync(g);
+    }
+
+    private void PaintSync(Graphics g)
+    {
+        RectangleF less = Box(SyncLess), more = Box(SyncMore);
+        using (Font font = Fonts.Ui(12, FontStyle.Bold))
+            foreach (int part in new[] { SyncLess, SyncMore })
+            {
+                RectangleF box = part == SyncLess ? less : more;
+                using (GraphicsPath shape = Draw.Round(box, 6))
+                using (Brush fill = new SolidBrush(Color.FromArgb(hover == part ? (pressed == part ? 70 : 46) : 24, 255, 255, 255)))
+                    g.FillPath(fill, shape);
+                Draw.Center(g, part == SyncLess ? "\u2212" : "+", font, Color.FromArgb(220, 255, 255, 255), new RectangleF(box.X, box.Y - 1, box.Width, box.Height));
+            }
+        string said = syncShift == 0 ? "IN SYNC" : (syncShift > 0 ? "+" : "\u2212") + Math.Abs(syncShift).ToString("0.00", CultureInfo.InvariantCulture) + "s";
+        using (Font tiny = Fonts.Ui(9.5f, FontStyle.Bold))
+            Draw.Center(g, said, tiny, syncShift == 0 ? Color.FromArgb(130, 255, 255, 255) : accent2, new RectangleF(less.Right, less.Y, more.X - less.Right, less.Height));
+    }
+
+    // How much of one wrapped row of the line playing is sung, sharing the line's progress out by letters.
+    private static float RowProgress(List<KeyValuePair<int, string>> all, int row, int line, double progress)
+    {
+        int total = 0, before = 0;
+        for (int i = 0; i < all.Count; i++)
+        {
+            if (all[i].Key != line) continue;
+            if (i < row) before += all[i].Value.Length;
+            total += all[i].Value.Length;
+        }
+        if (total == 0) return 0;
+        double sung = progress * total - before;
+        return (float)Math.Max(0, Math.Min(1, sung / Math.Max(1, all[row].Value.Length)));
+    }
+
+    // Three dots that breathe and fill one by one as a pause in the words runs out; dim and still when it isn't now.
+    private void Dots(Graphics g, PointF middle, float progress, int alpha)
+    {
+        bool live = progress >= 0;
+        float breathe = live ? 1 + 0.16f * (float)Math.Sin(now * 3.2) : 1;
+        for (int i = 0; i < 3; i++)
+        {
+            float x = middle.X + (i - 1) * 15, r = 3.6f * breathe;
+            float lit = live ? Math.Max(0, Math.Min(1, progress * 3 - i)) : 0;
+            using (Brush back = new SolidBrush(Color.FromArgb(live ? 70 : alpha / 2, 255, 255, 255))) g.FillEllipse(back, x - r, middle.Y - r, r * 2, r * 2);
+            if (lit > 0)
+                using (Brush on = new SolidBrush(Color.FromArgb((int)(255 * lit), Blend(Color.White, accent, 0.25f)))) g.FillEllipse(on, x - r, middle.Y - r, r * 2, r * 2);
+        }
+    }
+
+    public const float RowH = 40;
+
+    private void PaintHistory(Graphics g, RectangleF area)
+    {
+        if (history.Count == 0) { Quiet(g, area, "Songs you play show up here."); return; }
+        for (int i = 0; i < history.Count; i++)
+        {
+            float y = area.Y + 8 + i * RowH - (float)listScroll;
+            if (y < area.Y - RowH || y > area.Bottom) continue;
+            Played played = history[i];
+            RectangleF row = new RectangleF(area.X, y, area.Width, RowH - 4);
+            if (hover == Row + i)
+                using (GraphicsPath shape = Draw.Round(row, 10))
+                using (Brush lit = new SolidBrush(Color.FromArgb(22, 255, 255, 255))) g.FillPath(lit, shape);
+            RectangleF tile = new RectangleF(row.X + 6, row.Y + 4, 28, 28);
+            Color tint = Palette.FromText(played.Title + played.Artist);
+            using (GraphicsPath shape = Draw.Round(tile, 7))
+            using (LinearGradientBrush fill = new LinearGradientBrush(tile, tint, Blend(tint, Color.Black, 0.5f), 45f)) g.FillPath(fill, shape);
+            using (Font letter = Fonts.Ui(12, FontStyle.Bold))
+                Draw.Center(g, played.Title.Length > 0 ? played.Title.Substring(0, 1).ToUpperInvariant() : "?", letter, Color.White, tile);
+            using (Font title = Fonts.Ui(12, FontStyle.Bold))
+                Draw.Text(g, Draw.Fit(g, played.Title, title, row.Width - 120), title, Color.FromArgb(235, 255, 255, 255), new PointF(tile.Right + 10, row.Y + 3));
+            using (Font small = Fonts.Ui(10, FontStyle.Regular))
+            {
+                Draw.Text(g, Draw.Fit(g, played.Artist + "  ·  " + played.App, small, row.Width - 120), small, Color.FromArgb(140, 255, 255, 255), new PointF(tile.Right + 10, row.Y + 19));
+                string ago = Ago(played.At);
+                Draw.Text(g, ago, small, Color.FromArgb(110, 255, 255, 255), new PointF(row.Right - Draw.Measure(g, ago, small).Width - 8, row.Y + 11));
+            }
+        }
+    }
+
+    private void PaintSources(Graphics g, RectangleF area)
+    {
+        int count = sessions.Length + 1;
+        for (int i = 0; i < count; i++)
+        {
+            float y = area.Y + 8 + i * RowH - (float)listScroll;
+            if (y < area.Y - RowH || y > area.Bottom) continue;
+            RectangleF row = new RectangleF(area.X, y, area.Width, RowH - 4);
+            CapriTrack one = i == 0 ? null : sessions[i - 1];
+            bool chosen = i == 0 ? following == null : following == one.AppId;
+            if (hover == Row + i || chosen)
+                using (GraphicsPath shape = Draw.Round(row, 10))
+                using (Brush lit = new SolidBrush(Color.FromArgb(chosen ? 34 : 20, chosen ? accent : Color.White))) g.FillPath(lit, shape);
+            using (Font icon = Icons.Font(13))
+                Draw.Center(g, i == 0 ? Icons.Auto : one.Playing ? Icons.Play : Icons.Pause, icon, chosen ? accent2 : Color.FromArgb(170, 255, 255, 255), new RectangleF(row.X + 4, row.Y, 32, row.Height));
+            string name = i == 0 ? "Automatic" : Label(one.App);
+            string about = i == 0 ? "Whatever Windows says is playing" : one.Title + (one.Artist.Length > 0 ? "  ·  " + one.Artist : "");
+            using (Font title = Fonts.Ui(12, FontStyle.Bold)) Draw.Text(g, name, title, Color.FromArgb(235, 255, 255, 255), new PointF(row.X + 42, row.Y + 3));
+            using (Font small = Fonts.Ui(10, FontStyle.Regular)) Draw.Text(g, Draw.Fit(g, about, small, row.Width - 80), small, Color.FromArgb(140, 255, 255, 255), new PointF(row.X + 42, row.Y + 19));
+            if (chosen) using (Font icon = Icons.Font(11)) Draw.Center(g, Icons.Check, icon, accent2, new RectangleF(row.Right - 32, row.Y, 28, row.Height));
+        }
+    }
+
+    private static void Quiet(Graphics g, RectangleF area, string text)
+    {
+        using (Font font = Fonts.Ui(12, FontStyle.Regular)) Draw.Center(g, text, font, Color.FromArgb(130, 255, 255, 255), area);
+    }
+
+    // The mini disc: the cover spinning like a record, its progress as a ring, and the music as rays around it.
+    private void PaintMini(Graphics g, float s)
+    {
+        g.ScaleTransform(s, s);
+        RectangleF disc = new RectangleF(DiscM, DiscM, DiscD, DiscD);
+        PointF middle = new PointF(disc.X + disc.Width / 2, disc.Y + disc.Height / 2);
+        // A soft shadow.
+        using (GraphicsPath around = new GraphicsPath())
+        {
+            around.AddEllipse(RectangleF.Inflate(disc, 16, 16));
+            using (PathGradientBrush dark = new PathGradientBrush(around) { CenterColor = Color.FromArgb(150, 0, 0, 0), SurroundColors = new[] { Color.FromArgb(0, 0, 0, 0) } })
+                g.FillPath(dark, around);
+        }
+        float[] bands = levels ?? new float[0];
+        if (bands.Length > 0)
+            using (Pen ray = new Pen(Color.White, 2.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                for (int i = 0; i < bands.Length * 2; i++)
+                {
+                    int band = i < bands.Length ? i : bands.Length * 2 - 1 - i;
+                    double angle = (i / (double)(bands.Length * 2)) * Math.PI * 2 - Math.PI / 2;
+                    float from = DiscD / 2 + 7, to = from + 2 + bands[band] * (DiscM - 12);
+                    ray.Color = Blend(Color.FromArgb(200, accent), Color.FromArgb(200, accent2), i / (float)(bands.Length * 2));
+                    g.DrawLine(ray, middle.X + (float)Math.Cos(angle) * from, middle.Y + (float)Math.Sin(angle) * from, middle.X + (float)Math.Cos(angle) * to, middle.Y + (float)Math.Sin(angle) * to);
+                }
+        using (Brush black = new SolidBrush(Ink)) g.FillEllipse(black, RectangleF.Inflate(disc, 3, 3));
+        GraphicsState state = g.Save();
+        g.TranslateTransform(middle.X, middle.Y);
+        g.RotateTransform((float)spin);
+        g.TranslateTransform(-middle.X, -middle.Y);
+        using (GraphicsPath round = new GraphicsPath())
+        {
+            round.AddEllipse(disc);
+            g.SetClip(round);
+            Bitmap cover = ShownArt();
+            if (cover != null) g.DrawImage(cover, Draw.Cover(cover.Size, disc));
+            else using (LinearGradientBrush fill = new LinearGradientBrush(disc, accent, accent2, 45f)) g.FillEllipse(fill, disc);
+            // Record grooves and a spindle.
+            using (Pen groove = new Pen(Color.FromArgb(22, 0, 0, 0), 1))
+                for (float r = 12; r < DiscD / 2; r += 5) g.DrawEllipse(groove, middle.X - r, middle.Y - r, r * 2, r * 2);
+            g.ResetClip();
+        }
+        g.Restore(state);
+        using (Brush hole = new SolidBrush(Ink)) g.FillEllipse(hole, middle.X - 5, middle.Y - 5, 10, 10);
+        using (Pen rim = new Pen(Color.FromArgb(60, 255, 255, 255), 1)) g.DrawEllipse(rim, disc);
+        // Progress round its edge.
+        if (track != null && track.Length > 0)
+        {
+            float part = (float)Math.Max(0, Math.Min(1, Position() / track.Length));
+            RectangleF ring = RectangleF.Inflate(disc, 3, 3);
+            using (Pen back = new Pen(Color.FromArgb(50, 255, 255, 255), 3)) g.DrawEllipse(back, ring);
+            using (LinearGradientBrush fill = new LinearGradientBrush(ring, accent, accent2, 45f))
+            using (Pen done = new Pen(fill, 3) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                if (part > 0.002f) g.DrawArc(done, ring, -90, 360 * part);
+        }
+        if (hover == Disc || track == null || !track.Playing)
+            using (Brush dim = new SolidBrush(Color.FromArgb(hover == Disc ? 130 : 80, 0, 0, 0)))
+            {
+                g.FillEllipse(dim, disc);
+                using (Font icon = Icons.Font(24)) Draw.Center(g, track != null && track.Playing ? Icons.Pause : Icons.Play, icon, Color.White, new RectangleF(disc.X + (track != null && track.Playing ? 0 : 2), disc.Y, disc.Width, disc.Height));
+            }
+    }
+
+    // ---- The mouse ----
+
+    public int PartAt(PointF spot)
+    {
+        if (mode == Mini)
+        {
+            PointF middle = new PointF(DiscM + DiscD / 2, DiscM + DiscD / 2);
+            double far = Math.Sqrt((spot.X - middle.X) * (spot.X - middle.X) + (spot.Y - middle.Y) * (spot.Y - middle.Y));
+            return far <= DiscD / 2 + 4 ? Disc : None;
+        }
+        RectangleF card = CardBox();
+        if (TickerShown && new RectangleF(M + 34, M + H + TickerGap, W - 68, TickerH).Contains(spot)) return Card;
+        if (!card.Contains(spot)) return None;
+        int[] parts = { CloseButton, Shrink, Expand, PlayPart, Prev, NextPart, Shuffle, Repeat, Volume, Seek, Art };
+        foreach (int part in parts)
+        {
+            RectangleF box = Box(part);
+            if (part == Seek) box = RectangleF.Inflate(box, 0, 5);
+            if (box.Contains(spot)) return part;
+        }
+        if (track != null && track.App == "Spotify" && Box(Heart).Contains(spot)) return Heart;
+        if (expanded)
+        {
+            for (int i = 0; i < Tabs.Length; i++) if (Box(Tab + i).Contains(spot)) return Tab + i;
+            RectangleF content = Content();
+            if (content.Contains(spot))
+            {
+                if (tab == 0 && lyrics != null && lyrics.Synced && Box(SyncLess).Contains(spot)) return SyncLess;
+                if (tab == 0 && lyrics != null && lyrics.Synced && Box(SyncMore).Contains(spot)) return SyncMore;
+                if (tab == 0 && lyrics != null && lyrics.Synced)
+                {
+                    int i = (int)Math.Round((spot.Y - LyricTop(content) + lyricScroll) / LyricRow);
+                    List<KeyValuePair<int, string>> all = Rows();
+                    if (i >= 0 && i < all.Count && all[i].Key < 250) return Line + all[i].Key;
+                }
+                if (tab > 0)
+                {
+                    int i = (int)Math.Floor((spot.Y - content.Y - 8 + listScroll) / RowH);
+                    int count = tab == 1 ? history.Count : sessions.Length + 1;
+                    if (i >= 0 && i < count && i < 250) return Row + i;
+                }
+            }
+        }
+        return Card;
+    }
+
+    private PointF Spot(Point pixel) { return new PointF(pixel.X / scale + CropSide, pixel.Y / scale + CropTop); }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        PointF spot = Spot(e.Location);
+        int part = PartAt(spot);
+        if (e.Button == MouseButtons.Right) { ShowMenu(e.Location); return; }
+        if (e.Button != MouseButtons.Left) return;
+        pressed = part;
+        dragFrom = Cursor.Position;
+        windowFrom = Location;
+        if (part == Seek && track != null && track.CanSeek && track.Length > 0) { seekDrag = SeekAt(spot); return; }
+        Capture = true;
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        PointF spot = Spot(e.Location);
+        mouse = spot;
+        if (seekDrag >= 0) { seekDrag = SeekAt(spot); return; }
+        if (MouseButtons == MouseButtons.Left && (pressed == Card || pressed == Disc || pressed == Art || dragging))
+        {
+            Point at = Cursor.Position;
+            if (!dragging && Math.Abs(at.X - dragFrom.X) + Math.Abs(at.Y - dragFrom.Y) > 4) dragging = true;
+            if (dragging) Location = Snap(new Point(windowFrom.X + at.X - dragFrom.X, windowFrom.Y + at.Y - dragFrom.Y));
+            return;
+        }
+        hover = PartAt(spot);
+        Cursor = hover == Card || hover == None ? Cursors.Default : Cursors.Hand;
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        PointF spot = Spot(e.Location);
+        int part = pressed;
+        pressed = None;
+        Capture = false;
+        if (seekDrag >= 0)
+        {
+            double to = seekDrag;
+            seekDrag = -1;
+            if (track != null && track.Length > 0) host.Music.Seek(to * track.Length);
+            return;
+        }
+        if (dragging)
+        {
+            dragging = false;
+            Point card = CardOnScreen();
+            host.Store.Set("x", card.X);
+            host.Store.Set("y", card.Y);
+            return;
+        }
+        if (e.Button != MouseButtons.Left || PartAt(spot) != part) return;
+        // On the disc a click waits to see if it's a double-click, which opens the full deck instead.
+        if (part == Disc)
+        {
+            if (discDoubled) discDoubled = false;
+            else discClickAt = now + SystemInformation.DoubleClickTime / 1000.0;
+            return;
+        }
+        Press(part);
+    }
+
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        base.OnMouseDoubleClick(e);
+        int part = PartAt(Spot(e.Location));
+        if (part == Disc) { discClickAt = -1; discDoubled = true; SetMode(Full); }
+        else if (part == Card) { expanded = !expanded; layerKey = null; }
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        base.OnMouseLeave(e);
+        if (dragging || seekDrag >= 0) return;
+        hover = None;
+        mouse = new PointF(-1, -1);
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        PointF spot = Spot(PointToClient(Cursor.Position));
+        if (expanded && Content().Contains(spot))
+        {
+            userScrollAt = now;
+            if (tab == 0 && lyrics != null && lyrics.Synced)
+            {
+                int rows = Rows().Count, at = Math.Max(0, RowOf(LineAt(Position())));
+                lyricUser = Math.Max(-at * LyricRow, Math.Min((rows - 1 - at) * LyricRow, lyricUser - e.Delta / 120.0 * LyricRow * 2));
+            }
+            else
+            {
+                double most = tab == 0 ? Math.Max(0, Rows().Count * LyricRow - 60) : Math.Max(0, (tab == 1 ? history.Count : sessions.Length + 1) * RowH - 120);
+                listScroll = Math.Max(0, Math.Min(most, listScroll - e.Delta / 120.0 * (tab == 0 ? LyricRow * 2 : RowH)));
+            }
+            return;
+        }
+        Nudge(e.Delta / 120.0 * 0.04);
+    }
+
+    private double SeekAt(PointF spot)
+    {
+        RectangleF box = Box(Seek);
+        return Math.Max(0, Math.Min(1, (spot.X - box.X) / box.Width));
+    }
+
+    // Close to a screen edge it sits flush, a few pixels in.
+    private Point Snap(Point window)
+    {
+        int insetX = (int)(InsetX * scale), insetY = (int)(InsetY * scale), gap = (int)(10 * scale), pull = (int)(18 * scale);
+        int width = (int)((mode == Mini ? DiscD : W) * scale), height = (int)((mode == Mini ? DiscD : H) * scale);
+        Rectangle area = Screen.FromPoint(Cursor.Position).WorkingArea;
+        int x = window.X + insetX, y = window.Y + insetY;
+        if (Math.Abs(x - (area.Left + gap)) < pull) x = area.Left + gap;
+        if (Math.Abs(x + width - (area.Right - gap)) < pull) x = area.Right - gap - width;
+        if (Math.Abs(y - (area.Top + gap)) < pull) y = area.Top + gap;
+        if (Math.Abs(y + height - (area.Bottom - gap)) < pull) y = area.Bottom - gap - height;
+        return new Point(x - insetX, y - insetY);
+    }
+
+    private void Press(int part)
+    {
+        switch (part)
+        {
+            case PlayPart: host.Music.Toggle(); return;
+            case Prev: host.Music.Previous(); return;
+            case NextPart: host.Music.Next(); return;
+            case Shuffle: if (track != null && track.Shuffle.HasValue) host.Music.SetShuffle(!track.Shuffle.Value); return;
+            case Repeat:
+                if (track != null && track.Repeat != null) host.Music.SetRepeat(track.Repeat == "off" ? "all" : track.Repeat == "all" ? "one" : "off");
+                return;
+            case Heart: if (track != null) { bool on = liked != true; liked = on; host.Music.Like(on); } return;
+            case Volume: muted = !muted; host.Music.Muted = muted; volumeShownUntil = now + 1.6; return;
+            case Art: host.Music.Open(); return;
+            case CloseButton: Dismiss(); return;
+            case Shrink: SetMode(Mini); return;
+            case Expand: expanded = !expanded; layerKey = null; return;
+        }
+        if (part >= Tab && part < Tab + Tabs.Length) { tab = part - Tab; listScroll = 0; return; }
+        if (part == SyncLess) { NudgeSync(-0.25); return; }
+        if (part == SyncMore) { NudgeSync(0.25); return; }
+        if (part >= Line && part < Row && lyrics != null && lyrics.Synced && track != null && track.CanSeek)
+        {
+            host.Music.Seek(Math.Max(0, LyricTime(part - Line)));
+            lyricUser = 0;
+            return;
+        }
+        if (part >= Row && part < Disc)
+        {
+            int i = part - Row;
+            if (tab == 1 && i < history.Count) Search(history[i]);
+            if (tab == 2) host.Music.Follow(i == 0 ? null : sessions[i - 1].AppId);
+            if (tab == 2) following = i == 0 ? null : sessions[i - 1].AppId;
+        }
+    }
+
+    // A song from the history: Spotify opens its search, anything else searches YouTube Music.
+    private void Search(Played played)
+    {
+        string query = (played.Title + " " + played.Artist).Trim();
+        string link = played.App == "Spotify" ? "spotify:search:" + Uri.EscapeDataString(query) : "https://music.youtube.com/search?q=" + Uri.EscapeDataString(query);
+        try { Process.Start(new ProcessStartInfo(link) { UseShellExecute = true }); }
+        catch (Exception) { try { Process.Start(new ProcessStartInfo("https://open.spotify.com/search/" + Uri.EscapeDataString(query)) { UseShellExecute = true }); } catch (Exception) { } }
+    }
+
+    // ---- Its menu ----
+
+    private void ShowMenu(Point at)
+    {
+        ContextMenuStrip menu = new ContextMenuStrip();
+        menu.Renderer = new ToolStripProfessionalRenderer(new DarkMenu());
+        menu.ForeColor = Color.FromArgb(236, 236, 241);
+        menu.ShowImageMargin = false;
+        Item(menu.Items, mode == Mini ? "Full deck" : "Mini disc", delegate { SetMode(mode == Mini ? Full : Mini); });
+        if (mode == Full) Item(menu.Items, expanded ? "Fold away" : "Lyrics, history and sources", delegate { expanded = !expanded; layerKey = null; });
+        ToolStripMenuItem sleep = new ToolStripMenuItem("Sleep timer" + (sleepAt > 0 ? " (" + Math.Max(1, (int)Math.Ceiling((sleepAt - now) / 60)) + " min left)" : sleepAtEnd ? " (end of song)" : ""));
+        foreach (int minutes in new[] { 15, 30, 45, 60, 90 }) { int chosen = minutes; Item(sleep.DropDownItems, minutes + " minutes", delegate { SetSleep(chosen); }); }
+        Item(sleep.DropDownItems, "When this song ends", delegate { sleepAtEnd = true; sleepAt = -1; });
+        if (sleepAt > 0 || sleepAtEnd) Item(sleep.DropDownItems, "Off", delegate { sleepAt = -1; sleepAtEnd = false; });
+        Dark(sleep);
+        menu.Items.Add(sleep);
+        ToolStripMenuItem look = new ToolStripMenuItem("Visualizer");
+        foreach (string style in new[] { "bars", "wave", "off" })
+        {
+            string chosen = style;
+            ToolStripMenuItem one = Item(look.DropDownItems, char.ToUpperInvariant(style[0]) + style.Substring(1), delegate { settings.Visualizer = chosen; settings.Save(host.Store); });
+            one.Checked = settings.Visualizer == style;
+        }
+        Dark(look);
+        menu.Items.Add(look);
+        ToolStripMenuItem colours = Item(menu.Items, "Colours from the cover", delegate { settings.CoverColours = !settings.CoverColours; Recolour(); settings.Save(host.Store); });
+        colours.Checked = settings.CoverColours;
+        ToolStripMenuItem keep = Item(menu.Items, "Keep it up while paused", delegate { settings.KeepUp = !settings.KeepUp; settings.Save(host.Store); });
+        keep.Checked = settings.KeepUp;
+        menu.Items.Add(new ToolStripSeparator());
+        if (track != null)
+        {
+            Item(menu.Items, "Open " + Label(track.App), delegate { host.Music.Open(); });
+            Item(menu.Items, "Copy song name", delegate { try { Clipboard.SetText(track.Title + (track.Artist.Length > 0 ? " - " + track.Artist : "")); } catch (Exception) { } });
+        }
+        Item(menu.Items, "Options...", delegate { host.Mainframe.ShowMods(); });
+        Item(menu.Items, "Hide until the next song", Dismiss);
+        menu.Closed += delegate { BeginInvoke(new Action(menu.Dispose)); };
+        menu.Show(this, at);
+    }
+
+    private static ToolStripMenuItem Item(ToolStripItemCollection items, string text, Action clicked)
+    {
+        ToolStripMenuItem item = new ToolStripMenuItem(text);
+        item.ForeColor = Color.FromArgb(236, 236, 241);
+        item.Click += delegate { clicked(); };
+        items.Add(item);
+        return item;
+    }
+
+    private static void Dark(ToolStripMenuItem item)
+    {
+        ToolStripDropDownMenu drop = item.DropDown as ToolStripDropDownMenu;
+        if (drop != null) { drop.Renderer = new ToolStripProfessionalRenderer(new DarkMenu()); drop.ShowImageMargin = false; drop.ShowCheckMargin = true; }
+    }
+
+    private void Recolour()
+    {
+        if (settings.CoverColours && art != null) { Color[] picked = Palette.Pick(art); accentGoal = picked[0]; accent2Goal = picked[1]; }
+        else { accentGoal = Pink; accent2Goal = Cyan; }
+        layerKey = null;
+    }
+
+    // Its page in her Mainframe's mods.
+    public Control Options()
+    {
+        FlowLayoutPanel page = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoSize = true, Padding = new Padding(8), BackColor = Color.Transparent };
+        Color ink = Color.FromArgb(236, 236, 241);
+        Action<string, bool, Action<bool>> check = delegate(string text, bool on, Action<bool> set)
+        {
+            CheckBox box = new CheckBox { Text = text, Checked = on, AutoSize = true, ForeColor = ink, Margin = new Padding(3, 6, 3, 6) };
+            box.CheckedChanged += delegate { set(box.Checked); settings.Save(host.Store); Recolour(); };
+            page.Controls.Add(box);
+        };
+        check("Take colours from the song's cover", settings.CoverColours, delegate(bool on) { settings.CoverColours = on; });
+        check("Find lyrics online (sends the song's title and artist to lrclib.net)", settings.Lyrics, delegate(bool on) { settings.Lyrics = on; lyricsKey = null; if (on) FindLyrics(); else lyrics = null; });
+        check("Show the lyric line under the deck", settings.Ticker, delegate(bool on) { settings.Ticker = on; });
+        check("Keep the deck up while the music's paused", settings.KeepUp, delegate(bool on) { settings.KeepUp = on; });
+        check("Hide it over full-screen games and videos", settings.HideFullScreen, delegate(bool on) { settings.HideFullScreen = on; });
+        check("Let Capri know what's playing", settings.TellHer, delegate(bool on) { settings.TellHer = on; });
+        check("Capri hops onto the deck when it shows", settings.HopOn, delegate(bool on) { settings.HopOn = on; });
+        Label sizeLabel = new Label { Text = "Size", AutoSize = true, ForeColor = ink, Margin = new Padding(3, 12, 3, 0) };
+        page.Controls.Add(sizeLabel);
+        TrackBar size = new TrackBar { Minimum = 80, Maximum = 140, TickFrequency = 10, Value = (int)Math.Round(settings.Size * 100), Width = 260 };
+        size.ValueChanged += delegate { settings.Size = size.Value / 100.0; settings.Save(host.Store); layerKey = null; };
+        page.Controls.Add(size);
+        Label keys = new Label
+        {
+            AutoSize = true, ForeColor = Color.FromArgb(160, 160, 170), Margin = new Padding(3, 12, 3, 3),
+            Text = "Hotkeys: Ctrl+Alt+Space play/pause, Ctrl+Alt+Left/Right skip, Ctrl+Alt+Up/Down volume, Ctrl+Alt+L lyrics, Ctrl+Alt+M show/hide.\nScroll on the deck for volume, drag to move, right-click for the sleep timer and more, double-click to fold it open."
+        };
+        page.Controls.Add(keys);
+        Button reset = new Button { Text = "Put it back in the corner", AutoSize = true, ForeColor = ink, FlatStyle = FlatStyle.Flat, Margin = new Padding(3, 10, 3, 3) };
+        reset.Click += delegate { host.Store.Remove("x"); host.Store.Remove("y"); if (Visible) Place(Saved()); };
+        page.Controls.Add(reset);
+        return page;
+    }
+
+    // ---- Small helpers ----
+
+    // Some players only give Windows an id like CA9422711AE1A81C, which means nothing to read.
+    public static string Label(string app)
+    {
+        if (string.IsNullOrWhiteSpace(app) || Regex.IsMatch(app, @"^[0-9A-Fa-f]{10,}$") || Regex.IsMatch(app, @"^\{?[0-9A-Fa-f-]{30,}\}?$")) return "Now playing";
+        return app;
+    }
+
+    public static string Clock(double seconds)
+    {
+        if (double.IsNaN(seconds) || seconds < 0) seconds = 0;
+        TimeSpan span = TimeSpan.FromSeconds(Math.Floor(seconds));
+        return span.TotalHours >= 1 ? ((int)span.TotalHours) + ":" + span.Minutes.ToString("00") + ":" + span.Seconds.ToString("00") : span.Minutes + ":" + span.Seconds.ToString("00");
+    }
+
+    private static string Ago(DateTime at)
+    {
+        TimeSpan since = DateTime.Now - at;
+        if (since.TotalMinutes < 1) return "now";
+        if (since.TotalHours < 1) return (int)since.TotalMinutes + "m ago";
+        if (since.TotalDays < 1) return (int)since.TotalHours + "h ago";
+        return (int)since.TotalDays + "d ago";
+    }
+
+    public static Color Blend(Color from, Color to, float t)
+    {
+        t = Math.Max(0, Math.Min(1, t));
+        return Color.FromArgb((int)(from.A + (to.A - from.A) * t), (int)(from.R + (to.R - from.R) * t), (int)(from.G + (to.G - from.G) * t), (int)(from.B + (to.B - from.B) * t));
+    }
+
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] private static extern int SetWindowLong(IntPtr window, int index, int value);
+    [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, int flags);
+}
+
+// A dark menu in her colours.
+public sealed class DarkMenu : ProfessionalColorTable
+{
+    private static readonly Color Back = Color.FromArgb(16, 15, 24), Lit = Color.FromArgb(54, 24, 44), Edge = Color.FromArgb(70, 60, 80);
+    public override Color ToolStripDropDownBackground { get { return Back; } }
+    public override Color MenuBorder { get { return Edge; } }
+    public override Color MenuItemBorder { get { return Color.FromArgb(255, 46, 136); } }
+    public override Color MenuItemSelected { get { return Lit; } }
+    public override Color MenuItemSelectedGradientBegin { get { return Lit; } }
+    public override Color MenuItemSelectedGradientEnd { get { return Lit; } }
+    public override Color MenuItemPressedGradientBegin { get { return Lit; } }
+    public override Color MenuItemPressedGradientEnd { get { return Lit; } }
+    public override Color ImageMarginGradientBegin { get { return Back; } }
+    public override Color ImageMarginGradientMiddle { get { return Back; } }
+    public override Color ImageMarginGradientEnd { get { return Back; } }
+    public override Color SeparatorDark { get { return Edge; } }
+    public override Color SeparatorLight { get { return Back; } }
+    public override Color CheckBackground { get { return Lit; } }
+    public override Color CheckSelectedBackground { get { return Lit; } }
+    public override Color CheckPressedBackground { get { return Lit; } }
+}
+
+// Puts a drawn frame on a layered window, alpha and all.
+public static class Layered
+{
+    [StructLayout(LayoutKind.Sequential)] private struct Size32 { public int Width, Height; }
+    [StructLayout(LayoutKind.Sequential)] private struct Point32 { public int X, Y; }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct Blend { public byte Op, Flags, Alpha, Format; }
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool UpdateLayeredWindow(IntPtr window, IntPtr screen, ref Point32 at, ref Size32 size, IntPtr source, ref Point32 from, int key, ref Blend blend, int flags);
+    [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
+    [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr thing);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr thing);
+
+    public static void Push(Form window, Bitmap frame, byte alpha, Point crop, Size shown)
+    {
+        IntPtr screen = GetDC(IntPtr.Zero), memory = CreateCompatibleDC(screen), bitmap = IntPtr.Zero, was = IntPtr.Zero;
+        try
+        {
+            bitmap = frame.GetHbitmap(Color.FromArgb(0));
+            was = SelectObject(memory, bitmap);
+            Size32 size = new Size32 { Width = Math.Min(shown.Width, frame.Width - crop.X), Height = Math.Min(shown.Height, frame.Height - crop.Y) };
+            Point32 from = new Point32 { X = crop.X, Y = crop.Y }, at = new Point32 { X = window.Left, Y = window.Top };
+            Blend blend = new Blend { Op = 0, Flags = 0, Alpha = alpha, Format = 1 };
+            UpdateLayeredWindow(window.Handle, screen, ref at, ref size, memory, ref from, 0, ref blend, 2);
+        }
+        finally
+        {
+            ReleaseDC(IntPtr.Zero, screen);
+            if (bitmap != IntPtr.Zero) { SelectObject(memory, was); DeleteObject(bitmap); }
+            DeleteDC(memory);
+        }
+    }
+}
+
+public static class Screens
+{
+    [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+    [DllImport("user32.dll")] private static extern IntPtr GetShellWindow();
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+
+    // A game or video filling the screen it's on, not the desktop and not Capri.
+    public static bool FullScreenApp(IntPtr mine)
+    {
+        IntPtr front = GetForegroundWindow();
+        if (front == IntPtr.Zero || front == mine || front == GetShellWindow()) return false;
+        uint process;
+        GetWindowThreadProcessId(front, out process);
+        if (process == (uint)Process.GetCurrentProcess().Id) return false;
+        StringBuilder name = new StringBuilder(64);
+        GetClassName(front, name, 64);
+        string kind = name.ToString();
+        if (kind == "Progman" || kind == "WorkerW" || kind == "Shell_TrayWnd") return false;
+        Rect rect;
+        if (!GetWindowRect(front, out rect)) return false;
+        Rectangle bounds = Screen.FromHandle(front).Bounds;
+        return rect.Left <= bounds.Left && rect.Top <= bounds.Top && rect.Right >= bounds.Right && rect.Bottom >= bounds.Bottom;
+    }
+}
+
+public static class Fonts
+{
+    private static readonly Dictionary<string, Font> made = new Dictionary<string, Font>();
+    private static string ui, digits;
+
+    private static bool Has(string family)
+    {
+        using (InstalledFontCollection installed = new InstalledFontCollection())
+            foreach (FontFamily one in installed.Families) if (string.Equals(one.Name, family, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Kept for the life of the mod, so a frame never makes fonts. Callers' using blocks only dispose a copy.
+    private static Font Get(string family, float size, FontStyle style)
+    {
+        string key = family + "|" + size + "|" + style;
+        Font font;
+        if (!made.TryGetValue(key, out font)) { font = new Font(family, size, style, GraphicsUnit.Pixel); made[key] = font; }
+        return (Font)font.Clone();
+    }
+
+    public static Font Ui(float size, FontStyle style)
+    {
+        if (ui == null) ui = Has("Segoe UI") ? "Segoe UI" : FontFamily.GenericSansSerif.Name;
+        return Get(ui, size, style);
+    }
+
+    public static Font Digits(float size)
+    {
+        if (digits == null) digits = Has("Bahnschrift") ? "Bahnschrift" : Has("Consolas") ? "Consolas" : FontFamily.GenericMonospace.Name;
+        return Get(digits, size, FontStyle.Regular);
+    }
+}
+
+// Windows' own icon font.
+public static class Icons
+{
+    public const string Play = "", Pause = "", Previous = "", Next = "", Shuffle = "", RepeatAll = "", RepeatOne = "",
+        Heart = "", HeartFull = "", Speaker = "", Speaker1 = "", Speaker2 = "", Speaker3 = "", Muted = "",
+        Down = "", Up = "", Close = "", Mini = "", Moon = "", Note = "", Check = "", Open = "", Auto = "";
+    private static string family;
+    private static readonly Dictionary<string, Font> made = new Dictionary<string, Font>();
+
+    public static Font Font(float size)
+    {
+        if (family == null)
+        {
+            family = "Segoe MDL2 Assets";
+            using (InstalledFontCollection installed = new InstalledFontCollection())
+            {
+                bool mdl = false, fluent = false;
+                foreach (FontFamily one in installed.Families) { if (one.Name == "Segoe MDL2 Assets") mdl = true; if (one.Name == "Segoe Fluent Icons") fluent = true; }
+                if (!mdl && fluent) family = "Segoe Fluent Icons";
+            }
+        }
+        string key = family + "|" + size;
+        Font font;
+        if (!made.TryGetValue(key, out font)) { font = new Font(family, size, FontStyle.Regular, GraphicsUnit.Pixel); made[key] = font; }
+        return (Font)font.Clone();
+    }
+}
+
+public static class Draw
+{
+    private static readonly StringFormat plain = MakeFormat(false), centred = MakeFormat(true);
+
+    private static StringFormat MakeFormat(bool centre)
+    {
+        StringFormat format = (StringFormat)StringFormat.GenericTypographic.Clone();
+        format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
+        if (centre) { format.Alignment = StringAlignment.Center; format.LineAlignment = StringAlignment.Center; }
+        return format;
+    }
+
+    public static GraphicsPath Round(RectangleF box, float radius)
+    {
+        GraphicsPath path = new GraphicsPath();
+        float r = Math.Max(0.1f, Math.Min(radius, Math.Min(box.Width, box.Height) / 2)), d = r * 2;
+        path.AddArc(box.X, box.Y, d, d, 180, 90);
+        path.AddArc(box.Right - d, box.Y, d, d, 270, 90);
+        path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90);
+        path.AddArc(box.X, box.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    // A soft shadow under a card, in rings that fade out.
+    public static void Shadow(Graphics g, RectangleF card, float radius, float spread)
+    {
+        for (int i = 0; i < 12; i++)
+        {
+            float grow = spread * (i + 1) / 12f;
+            RectangleF ring = new RectangleF(card.X - grow * 0.8f, card.Y - grow * 0.5f, card.Width + grow * 1.6f, card.Height + grow * 1.3f);
+            using (GraphicsPath shape = Round(ring, radius + grow))
+            using (Brush dark = new SolidBrush(Color.FromArgb((int)(14 * (1 - i / 12f)), 0, 0, 0))) g.FillPath(dark, shape);
+        }
+    }
+
+    // An image filling a box, cropped to keep its shape.
+    public static RectangleF Cover(Size image, RectangleF box)
+    {
+        float scale = Math.Max(box.Width / image.Width, box.Height / image.Height);
+        float w = image.Width * scale, h = image.Height * scale;
+        return new RectangleF(box.X + (box.Width - w) / 2, box.Y + (box.Height - h) / 2, w, h);
+    }
+
+    public static SizeF Measure(Graphics g, string text, Font font) { return g.MeasureString(text ?? "", font, PointF.Empty, plain); }
+
+    public static void Text(Graphics g, string text, Font font, Color colour, PointF at)
+    {
+        using (Brush ink = new SolidBrush(colour)) g.DrawString(text ?? "", font, ink, at, plain);
+    }
+
+    public static void Center(Graphics g, string text, Font font, Color colour, RectangleF box)
+    {
+        using (Brush ink = new SolidBrush(colour)) g.DrawString(text ?? "", font, ink, box, centred);
+    }
+
+    // The longest start that fits, with an ellipsis when it's cut.
+    public static string Fit(Graphics g, string text, Font font, float width)
+    {
+        text = text ?? "";
+        if (Measure(g, text, font).Width <= width) return text;
+        int low = 0, high = text.Length;
+        while (low < high)
+        {
+            int mid = (low + high + 1) / 2;
+            if (Measure(g, text.Substring(0, mid).TrimEnd() + "…", font).Width <= width) low = mid; else high = mid - 1;
+        }
+        return text.Substring(0, low).TrimEnd() + "…";
+    }
+}
+
+// Colours for the deck from a cover: its most vivid colour, and a second one far enough round the wheel to pair with it.
+public static class Palette
+{
+    public static Color[] Pick(Bitmap art)
+    {
+        Color fallback = DeckWindow.Pink, fallback2 = DeckWindow.Cyan;
+        if (art == null) return new[] { fallback, fallback2 };
+        double[] weight = new double[36];
+        double[][] sums = new double[36][];
+        for (int i = 0; i < 36; i++) sums[i] = new double[3];
+        using (Bitmap small = new Bitmap(32, 32))
+        {
+            using (Graphics g = Graphics.FromImage(small)) { g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.DrawImage(art, new Rectangle(0, 0, 32, 32)); }
+            for (int y = 0; y < 32; y++)
+                for (int x = 0; x < 32; x++)
+                {
+                    Color c = small.GetPixel(x, y);
+                    float hue = c.GetHue(), sat = c.GetSaturation(), bright = Math.Max(c.R, Math.Max(c.G, c.B)) / 255f;
+                    double vivid = sat * sat * bright;
+                    if (bright < 0.18 || sat < 0.2) continue;
+                    int bin = (int)(hue / 10) % 36;
+                    weight[bin] += vivid;
+                    sums[bin][0] += c.R * vivid; sums[bin][1] += c.G * vivid; sums[bin][2] += c.B * vivid;
+                }
+        }
+        int best = -1, second = -1;
+        for (int i = 0; i < 36; i++) if (best < 0 || Smooth(weight, i) > Smooth(weight, best)) best = i;
+        if (best < 0 || weight[best] < 1.5) return new[] { fallback, fallback2 };
+        for (int i = 0; i < 36; i++)
+        {
+            int apart = Math.Min(Math.Abs(i - best), 36 - Math.Abs(i - best));
+            if (apart < 5) continue;
+            if (second < 0 || Smooth(weight, i) > Smooth(weight, second)) second = i;
+        }
+        Color first = Lift(Average(sums[best], weight[best]));
+        Color other = second >= 0 && weight[second] > 0.6 ? Lift(Average(sums[second], weight[second])) : Lift(Turn(first, 150));
+        return new[] { first, other };
+    }
+
+    private static double Smooth(double[] weight, int i) { return weight[i] + 0.5 * weight[(i + 1) % 36] + 0.5 * weight[(i + 35) % 36]; }
+
+    private static Color Average(double[] sum, double weight)
+    {
+        return Color.FromArgb(Clamp(sum[0] / weight), Clamp(sum[1] / weight), Clamp(sum[2] / weight));
+    }
+
+    private static int Clamp(double value) { return (int)Math.Max(0, Math.Min(255, value)); }
+
+    // Bright and saturated enough to glow on black.
+    private static Color Lift(Color c)
+    {
+        double h = c.GetHue(), s = Math.Max(0.55, c.GetSaturation()), v = Math.Max(0.85, Math.Max(c.R, Math.Max(c.G, c.B)) / 255.0);
+        return FromHsv(h, s, v);
+    }
+
+    private static Color Turn(Color c, double degrees) { return FromHsv((c.GetHue() + degrees) % 360, 0.7, 0.95); }
+
+    public static Color FromHsv(double h, double s, double v)
+    {
+        double c = v * s, x = c * (1 - Math.Abs((h / 60) % 2 - 1)), m = v - c, r = 0, g = 0, b = 0;
+        if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+        return Color.FromArgb(Clamp((r + m) * 255), Clamp((g + m) * 255), Clamp((b + m) * 255));
+    }
+
+    // A steady colour for a song with no cover, from its name.
+    public static Color FromText(string text)
+    {
+        int hash = 17;
+        foreach (char c in text ?? "") hash = unchecked(hash * 31 + c);
+        return FromHsv(Math.Abs(hash % 360), 0.6, 0.75);
+    }
+}
+
+// Lyrics from lrclib.net, synced when it has them, kept on disk so a song is only looked up once.
+public static class LyricFinder
+{
+    private const string Agent = "Capri Music Deck mod 1.1.0 (https://github.com/lachydotmcg/capri-desktop)";
+
+    // "- slowed", "(sped up)", "nightcore" and the like: an edit of a song lrclib usually only has the original of.
+    private static readonly Regex Tempo = new Regex(@"\s*(?:[-\u2013\u2014|]\s*|[\(\[]\s*)(?:super\s+|ultra\s+)?(?:slowed|sped\s*up|speed\s*up|nightcore|daycore|reverb)\b[^\)\]]*[\)\]]?\s*$", RegexOptions.IgnoreCase);
+
+    public static LyricSet Find(string title, string artist, string album, double length, string folder)
+    {
+        string cleanTitle = CleanTitle(title), cleanArtist = CleanArtist(artist);
+        // A video titled "Artist - Song" on a channel names both in its title.
+        Match split = Regex.Match(Tempo.Replace(cleanTitle, ""), @"^(.+?)\s+[-\u2013\u2014]\s+(.+)$");
+        if (split.Success && (cleanArtist.Length == 0 || split.Groups[1].Value.IndexOf(cleanArtist, StringComparison.OrdinalIgnoreCase) >= 0 || cleanArtist.IndexOf(split.Groups[1].Value, StringComparison.OrdinalIgnoreCase) >= 0))
+        {
+            cleanArtist = split.Groups[1].Value.Trim();
+            cleanTitle = split.Groups[2].Value.Trim() + Tempo.Match(cleanTitle).Value;
+        }
+        string cacheFile = null;
+        try
+        {
+            string cacheFolder = Path.Combine(folder, "lyrics-2");
+            Directory.CreateDirectory(cacheFolder);
+            cacheFile = Path.Combine(cacheFolder, Short(cleanArtist.ToLowerInvariant() + "\n" + cleanTitle.ToLowerInvariant()) + ".txt");
+            if (File.Exists(cacheFile))
+            {
+                string cached = File.ReadAllText(cacheFile, Encoding.UTF8);
+                try { return Parse(cached); }
+                catch (Exception) { File.Delete(cacheFile); }
+            }
+        }
+        catch (Exception) { cacheFile = null; }
+        if (cleanTitle.Length == 0) return new LyricSet { Status = "No lyrics for this one." };
+        string found = null;
+        bool reached = false;
+        try
+        {
+            string url = "https://lrclib.net/api/get?track_name=" + Uri.EscapeDataString(cleanTitle) + "&artist_name=" + Uri.EscapeDataString(cleanArtist)
+                + (string.IsNullOrEmpty(album) ? "" : "&album_name=" + Uri.EscapeDataString(album)) + (length > 0 ? "&duration=" + ((int)Math.Round(length)).ToString(CultureInfo.InvariantCulture) : "");
+            string body = Fetch(url, out reached);
+            if (body != null) found = Pick(Json.Parse(body) as Dictionary<string, object>);
+            if (found == null && reached) found = Search(cleanTitle, cleanArtist, length, true, out reached);
+            // A slowed or sped-up edit: the original's lyrics, stretched to fit when they're shown.
+            string plainTitle = Tempo.Replace(cleanTitle, "").Trim();
+            if ((found == null || !found.StartsWith("[synced")) && reached && plainTitle.Length > 0 && plainTitle != cleanTitle)
+            {
+                string original = Search(plainTitle, cleanArtist, length, false, out reached);
+                if (original != null && (found == null || original.StartsWith("[synced"))) found = original;
+            }
+        }
+        catch (Exception) { }
+        if (found == null && !reached) return new LyricSet { Status = "Couldn't reach lrclib.net for lyrics." };
+        string saved = found ?? "[none]";
+        LyricSet set = Parse(saved);
+        try { if (cacheFile != null) File.WriteAllText(cacheFile, saved, Encoding.UTF8); } catch (Exception) { }
+        return set;
+    }
+
+    // lrclib's search, best match first: synced ones, then the closest length. Strict keeps to within 15 seconds of this length.
+    private static string Search(string title, string artist, double length, bool strict, out bool reached)
+    {
+        string body = Fetch("https://lrclib.net/api/search?track_name=" + Uri.EscapeDataString(title) + (artist.Length > 0 ? "&artist_name=" + Uri.EscapeDataString(artist) : ""), out reached);
+        List<object> list = body == null ? null : Json.Parse(body) as List<object>;
+        if (list == null) return null;
+        string found = null;
+        double bestScore = double.MaxValue;
+        foreach (object one in list)
+        {
+            Dictionary<string, object> song = one as Dictionary<string, object>;
+            string picked = Pick(song);
+            if (picked == null) continue;
+            double duration = Number(song, "duration");
+            if (strict && length > 0 && duration > 0 && Math.Abs(duration - length) > 15) continue;
+            double score = (length > 0 && duration > 0 ? Math.Abs(duration - length) / (strict ? 1 : 10) : 30) + (picked.StartsWith("[synced") ? 0 : 40);
+            if (score < bestScore) { bestScore = score; found = picked; }
+        }
+        return found;
+    }
+
+    private static string Pick(Dictionary<string, object> song)
+    {
+        if (song == null) return null;
+        if (song.ContainsKey("instrumental") && song["instrumental"] is bool && (bool)song["instrumental"]) return "[instrumental]";
+        string length = Number(song, "duration").ToString("0.###", CultureInfo.InvariantCulture);
+        string synced = song.ContainsKey("syncedLyrics") ? song["syncedLyrics"] as string : null;
+        if (!string.IsNullOrWhiteSpace(synced)) return "[synced:" + length + "]\n" + synced;
+        string plain = song.ContainsKey("plainLyrics") ? song["plainLyrics"] as string : null;
+        if (!string.IsNullOrWhiteSpace(plain)) return "[plain:" + length + "]\n" + plain;
+        return null;
+    }
+
+    private static double Number(Dictionary<string, object> song, string key)
+    {
+        return song != null && song.ContainsKey(key) && song[key] is double ? (double)song[key] : 0;
+    }
+
+    public static LyricSet Parse(string saved)
+    {
+        LyricSet set = new LyricSet();
+        if (saved.StartsWith("[instrumental]")) { set.Instrumental = true; set.Status = "Instrumental \u2014 no words to this one."; return set; }
+        if (saved.StartsWith("[none]")) { set.Status = "No lyrics for this one."; return set; }
+        // "[synced:243.5]" or "[plain]"; files saved by 1.0.0 have no length.
+        Match head = Regex.Match(saved, @"^\[(synced|plain)(?::([\d.]+))?\]");
+        bool synced = head.Success && head.Groups[1].Value == "synced";
+        double duration;
+        if (head.Success && head.Groups[2].Success && double.TryParse(head.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out duration)) set.Duration = duration;
+        string body = saved.Substring(saved.IndexOf('\n') + 1);
+        foreach (string raw in body.Replace("\r", "").Split('\n'))
+        {
+            if (!synced)
+            {
+                set.Lines.Add(new LyricLine { At = -1, Text = raw.Trim() });
+                continue;
+            }
+            MatchCollection stamps = Regex.Matches(raw, @"\[(\d+):(\d+(?:\.\d+)?)\]");
+            if (stamps.Count == 0) continue;
+            string text = Regex.Replace(raw, @"\[[^\]]*\]", "").Trim();
+            foreach (Match stamp in stamps)
+            {
+                double at = int.Parse(stamp.Groups[1].Value) * 60 + double.Parse(stamp.Groups[2].Value, CultureInfo.InvariantCulture);
+                set.Lines.Add(new LyricLine { At = at, Text = text.Length == 0 ? "\u266a" : text });
+            }
+        }
+        if (synced)
+        {
+            set.Lines.Sort(delegate(LyricLine a, LyricLine b) { return a.At.CompareTo(b.At); });
+            // Pauses come once, and a long intro gets its own dots before the first words.
+            for (int i = set.Lines.Count - 1; i > 0; i--) if (set.Lines[i].Text == "\u266a" && set.Lines[i - 1].Text == "\u266a") set.Lines.RemoveAt(i);
+            if (set.Lines.Count > 0 && set.Lines[0].At > 3 && set.Lines[0].Text != "\u266a") set.Lines.Insert(0, new LyricLine { At = 0, Text = "\u266a" });
+            while (set.Lines.Count > 0 && set.Lines[set.Lines.Count - 1].Text == "\u266a") set.Lines.RemoveAt(set.Lines.Count - 1);
+        }
+        set.Synced = synced && set.Lines.Count > 0;
+        if (set.Lines.Count == 0) set.Status = "No lyrics for this one.";
+        return set;
+    }
+
+    private static string Fetch(string url, out bool reached)
+    {
+        reached = false;
+        try
+        {
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+            request.UserAgent = Agent;
+            request.Timeout = 8000;
+            request.ReadWriteTimeout = 8000;
+            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+            using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
+            {
+                reached = true;
+                return reader.ReadToEnd();
+            }
+        }
+        catch (WebException error)
+        {
+            HttpWebResponse response = error.Response as HttpWebResponse;
+            if (response != null) { reached = true; response.Close(); }
+            return null;
+        }
+    }
+
+    public static string CleanTitle(string title)
+    {
+        string clean = title ?? "";
+        clean = Regex.Replace(clean, @"\s*[\(\[](?:official|lyrics?|audio|video|music video|visuali[sz]er|hd|hq|4k|explicit|clean|remaster(?:ed)?[^\)\]]*|\d{4} remaster[^\)\]]*|feat\.?[^\)\]]*|ft\.?[^\)\]]*|with [^\)\]]*)[^\)\]]*[\)\]]", "", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\s+-\s+(?:\d{4}\s+)?remaster(?:ed)?(?:\s+\d{4})?.*$", "", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\s+(?:feat\.?|ft\.?)\s+.*$", "", RegexOptions.IgnoreCase);
+        return clean.Trim();
+    }
+
+    public static string CleanArtist(string artist)
+    {
+        string clean = Regex.Replace(artist ?? "", @"\s*-\s*Topic$|VEVO$", "", RegexOptions.IgnoreCase);
+        // "A, B & C" looks up as A.
+        clean = Regex.Split(clean, @"\s*(?:,|&| x | feat\.? | ft\.? )\s*", RegexOptions.IgnoreCase)[0];
+        return clean.Trim();
+    }
+
+    public static string Short(string text)
+    {
+        using (System.Security.Cryptography.SHA1 sha = System.Security.Cryptography.SHA1.Create())
+            return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").Substring(0, 20).ToLowerInvariant();
+    }
+}
+
+// Just enough JSON for lrclib's answers.
+public static class Json
+{
+    public static object Parse(string text)
+    {
+        int at = 0;
+        try { return Value(text, ref at); }
+        catch (Exception) { return null; }
+    }
+
+    private static void Skip(string s, ref int at) { while (at < s.Length && char.IsWhiteSpace(s[at])) at++; }
+
+    private static object Value(string s, ref int at)
+    {
+        Skip(s, ref at);
+        char c = s[at];
+        if (c == '{')
+        {
+            Dictionary<string, object> obj = new Dictionary<string, object>();
+            at++;
+            Skip(s, ref at);
+            if (s[at] == '}') { at++; return obj; }
+            while (true)
+            {
+                Skip(s, ref at);
+                string key = Str(s, ref at);
+                Skip(s, ref at);
+                at++;
+                obj[key] = Value(s, ref at);
+                Skip(s, ref at);
+                if (s[at++] == '}') return obj;
+            }
+        }
+        if (c == '[')
+        {
+            List<object> list = new List<object>();
+            at++;
+            Skip(s, ref at);
+            if (s[at] == ']') { at++; return list; }
+            while (true)
+            {
+                list.Add(Value(s, ref at));
+                Skip(s, ref at);
+                if (s[at++] == ']') return list;
+            }
+        }
+        if (c == '"') return Str(s, ref at);
+        if (s.Substring(at).StartsWith("true")) { at += 4; return true; }
+        if (s.Substring(at).StartsWith("false")) { at += 5; return false; }
+        if (s.Substring(at).StartsWith("null")) { at += 4; return null; }
+        int start = at;
+        while (at < s.Length && "+-0123456789.eE".IndexOf(s[at]) >= 0) at++;
+        return double.Parse(s.Substring(start, at - start), CultureInfo.InvariantCulture);
+    }
+
+    private static string Str(string s, ref int at)
+    {
+        StringBuilder text = new StringBuilder();
+        at++;
+        while (s[at] != '"')
+        {
+            char c = s[at++];
+            if (c != '\\') { text.Append(c); continue; }
+            char e = s[at++];
+            switch (e)
+            {
+                case 'n': text.Append('\n'); break;
+                case 'r': text.Append('\r'); break;
+                case 't': text.Append('\t'); break;
+                case 'b': text.Append('\b'); break;
+                case 'f': text.Append('\f'); break;
+                case 'u': text.Append((char)Convert.ToInt32(s.Substring(at, 4), 16)); at += 4; break;
+                default: text.Append(e); break;
+            }
+        }
+        at++;
+        return text.ToString();
+    }
+}
