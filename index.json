@@ -226,6 +226,22 @@
       "about": "Capri on fire, in green witchfire."
     },
     {
+      "folder": "float-glide",
+      "file": "float-glide.capri-code",
+      "name": "Float Glide",
+      "kind": "code",
+      "author": "cyz7z",
+      "about": "She glides to her new spot instead of teleporting, with a smooth ease and a little bob."
+    },
+    {
+      "folder": "focus-mode",
+      "file": "focus-mode.capri-code",
+      "name": "Focus Mode",
+      "kind": "code",
+      "author": "Issei",
+      "about": "Pomodoro rounds with Capri. While you work she sits down and keeps quiet, and on your break she gets up and dances."
+    },
+    {
       "folder": "frutiger-aero",
       "file": "frutiger-aero.capri-skin",
       "name": "Frutiger Aero",
@@ -296,6 +312,14 @@
       "kind": "code",
       "author": "Vocyn",
       "about": "A tiny code mod to learn from. Say \"mod check\" and she answers and counts how many times you've asked."
+    },
+    {
+      "folder": "hide-and-seek",
+      "file": "hide-and-seek.capri-code",
+      "name": "Hide and Seek",
+      "kind": "code",
+      "author": "Issei",
+      "about": "Capri hides somewhere on your desktop and you find her. Click or pat her when you spot her."
     },
     {
       "folder": "holocall",
@@ -506,6 +530,14 @@
       "about": "Adds more emojis to use in Mirit0's Caprichat"
     },
     {
+      "folder": "music-deck",
+      "file": "music-deck.capri-code",
+      "name": "Music Deck",
+      "kind": "code",
+      "author": "Vocyn",
+      "about": "Swaps her mini player for a glass music deck that takes its colours from the song's cover, with a live visualizer, synced lyrics, history, app switching, a spinning mini disc, a sleep timer, volume and hotkeys."
+    },
+    {
       "folder": "mute-button",
       "file": "mute-button.capri-code",
       "name": "Mute Button",
@@ -536,6 +568,14 @@
       "kind": "skin",
       "author": "Chilled (chillteas on discord)",
       "about": "A skin for Capri: an angel with soft wings and a halo, in whatever colour you like. AI generated, moves just as Capri does."
+    },
+    {
+      "folder": "outfit-schedule",
+      "file": "outfit-schedule.capri-code",
+      "name": "Outfit Schedule",
+      "kind": "code",
+      "author": "Issei",
+      "about": "Changes Capri's skin by time of day, day of the week or date. Neon Sign at night, the Santa hat in December, Sakura on weekends."
     },
     {
       "folder": "prism-overdrive",
@@ -610,6 +650,14 @@
       "about": "Puts your PC to sleep or shuts it down later, with a warning first."
     },
     {
+      "folder": "soundboard",
+      "file": "soundboard.capri-code",
+      "name": "Soundboard",
+      "kind": "code",
+      "author": "Issei",
+      "about": "Shortcuts that play sounds, and Capri reacts to each one. It comes with six sounds of its own, and you can add your own."
+    },
+    {
       "folder": "stained-glass",
       "file": "stained-glass.capri-skin",
       "name": "Stained Glass",
@@ -680,6 +728,14 @@
       "kind": "code",
       "author": "Potato",
       "about": "Wear several skins at once, like Halo over Galaxy Hair, on top of any skin and colour set."
+    },
+    {
+      "folder": "workspace-usage-ring",
+      "file": "workspace-usage-ring.capri-code",
+      "name": "Workspace Usage Ring",
+      "kind": "code",
+      "author": "tob7as",
+      "about": "A small ring at the top-right of the message box on Capri's Workspace page shows how much of your Claude plan you've used. Click it to see your 5-hour and weekly limits, how full each one is, and when they reset."
     },
     {
       "folder": "y2k-chrome",
