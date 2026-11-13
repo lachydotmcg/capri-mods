@@ -1,0 +1,449 @@
+// capri-mod: 1
+// id: workspace-usage-ring
+// name: Workspace Usage Ring
+// version: 1.0.0
+// author: tob7as
+// description: Adds a usage ring to the Workspace page, by tob7as. Click it to see your Eddies used (5-hour and weekly plan limits). Nothing to say; it just sits by the Send button.
+
+// Workspace Usage Ring, made by tob7as (https://github.com/tob7as).
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// One reading of one plan window.
+public class UsageWindow
+{
+    public double Percent;      // 0..100
+    public DateTime ResetsAt;   // local time
+}
+
+// Pure logic, kept apart from the UI so it can be tested.
+public static class UsageMath
+{
+    static readonly Regex Window = new Regex(
+        "\"(five_hour|seven_day)\"\\s*:\\s*\\{\\s*\"utilization\"\\s*:\\s*([0-9.eE+-]+)\\s*,\\s*\"resetsAt\"\\s*:\\s*([0-9]+)",
+        RegexOptions.Compiled);
+
+    // Reads the last rate_limit_event out of Claude Code's stream-json output.
+    // Returns false when no window was found.
+    public static bool Parse(string output, out UsageWindow fiveHour, out UsageWindow weekly)
+    {
+        fiveHour = null; weekly = null;
+        if (string.IsNullOrEmpty(output)) return false;
+        string line = null;
+        foreach (string l in output.Split('\n'))
+            if (l.IndexOf("rate_limit_event", StringComparison.Ordinal) >= 0) line = l;
+        if (line == null) return false;
+        foreach (Match m in Window.Matches(line))
+        {
+            double u;
+            long secs;
+            if (!double.TryParse(m.Groups[2].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out u)) continue;
+            if (!long.TryParse(m.Groups[3].Value, out secs)) continue;
+            // Claude reports a fraction (0.46); anything above 1 is already a percent.
+            double pct = u <= 1.0 ? u * 100.0 : u;
+            pct = Math.Round(Math.Max(0, Math.Min(100, pct)));
+            var w = new UsageWindow
+            {
+                Percent = pct,
+                ResetsAt = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(secs).ToLocalTime()
+            };
+            if (m.Groups[1].Value == "five_hour") fiveHour = w; else weekly = w;
+        }
+        return fiveHour != null || weekly != null;
+    }
+
+    // "Resets at 7:40 PM" today, "Resets Wed 8:00 AM" otherwise.
+    public static string ResetText(DateTime resets, DateTime now)
+    {
+        var ci = CultureInfo.GetCultureInfo("en-US");
+        if (resets.Date == now.Date) return "Resets at " + resets.ToString("h:mm tt", ci);
+        if ((resets.Date - now.Date).TotalDays < 7) return "Resets " + resets.ToString("ddd h:mm tt", ci);
+        return "Resets " + resets.ToString("MMM d h:mm tt", ci);
+    }
+
+    public static string UsedText(double pct)
+    {
+        return string.Format(CultureInfo.InvariantCulture, "{0:0}% Eddies used", pct);
+    }
+}
+
+public class WorkspaceUsageRing : ICapriMod
+{
+    // Workspace look: near-black glass, cyan lines, red corner accents.
+    static readonly Color Ground = Color.FromArgb(11, 15, 20);
+    static readonly Color Panel = Color.FromArgb(16, 28, 33);
+    static readonly Color Cyan = Color.FromArgb(92, 240, 244);
+    static readonly Color CyanDim = Color.FromArgb(58, 110, 118);
+    static readonly Color Red = Color.FromArgb(224, 70, 80);
+    static readonly Color Ink = Color.FromArgb(214, 236, 238);
+    static readonly Color Dim = Color.FromArgb(120, 142, 148);
+
+    ICapriHost host;
+    ICapriTimer poll, attach;
+    Control marshal;
+    RingButton ring;
+    UsageForm popup;
+    UsageWindow five, week;
+    DateTime updated = DateTime.MinValue;
+    volatile bool asking;
+    volatile bool stopped;
+
+    public void Start(ICapriHost capri)
+    {
+        host = capri;
+        try { marshal = host.Ui.Window; } catch { }
+        LoadSaved();
+        attach = host.Timers.Every(2.0, delegate { OnUi(TryAttach); });
+        // Only checks while the Workspace page is open, so nothing runs in the background otherwise.
+        poll = host.Timers.Every(600.0, delegate { OnUi(delegate { if (WorkspaceOpen()) Refresh(); }); });
+    }
+
+    bool WorkspaceOpen()
+    {
+        if (stopped || ring == null || ring.IsDisposed) return false;
+        Form f = ring.FindForm();
+        return f != null && !f.IsDisposed && f.Visible;
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        stopped = true;
+        try { if (poll != null) poll.Cancel(); } catch { }
+        try { if (attach != null) attach.Cancel(); } catch { }
+        OnUi(delegate
+        {
+            try { if (popup != null) popup.Close(); } catch { }
+            try { if (ring != null) { if (ring.Parent != null) ring.Parent.Controls.Remove(ring); ring.Dispose(); } } catch { }
+        });
+    }
+
+    void OnUi(Action a)
+    {
+        try
+        {
+            if (marshal != null && !marshal.IsDisposed && marshal.IsHandleCreated) marshal.BeginInvoke(a);
+        }
+        catch { }
+    }
+
+    // ---- finding the Workspace page and putting the ring on it ----
+
+    void TryAttach()
+    {
+        if (stopped) return;
+        Form ws = null;
+        foreach (Form f in Application.OpenForms)
+            if (f.GetType().Name == "WorkspaceWindow" && !f.IsDisposed) { ws = f; break; }
+        if (ws == null) return;
+
+        Control composer = null;
+        try
+        {
+            FieldInfo fi = ws.GetType().GetField("composer", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (fi != null) composer = fi.GetValue(ws) as Control;
+        }
+        catch { }
+        if (composer == null || composer.IsDisposed) return;
+
+        if (ring != null && !ring.IsDisposed && ring.Parent == composer) return;
+
+        if (ring != null && !ring.IsDisposed) { try { if (ring.Parent != null) ring.Parent.Controls.Remove(ring); ring.Dispose(); } catch { } }
+        ring = new RingButton();
+        ring.Clicked = ShowPopup;
+        composer.Controls.Add(ring);
+        composer.Resize += delegate { PlaceRing(composer); };
+        PlaceRing(composer);
+        ring.BringToFront();
+        ring.Percent = five != null ? five.Percent : -1;
+        host.Log("Usage ring added to the Workspace page.");
+        if (DateTime.Now - updated > TimeSpan.FromMinutes(10)) Refresh();
+    }
+
+    void PlaceRing(Control composer)
+    {
+        if (ring == null || ring.IsDisposed) return;
+        ring.Location = new Point(Math.Max(0, composer.Width - ring.Width - 20), 8);
+        ring.BringToFront();
+    }
+
+    // ---- getting the numbers ----
+
+    string SavedPath { get { return Path.Combine(host.Folder, "usage.txt"); } }
+
+    void LoadSaved()
+    {
+        try
+        {
+            if (!File.Exists(SavedPath)) return;
+            string[] p = File.ReadAllText(SavedPath).Trim().Split('|');
+            if (p.Length < 5) return;
+            five = new UsageWindow { Percent = double.Parse(p[0], CultureInfo.InvariantCulture), ResetsAt = new DateTime(long.Parse(p[1])) };
+            week = new UsageWindow { Percent = double.Parse(p[2], CultureInfo.InvariantCulture), ResetsAt = new DateTime(long.Parse(p[3])) };
+            updated = new DateTime(long.Parse(p[4]));
+        }
+        catch { five = null; week = null; }
+    }
+
+    void Save()
+    {
+        try
+        {
+            if (five == null || week == null) return;
+            Directory.CreateDirectory(host.Folder);
+            File.WriteAllText(SavedPath, string.Format(CultureInfo.InvariantCulture, "{0}|{1}|{2}|{3}|{4}",
+                five.Percent, five.ResetsAt.Ticks, week.Percent, week.ResetsAt.Ticks, updated.Ticks));
+        }
+        catch { }
+    }
+
+    static string FindClaude()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string a = Path.Combine(home, @".local\bin\claude.exe");
+        if (File.Exists(a)) return a;
+        foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(';'))
+        {
+            try
+            {
+                string p = Path.Combine(dir.Trim(), "claude.exe");
+                if (File.Exists(p)) return p;
+            }
+            catch { }
+        }
+        return null;
+    }
+
+    // Capri throws away the rate-limit event Claude Code sends with every reply,
+    // so this asks Claude for one tiny reply on the cheapest model and reads it.
+    void Refresh()
+    {
+        if (asking || stopped) return;
+        asking = true;
+        var t = new Thread(delegate()
+        {
+            try
+            {
+                string exe = FindClaude();
+                if (exe == null) { host.Log("Usage ring: couldn't find claude.exe."); return; }
+                var psi = new ProcessStartInfo(exe,
+                    "-p \"ok\" --model haiku --output-format stream-json --verbose --no-session-persistence --max-turns 1");
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                psi.RedirectStandardInput = true;
+                Directory.CreateDirectory(host.Folder);
+                psi.WorkingDirectory = host.Folder;
+                using (Process p = Process.Start(psi))
+                {
+                    p.StandardInput.Close();
+                    string err = null;
+                    var drain = new Thread(delegate() { try { err = p.StandardError.ReadToEnd(); } catch { } });
+                    drain.IsBackground = true; drain.Start();
+                    string output = p.StandardOutput.ReadToEnd();
+                    if (!p.WaitForExit(60000)) { try { p.Kill(); } catch { } return; }
+                    UsageWindow f, w;
+                    if (UsageMath.Parse(output, out f, out w))
+                    {
+                        if (f != null) five = f;
+                        if (w != null) week = w;
+                        updated = DateTime.Now;
+                        Save();
+                        OnUi(delegate
+                        {
+                            if (ring != null && !ring.IsDisposed) { ring.Percent = five != null ? five.Percent : -1; ring.Invalidate(); }
+                            if (popup != null && !popup.IsDisposed) popup.Show5(five, week, updated);
+                        });
+                    }
+                    else host.Log("Usage ring: no usage reading in Claude's reply.");
+                }
+            }
+            catch (Exception ex) { host.Log("Usage ring: " + ex.Message); }
+            finally { asking = false; OnUi(delegate { if (popup != null && !popup.IsDisposed) popup.Busy(false); }); }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    void ShowPopup()
+    {
+        if (popup != null && !popup.IsDisposed) { popup.Close(); popup = null; return; }
+        // Clicking the ring while the popup is open closes the popup first (it loses focus), so don't reopen it.
+        if (popup != null)
+        {
+            double sinceClosed = (DateTime.Now - popup.ClosedAt).TotalMilliseconds;
+            popup = null;
+            if (sinceClosed >= 0 && sinceClosed < 400) return;
+        }
+        popup = new UsageForm(Refresh);
+        popup.Show5(five, week, updated);
+        Point at = ring.PointToScreen(new Point(ring.Width, 0));
+        popup.Location = new Point(at.X - popup.Width, at.Y - popup.Height - 10);
+        Rectangle wa = Screen.FromControl(ring).WorkingArea;
+        if (popup.Left < wa.Left) popup.Left = wa.Left;
+        if (popup.Top < wa.Top) popup.Top = at.Y + ring.Height + 10;
+        popup.Show();
+        if (DateTime.Now - updated > TimeSpan.FromMinutes(2) && !asking) { popup.Busy(true); Refresh(); }
+        else if (asking) popup.Busy(true);
+    }
+
+    // ---- the ring ----
+
+    public class RingButton : Control
+    {
+        public double Percent = -1;
+        public Action Clicked;
+        bool hot;
+
+        public RingButton()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.SupportsTransparentBackColor | ControlStyles.ResizeRedraw, true);
+            Size = new Size(26, 26);
+            Cursor = Cursors.Hand;
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hot = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hot = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnClick(EventArgs e) { base.OnClick(e); if (Clicked != null) Clicked(); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            var r = new RectangleF(4, 4, Width - 9, Height - 9);
+            using (var fill = new SolidBrush(Color.FromArgb(hot ? 70 : 40, 16, 28, 33))) g.FillEllipse(fill, r);
+            using (var track = new Pen(Color.FromArgb(hot ? 120 : 80, CyanDim), 3f)) g.DrawEllipse(track, r);
+            if (Percent >= 0)
+            {
+                Color c = Percent >= 85 ? Red : Cyan;
+                using (var arc = new Pen(c, 3f))
+                {
+                    arc.StartCap = LineCap.Round; arc.EndCap = LineCap.Round;
+                    float sweep = (float)(Math.Max(Percent, 3) * 3.6);
+                    g.DrawArc(arc, r, -90f, Math.Min(sweep, 359.9f));
+                }
+            }
+            else
+            {
+                using (var dot = new SolidBrush(CyanDim)) g.FillEllipse(dot, Width / 2f - 2, Height / 2f - 2, 4, 4);
+            }
+        }
+    }
+
+    // ---- the popup ----
+
+    public class UsageForm : Form
+    {
+        UsageWindow a, b;
+        DateTime when;
+        bool busy;
+        Rectangle refreshHit;
+        readonly Action refresh;
+        Font head, label, small, big;
+
+        public UsageForm(Action onRefresh)
+        {
+            refresh = onRefresh;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            ShowInTaskbar = false;
+            TopMost = true;
+            DoubleBuffered = true;
+            BackColor = Ground;
+            Size = new Size(380, 190);
+            string face = FontFamily.GenericMonospace.Name;
+            try { using (var f = new Font("Consolas", 9f)) face = f.Name; } catch { }
+            head = new Font(face, 9f, FontStyle.Bold);
+            label = new Font("Segoe UI", 10f, FontStyle.Bold);
+            small = new Font(face, 8.5f);
+            big = new Font(face, 10f, FontStyle.Bold);
+            Cursor = Cursors.Default;
+        }
+
+        protected override bool ShowWithoutActivation { get { return false; } }
+        public DateTime ClosedAt = DateTime.MaxValue;
+        protected override void OnDeactivate(EventArgs e) { base.OnDeactivate(e); try { Close(); } catch { } }
+        protected override void OnFormClosed(FormClosedEventArgs e) { ClosedAt = DateTime.Now; base.OnFormClosed(e); }
+
+        public void Show5(UsageWindow five, UsageWindow weekly, DateTime updated)
+        {
+            a = five; b = weekly; when = updated; Invalidate();
+        }
+
+        public void Busy(bool on) { busy = on; Invalidate(); }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            if (refreshHit.Contains(e.Location) && !busy) { busy = true; Invalidate(); refresh(); }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            Cursor = refreshHit.Contains(e.Location) ? Cursors.Hand : Cursors.Default;
+            base.OnMouseMove(e);
+        }
+
+        void Row(Graphics g, int y, string title, UsageWindow w)
+        {
+            using (var tb = new SolidBrush(Ink)) g.DrawString(title, label, tb, 16, y);
+            string reset = w == null ? "no reading yet" : UsageMath.ResetText(w.ResetsAt, DateTime.Now);
+            string used = w == null ? "--" : UsageMath.UsedText(w.Percent);
+            using (var db = new SolidBrush(Dim)) g.DrawString(reset, small, db, 16, y + 20);
+            SizeF sz = g.MeasureString(used, big);
+            Color c = (w != null && w.Percent >= 85) ? Red : Cyan;
+            using (var cb = new SolidBrush(c)) g.DrawString(used, big, cb, Width - 16 - sz.Width, y + 1);
+            var bar = new Rectangle(16, y + 42, Width - 32, 6);
+            using (var tr = new SolidBrush(Panel)) g.FillRectangle(tr, bar);
+            using (var tl = new Pen(Color.FromArgb(70, CyanDim))) g.DrawRectangle(tl, bar);
+            if (w != null)
+            {
+                int fillW = (int)Math.Round((bar.Width) * Math.Max(w.Percent, 1) / 100.0);
+                using (var fb = new SolidBrush(c)) g.FillRectangle(fb, bar.X, bar.Y, fillW, bar.Height + 1);
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            g.Clear(Ground);
+            using (var bp = new Pen(CyanDim)) g.DrawRectangle(bp, 0, 0, Width - 1, Height - 1);
+            using (var rp = new Pen(Red, 2f))
+            {
+                g.DrawLine(rp, 0, 0, 34, 0); g.DrawLine(rp, 0, 0, 0, 14);
+                g.DrawLine(rp, Width - 1, Height - 1, Width - 35, Height - 1); g.DrawLine(rp, Width - 1, Height - 1, Width - 1, Height - 15);
+            }
+            using (var hb = new SolidBrush(Cyan)) g.DrawString("EDDIES USED", head, hb, 16, 12);
+            string link = busy ? "UPDATING..." : "REFRESH";
+            SizeF ls = g.MeasureString(link, small);
+            refreshHit = new Rectangle((int)(Width - 16 - ls.Width), 11, (int)ls.Width, (int)ls.Height + 2);
+            using (var lb = new SolidBrush(busy ? Dim : Red)) g.DrawString(link, small, lb, refreshHit.X, 12);
+            using (var sep = new Pen(Color.FromArgb(60, CyanDim))) g.DrawLine(sep, 16, 34, Width - 16, 34);
+
+            Row(g, 44, "5-hour limit", a);
+            Row(g, 102, "Weekly · all models", b);
+
+            string foot = when == DateTime.MinValue ? "Waiting for first reading" : "Updated " + when.ToString("h:mm tt", CultureInfo.InvariantCulture);
+            using (var fb2 = new SolidBrush(Color.FromArgb(150, Dim))) g.DrawString(foot, small, fb2, 16, Height - 24);
+            const string credit = "MOD BY TOB7AS";
+            SizeF cs = g.MeasureString(credit, small);
+            using (var cb2 = new SolidBrush(Color.FromArgb(150, CyanDim))) g.DrawString(credit, small, cb2, Width - 20 - cs.Width, Height - 24);
+        }
+    }
+}
