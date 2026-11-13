@@ -1,0 +1,10 @@
+⚠️ PREVIEW IMAGE PLACEHOLDER
+
+This mod needs a preview.png image (16:9 ratio, ~1280x720).
+
+The preview image will be shown in Capri's mod browser.
+
+## Temporary placeholder
+This file serves as a reminder to add a proper preview image before final publication.
+
+Suggested image: Focus timer with countdown display, red/orange theme.

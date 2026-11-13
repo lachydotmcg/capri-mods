@@ -1,0 +1,413 @@
+// capri-mod: 1
+// id: shadow-clone
+// name: Shadow Clone
+// version: 1.0.0
+// author: flaque
+// description: Ton pote de debug et brainstorm. "Capri look at this", "compare with before", "track this bug".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class ShadowClone : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex LookAt = new Regex(@"\blook\s+at\s+this\b|\bcheck\s+this\b|\bsee\s+this\b|\bregarde\s+[cç]a\b", Plain);
+    private static readonly Regex Compare = new Regex(@"\bcompare\s+with\s+before\b|\bwhat\s+changed\b|\bdifference\s+from\b|\bshow\s+diff\b", Plain);
+    private static readonly Regex TrackBug = new Regex(@"\btrack\s+(?:this\s+)?bug\b|\bnote\s+(?:this\s+)?(?:bug|error|issue)\b|\bremember\s+this\s+(?:bug|error)\b", Plain);
+    private static readonly Regex BugList = new Regex(@"\b(?:show|list)\s+bugs?\b|\bwhat\s+bugs\b|\bmy\s+bugs?\b", Plain);
+    private static readonly Regex GetIdea = new Regex(@"\b(?:any|got)\s+ideas?\b|\bsuggestions?\b|\bwhat\s+(?:do\s+you\s+)?think\b|\bhelp\s+me\s+(?:out|here)\b", Plain);
+    private static readonly Regex Analyze = new Regex(@"\banalyze\s+this\b|\bwhat(?:'s| is)\s+wrong\b|\bfind\s+the\s+(?:problem|issue|bug)\b", Plain);
+    private static readonly Regex ClearContext = new Regex(@"\bclear\s+context\b|\bforget\s+this\b|\breset\s+clone\b", Plain);
+    private static readonly Regex CloneHelp = new Regex(@"\b(?:clone|shadow)\s+help\b|\bhelp\s+(?:clone|shadow)\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private string contextFile;
+    private string bugsFile;
+    private List<ContextCapture> captures;
+    private List<BugNote> bugs;
+    private ContextCapture currentContext;
+
+    private class ContextCapture
+    {
+        public DateTime When;
+        public string Description;
+        public string Details;
+        public string Category; // "code", "bug", "idea", "general"
+    }
+
+    private class BugNote
+    {
+        public int Id;
+        public DateTime Reported;
+        public string Description;
+        public string Context;
+        public bool Resolved;
+        public DateTime? ResolvedWhen;
+    }
+
+    private int nextBugId = 1;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = Path.Combine(host.Folder, "shadow-clone");
+        contextFile = Path.Combine(dataFolder, "contexts.txt");
+        bugsFile = Path.Combine(dataFolder, "bugs.txt");
+        captures = new List<ContextCapture>();
+        bugs = new List<BugNote>();
+        
+        if (!Directory.Exists(dataFolder))
+            Directory.CreateDirectory(dataFolder);
+        
+        LoadData();
+        capri.Log("Shadow Clone started.");
+    }
+
+    public void Stop()
+    {
+        SaveData();
+        capri.Log("Shadow Clone stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (CloneHelp.IsMatch(said))
+            return "Shadow Clone commands: 'look at this' to capture context, 'compare with before' for diffs, 'track this bug' to log issues, 'any ideas?' for suggestions, 'analyze this' for problem-solving, 'list bugs' to see tracked issues.";
+
+        if (LookAt.IsMatch(said))
+            return CaptureContext(said, "general");
+
+        if (Compare.IsMatch(said))
+            return CompareWithPrevious();
+
+        if (TrackBug.IsMatch(said))
+            return TrackNewBug(said);
+
+        if (BugList.IsMatch(said))
+            return ListBugs();
+
+        if (GetIdea.IsMatch(said))
+            return ProvideSuggestions();
+
+        if (Analyze.IsMatch(said))
+            return AnalyzeProblem();
+
+        if (ClearContext.IsMatch(said))
+            return ClearCurrentContext();
+
+        return null;
+    }
+
+    private string CaptureContext(string said, string category)
+    {
+        string description = ExtractDescription(said);
+        if (string.IsNullOrEmpty(description))
+            description = "Context at " + DateTime.Now.ToString("HH:mm");
+
+        currentContext = new ContextCapture
+        {
+            When = DateTime.Now,
+            Description = description,
+            Details = said,
+            Category = category
+        };
+
+        captures.Insert(0, currentContext);
+        
+        // Keep last 20 captures
+        if (captures.Count > 20)
+            captures = captures.Take(20).ToList();
+
+        SaveData();
+
+        return "Got it. Context captured: " + description + ". I'm watching this, choom.";
+    }
+
+    private string CompareWithPrevious()
+    {
+        if (captures.Count < 2)
+            return "Need at least two captured contexts to compare. Say 'look at this' first.";
+
+        var current = captures[0];
+        var previous = captures[1];
+
+        TimeSpan gap = current.When - previous.When;
+        
+        StringBuilder reply = new StringBuilder();
+        reply.Append("Comparing now vs ");
+        
+        if (gap.TotalMinutes < 60)
+            reply.Append((int)gap.TotalMinutes).Append(" minutes ago. ");
+        else
+            reply.Append((int)gap.TotalHours).Append(" hours ago. ");
+
+        // Simple diff analysis
+        if (current.Category != previous.Category)
+            reply.Append("Context switched from ").Append(previous.Category).Append(" to ").Append(current.Category).Append(". ");
+
+        reply.Append("Previous: ").Append(previous.Description).Append(". ");
+        reply.Append("Current: ").Append(current.Description).Append(".");
+
+        return reply.ToString();
+    }
+
+    private string TrackNewBug(string said)
+    {
+        string description = ExtractDescription(said);
+        if (string.IsNullOrEmpty(description))
+            description = "Bug reported at " + DateTime.Now.ToString("HH:mm");
+
+        BugNote bug = new BugNote
+        {
+            Id = nextBugId++,
+            Reported = DateTime.Now,
+            Description = description,
+            Context = (currentContext != null ? currentContext.Description : "No context"),
+            Resolved = false
+        };
+
+        bugs.Add(bug);
+        SaveData();
+
+        // Also capture as context
+        CaptureContext(said, "bug");
+
+        return "Bug #" + bug.Id + " tracked: " + description + ". I'll remember this.";
+    }
+
+    private string ListBugs()
+    {
+        var open = bugs.Where(b => !b.Resolved).OrderByDescending(b => b.Reported).ToList();
+        
+        if (open.Count == 0)
+            return "No open bugs. Clean slate, choom.";
+
+        StringBuilder reply = new StringBuilder();
+        reply.Append(open.Count).Append(" open bug").Append(open.Count == 1 ? "" : "s").Append(": ");
+
+        for (int i = 0; i < Math.Min(5, open.Count); i++)
+        {
+            if (i > 0) reply.Append(", ");
+            reply.Append("#").Append(open[i].Id).Append(": ").Append(open[i].Description);
+        }
+
+        if (open.Count > 5)
+            reply.Append(" (+" + (open.Count - 5) + " more)");
+
+        return reply.ToString();
+    }
+
+    private string ProvideSuggestions()
+    {
+        if (currentContext == null)
+            return "No context captured yet. Say 'look at this' first so I know what you're working on.";
+
+        // Generate contextual suggestions based on category
+        string[] suggestions;
+        
+        switch (currentContext.Category)
+        {
+            case "bug":
+                suggestions = new[] {
+                    "Add logging to trace where it fails.",
+                    "Check recent changes. Git blame that section.",
+                    "Reproduce with minimal input. Isolate the problem.",
+                    "Step through with debugger. Watch the variables.",
+                    "Check if it's an edge case. Test boundary conditions."
+                };
+                break;
+            
+            case "code":
+                suggestions = new[] {
+                    "Extract that logic into a separate function.",
+                    "Add unit tests before refactoring.",
+                    "Check if there's a library for this already.",
+                    "Consider error handling. What if it fails?",
+                    "Document the why, not just the what."
+                };
+                break;
+            
+            default:
+                suggestions = new[] {
+                    "Break it down into smaller steps.",
+                    "What's the simplest version that works?",
+                    "Check the documentation first.",
+                    "Ask yourself: what assumptions am I making?",
+                    "Take a break. Fresh eyes help."
+                };
+                break;
+        }
+
+        Random rand = new Random();
+        return suggestions[rand.Next(suggestions.Length)];
+    }
+
+    private string AnalyzeProblem()
+    {
+        if (currentContext == null)
+            return "No context to analyze. Capture something with 'look at this' first.";
+
+        // Simple analysis based on keywords in the context
+        string lower = currentContext.Details.ToLowerInvariant();
+        
+        List<string> observations = new List<string>();
+
+        if (lower.Contains("error") || lower.Contains("exception"))
+            observations.Add("Error detected. Check the stack trace and recent changes.");
+        
+        if (lower.Contains("null") || lower.Contains("undefined"))
+            observations.Add("Possible null/undefined issue. Add null checks.");
+        
+        if (lower.Contains("slow") || lower.Contains("performance"))
+            observations.Add("Performance issue. Profile the code, check for loops or heavy operations.");
+        
+        if (lower.Contains("test") && lower.Contains("fail"))
+            observations.Add("Test failing. Verify your assumptions and expected values.");
+
+        if (lower.Contains("works") && lower.Contains("doesn't"))
+            observations.Add("Inconsistent behavior. Check environment differences or state management.");
+
+        if (observations.Count == 0)
+            observations.Add("Need more context. Describe the problem in detail.");
+
+        return "Analysis: " + observations[0];
+    }
+
+    private string ClearCurrentContext()
+    {
+        if (currentContext == null)
+            return "No active context to clear.";
+
+        string desc = currentContext.Description;
+        currentContext = null;
+        
+        return "Context cleared: " + desc + ". Fresh start.";
+    }
+
+    private string ExtractDescription(string said)
+    {
+        string cleaned = Wake.Replace(said, "").Trim();
+        cleaned = LookAt.Replace(cleaned, "").Trim();
+        cleaned = TrackBug.Replace(cleaned, "").Trim();
+        
+        if (!string.IsNullOrEmpty(cleaned) && cleaned.Length < 100)
+            return cleaned;
+
+        return null;
+    }
+
+    private void LoadData()
+    {
+        try
+        {
+            // Load contexts
+            if (File.Exists(contextFile))
+            {
+                string[] lines = File.ReadAllLines(contextFile);
+                foreach (string line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    string[] parts = line.Split('|');
+                    if (parts.Length >= 4)
+                    {
+                        ContextCapture capture = new ContextCapture();
+                        DateTime.TryParse(parts[0], out capture.When);
+                        capture.Description = parts[1];
+                        capture.Details = parts[2];
+                        capture.Category = parts[3];
+                        captures.Add(capture);
+                    }
+                }
+            }
+
+            // Load bugs
+            if (File.Exists(bugsFile))
+            {
+                string[] lines = File.ReadAllLines(bugsFile);
+                foreach (string line in lines)
+                {
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
+
+                    string[] parts = line.Split('|');
+                    if (parts.Length >= 5)
+                    {
+                        BugNote bug = new BugNote();
+                        int.TryParse(parts[0], out bug.Id);
+                        DateTime.TryParse(parts[1], out bug.Reported);
+                        bug.Description = parts[2];
+                        bug.Context = parts[3];
+                        bug.Resolved = parts[4] == "1";
+                        
+                        if (parts.Length > 5 && !string.IsNullOrEmpty(parts[5]))
+                            bug.ResolvedWhen = DateTime.Parse(parts[5]);
+
+                        bugs.Add(bug);
+                        
+                        if (bug.Id >= nextBugId)
+                            nextBugId = bug.Id + 1;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error loading Shadow Clone data: " + ex.Message);
+        }
+    }
+
+    private void SaveData()
+    {
+        try
+        {
+            // Save contexts
+            StringBuilder contextContent = new StringBuilder();
+            foreach (var capture in captures)
+            {
+                contextContent.Append(capture.When.ToString("o")).Append("|");
+                contextContent.Append(capture.Description).Append("|");
+                contextContent.Append(capture.Details).Append("|");
+                contextContent.AppendLine(capture.Category);
+            }
+            File.WriteAllText(contextFile, contextContent.ToString());
+
+            // Save bugs
+            StringBuilder bugsContent = new StringBuilder();
+            foreach (var bug in bugs)
+            {
+                bugsContent.Append(bug.Id).Append("|");
+                bugsContent.Append(bug.Reported.ToString("o")).Append("|");
+                bugsContent.Append(bug.Description).Append("|");
+                bugsContent.Append(bug.Context).Append("|");
+                bugsContent.Append(bug.Resolved ? "1" : "0").Append("|");
+                bugsContent.AppendLine(bug.ResolvedWhen.HasValue ? bug.ResolvedWhen.Value.ToString("o") : "");
+            }
+            File.WriteAllText(bugsFile, bugsContent.ToString());
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving Shadow Clone data: " + ex.Message);
+        }
+    }
+}

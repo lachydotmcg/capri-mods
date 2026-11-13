@@ -1,0 +1,333 @@
+// capri-mod: 1
+// id: smart-reminders
+// name: Smart Reminders Plus
+// version: 1.0.0
+// author: flaque
+// description: Reminders qui comprennent le contexte. "remind me when I'm back on X", "remind me in 30 minutes".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class SmartReminders : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex RemindTime = new Regex(@"\bremind\s+me\s+in\s+(\d+)\s*(min(?:ute)?s?|hours?|h|m)\b", Plain);
+    private static readonly Regex RemindContext = new Regex(@"\bremind\s+me\s+when\s+(?:i\s+)?(?:(?:go\s+back|return|come\s+back)\s+(?:to|on)|open|start|launch|switch\s+to)\b", Plain);
+    private static readonly Regex RemindList = new Regex(@"\b(?:list|show|what\s+are\s+my)\s+reminders?\b|\breminder\s+list\b", Plain);
+    private static readonly Regex RemindClear = new Regex(@"\bclear\s+reminders?\b|\bdelete\s+all\s+reminders?\b|\breset\s+reminders?\b", Plain);
+    private static readonly Regex RemindHelp = new Regex(@"\bremind(?:er)?\s+help\b|\bhelp\s+remind\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private string remindersFile;
+    private List<Reminder> reminders;
+    private DateTime lastCheck;
+
+    private class Reminder
+    {
+        public int Id;
+        public string Message;
+        public DateTime? TriggerTime;
+        public string TriggerContext;
+        public DateTime Created;
+        public bool Triggered;
+    }
+
+    private int nextId = 1;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = host.Folder;
+        remindersFile = Path.Combine(dataFolder, "reminders.txt");
+        reminders = new List<Reminder>();
+        lastCheck = DateTime.Now;
+        LoadReminders();
+        capri.Log("Smart Reminders started.");
+    }
+
+    public void Stop()
+    {
+        SaveReminders();
+        capri.Log("Smart Reminders stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        // Check time-based reminders
+        CheckTimeReminders();
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (RemindHelp.IsMatch(said))
+            return "Reminder commands: 'remind me in 30 minutes to X' for time-based, 'remind me when I'm back on X' for context-based, 'list reminders' to see all, 'clear reminders' to delete all.";
+
+        if (RemindTime.IsMatch(said))
+            return CreateTimeReminder(said);
+
+        if (RemindContext.IsMatch(said))
+            return CreateContextReminder(said);
+
+        if (RemindList.IsMatch(said))
+            return ListReminders();
+
+        if (RemindClear.IsMatch(said))
+            return ClearReminders();
+
+        // Check context triggers
+        CheckContextReminders(said);
+
+        return null;
+    }
+
+    private string CreateTimeReminder(string said)
+    {
+        Match m = RemindTime.Match(said);
+        if (!m.Success)
+            return "Couldn't parse that time. Try: 'remind me in 30 minutes to check the oven'.";
+
+        int amount;
+        if (!int.TryParse(m.Groups[1].Value, out amount))
+            return "Invalid time amount.";
+
+        string unit = m.Groups[2].Value.ToLowerInvariant();
+        int minutes = 0;
+
+        if (unit.StartsWith("h"))
+            minutes = amount * 60;
+        else
+            minutes = amount;
+
+        if (minutes < 1 || minutes > 1440) // 1 min to 24 hours
+            return "Time must be between 1 minute and 24 hours.";
+
+        string message = ExtractReminderMessage(said, m.Index + m.Length);
+        if (string.IsNullOrEmpty(message))
+            message = "Timer's up";
+
+        Reminder reminder = new Reminder
+        {
+            Id = nextId++,
+            Message = message,
+            TriggerTime = DateTime.Now.AddMinutes(minutes),
+            Created = DateTime.Now,
+            Triggered = false
+        };
+
+        reminders.Add(reminder);
+        SaveReminders();
+
+        return "Reminder set for " + minutes + " minutes from now. I'll ping you.";
+    }
+
+    private string CreateContextReminder(string said)
+    {
+        string context = ExtractContext(said);
+        if (string.IsNullOrEmpty(context))
+            return "Couldn't figure out the context. Try: 'remind me when I'm back on Visual Studio to fix the bug'.";
+
+        string message = ExtractReminderMessage(said, 0);
+        if (string.IsNullOrEmpty(message))
+            message = "You wanted to do something here";
+
+        Reminder reminder = new Reminder
+        {
+            Id = nextId++,
+            Message = message,
+            TriggerContext = context.ToLowerInvariant(),
+            Created = DateTime.Now,
+            Triggered = false
+        };
+
+        reminders.Add(reminder);
+        SaveReminders();
+
+        return "Reminder set for when you're back on " + context + ". I'm watching, choom.";
+    }
+
+    private string ListReminders()
+    {
+        var active = reminders.Where(r => !r.Triggered).ToList();
+        
+        if (active.Count == 0)
+            return "No active reminders. Clean slate.";
+
+        StringBuilder reply = new StringBuilder("Active reminders: ");
+        
+        for (int i = 0; i < Math.Min(5, active.Count); i++)
+        {
+            if (i > 0) reply.Append(", ");
+            
+            if (active[i].TriggerTime.HasValue)
+            {
+                TimeSpan until = active[i].TriggerTime.Value - DateTime.Now;
+                reply.Append((int)until.TotalMinutes).Append("m: ").Append(active[i].Message);
+            }
+            else
+            {
+                reply.Append(active[i].TriggerContext).Append(": ").Append(active[i].Message);
+            }
+        }
+
+        if (active.Count > 5)
+            reply.Append(" (+" + (active.Count - 5) + " more)");
+
+        return reply.ToString();
+    }
+
+    private string ClearReminders()
+    {
+        int count = reminders.Count(r => !r.Triggered);
+        reminders.RemoveAll(r => !r.Triggered);
+        SaveReminders();
+
+        return count > 0 
+            ? "Cleared " + count + " reminder" + (count == 1 ? "" : "s") + "." 
+            : "No reminders to clear.";
+    }
+
+    private void CheckTimeReminders()
+    {
+        var due = reminders.Where(r => !r.Triggered && r.TriggerTime.HasValue && r.TriggerTime.Value <= DateTime.Now).ToList();
+        
+        foreach (var reminder in due)
+        {
+            reminder.Triggered = true;
+            capri.Say("Reminder: " + reminder.Message);
+        }
+
+        if (due.Count > 0)
+            SaveReminders();
+    }
+
+    private void CheckContextReminders(string said)
+    {
+        var contextReminders = reminders.Where(r => !r.Triggered && !string.IsNullOrEmpty(r.TriggerContext)).ToList();
+        
+        string lower = said.ToLowerInvariant();
+        
+        foreach (var reminder in contextReminders)
+        {
+            if (lower.Contains(reminder.TriggerContext))
+            {
+                // Don't trigger immediately, wait a bit to confirm context switch
+                TimeSpan sinceCreated = DateTime.Now - reminder.Created;
+                if (sinceCreated.TotalSeconds > 30) // At least 30 seconds old
+                {
+                    reminder.Triggered = true;
+                    capri.Say("Reminder for " + reminder.TriggerContext + ": " + reminder.Message);
+                }
+            }
+        }
+
+        SaveReminders();
+    }
+
+    private string ExtractContext(string said)
+    {
+        string cleaned = Wake.Replace(said, "").Trim();
+        cleaned = RemindContext.Replace(cleaned, "").Trim();
+        
+        // Extract first meaningful word/phrase
+        Match m = Regex.Match(cleaned, @"^([\w\s-]+?)(?:\s+to\s+|\s+that\s+|$)", Plain);
+        if (m.Success)
+            return m.Groups[1].Value.Trim();
+
+        return cleaned;
+    }
+
+    private string ExtractReminderMessage(string said, int afterIndex)
+    {
+        string remainder = afterIndex < said.Length ? said.Substring(afterIndex).Trim() : said;
+        remainder = Wake.Replace(remainder, "").Trim();
+        
+        // Remove "to" prefix if exists
+        Match m = Regex.Match(remainder, @"^(?:to|that)\s+(.+)$", Plain);
+        if (m.Success)
+            return m.Groups[1].Value.Trim();
+
+        // Try to extract after "remind me ... to"
+        m = Regex.Match(said, @"remind\s+me\s+.+?\s+to\s+(.+)$", Plain);
+        if (m.Success)
+            return m.Groups[1].Value.Trim();
+
+        return remainder;
+    }
+
+    private void LoadReminders()
+    {
+        try
+        {
+            if (!File.Exists(remindersFile))
+                return;
+
+            string[] lines = File.ReadAllLines(remindersFile);
+            foreach (string line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                string[] parts = line.Split('|');
+                if (parts.Length >= 6)
+                {
+                    Reminder reminder = new Reminder();
+                    int.TryParse(parts[0], out reminder.Id);
+                    reminder.Message = parts[1];
+                    
+                    if (!string.IsNullOrEmpty(parts[2]))
+                        reminder.TriggerTime = DateTime.Parse(parts[2]);
+                    
+                    reminder.TriggerContext = parts[3];
+                    reminder.Created = DateTime.Parse(parts[4]);
+                    reminder.Triggered = parts[5] == "1";
+                    
+                    reminders.Add(reminder);
+                    if (reminder.Id >= nextId)
+                        nextId = reminder.Id + 1;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error loading reminders: " + ex.Message);
+        }
+    }
+
+    private void SaveReminders()
+    {
+        try
+        {
+            StringBuilder content = new StringBuilder();
+            foreach (var reminder in reminders)
+            {
+                content.Append(reminder.Id).Append("|");
+                content.Append(reminder.Message).Append("|");
+                content.Append(reminder.TriggerTime.HasValue ? reminder.TriggerTime.Value.ToString("o") : "").Append("|");
+                content.Append(reminder.TriggerContext != null ? reminder.TriggerContext : "").Append("|");
+                content.Append(reminder.Created.ToString("o")).Append("|");
+                content.AppendLine(reminder.Triggered ? "1" : "0");
+            }
+            File.WriteAllText(remindersFile, content.ToString());
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving reminders: " + ex.Message);
+        }
+    }
+}

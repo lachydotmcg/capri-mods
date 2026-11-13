@@ -1,0 +1,305 @@
+// capri-mod: 1
+// id: screen-context-memory
+// name: Screen Context Memory
+// version: 1.0.0
+// author: flaque
+// description: Se souvient de ce sur quoi tu bosses entre les sessions. "context save", "what was I doing", "context stats".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class ScreenContextMemory : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex SaveContext = new Regex(@"\bcontext\s+save\b|\bsave\s+context\b|\bremember\s+this\b", Plain);
+    private static readonly Regex RecallContext = new Regex(@"\bwhat\s+was\s+i\s+(?:doing|working\s+on)\b|\bcontext\s+recall\b|\blast\s+(?:context|session)\b", Plain);
+    private static readonly Regex ContextStats = new Regex(@"\bcontext\s+stats?\b|\bmy\s+(?:work\s+)?sessions?\b|\btime\s+(?:spent|tracked)\b", Plain);
+    private static readonly Regex ContextList = new Regex(@"\bcontext\s+list\b|\bshow\s+contexts?\b|\blist\s+(?:my\s+)?projects?\b", Plain);
+    private static readonly Regex ContextHelp = new Regex(@"\bcontext\s+help\b|\bhelp\s+context\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private string currentContextFile;
+    private Dictionary<string, ContextSession> sessions;
+
+    private class ContextSession
+    {
+        public string Name;
+        public string LastScreen;
+        public DateTime FirstSeen;
+        public DateTime LastSeen;
+        public int TotalMinutes;
+        public List<string> Notes;
+
+        public ContextSession()
+        {
+            Notes = new List<string>();
+        }
+    }
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = Path.Combine(host.Folder, "contexts");
+        currentContextFile = Path.Combine(host.Folder, "current-context.txt");
+        sessions = new Dictionary<string, ContextSession>();
+        
+        if (!Directory.Exists(dataFolder))
+            Directory.CreateDirectory(dataFolder);
+        
+        LoadSessions();
+        capri.Log("Screen Context Memory started.");
+    }
+
+    public void Stop()
+    {
+        SaveSessions();
+        capri.Log("Screen Context Memory stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (ContextHelp.IsMatch(said))
+            return "Context commands: 'context save' pour sauvegarder maintenant, 'what was I doing' pour te rappeler, 'context stats' pour voir ton temps, 'context list' pour tous tes projets.";
+
+        if (SaveContext.IsMatch(said))
+            return SaveCurrentContext(said);
+
+        if (RecallContext.IsMatch(said))
+            return RecallLastContext();
+
+        if (ContextStats.IsMatch(said))
+            return ShowStats();
+
+        if (ContextList.IsMatch(said))
+            return ListContexts();
+
+        return null;
+    }
+
+    private string SaveCurrentContext(string description)
+    {
+        try
+        {
+            string contextName = ExtractContextName(description);
+            if (string.IsNullOrEmpty(contextName))
+                contextName = "Session " + DateTime.Now.ToString("HH:mm");
+
+            ContextSession session;
+            if (!sessions.TryGetValue(contextName, out session))
+            {
+                session = new ContextSession
+                {
+                    Name = contextName,
+                    FirstSeen = DateTime.Now,
+                    LastSeen = DateTime.Now,
+                    TotalMinutes = 0
+                };
+                sessions[contextName] = session;
+            }
+            else
+            {
+                TimeSpan gap = DateTime.Now - session.LastSeen;
+                if (gap.TotalMinutes < 60)
+                    session.TotalMinutes += (int)gap.TotalMinutes;
+                session.LastSeen = DateTime.Now;
+            }
+
+            session.LastScreen = "Saved at " + DateTime.Now.ToString("HH:mm dd/MM");
+            session.Notes.Add(description);
+
+            File.WriteAllText(currentContextFile, contextName);
+            SaveSessions();
+
+            return "Context saved as '" + contextName + "'. Je retiens ça.";
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving context: " + ex.Message);
+            return "Bug de sauvegarde. Retry.";
+        }
+    }
+
+    private string RecallLastContext()
+    {
+        try
+        {
+            if (sessions.Count == 0)
+                return "Pas de contexts sauvés. Dis 'context save' quand tu veux que je retienne un truc.";
+
+            string currentName = null;
+            if (File.Exists(currentContextFile))
+                currentName = File.ReadAllText(currentContextFile).Trim();
+
+            ContextSession last = null;
+            if (!string.IsNullOrEmpty(currentName) && sessions.TryGetValue(currentName, out last))
+            {
+                // Found current context
+            }
+            else
+            {
+                // Get most recent
+                last = sessions.Values.OrderByDescending(s => s.LastSeen).FirstOrDefault();
+            }
+
+            if (last == null)
+                return "Rien trouvé en récent.";
+
+            StringBuilder reply = new StringBuilder();
+            reply.Append("Dernier context: ").Append(last.Name).Append(". ");
+            
+            TimeSpan ago = DateTime.Now - last.LastSeen;
+            if (ago.TotalMinutes < 60)
+                reply.Append("Il y a ").Append((int)ago.TotalMinutes).Append(" minutes. ");
+            else if (ago.TotalHours < 24)
+                reply.Append("Il y a ").Append((int)ago.TotalHours).Append(" heures. ");
+            else
+                reply.Append("Il y a ").Append((int)ago.TotalDays).Append(" jours. ");
+
+            if (last.TotalMinutes > 0)
+                reply.Append("Temps total: ").Append(last.TotalMinutes).Append(" minutes.");
+
+            return reply.ToString();
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error recalling context: " + ex.Message);
+            return "Bug de mémoire. Retry.";
+        }
+    }
+
+    private string ShowStats()
+    {
+        if (sessions.Count == 0)
+            return "Pas de sessions trackées. Bosse et dis 'context save'.";
+
+        var sorted = sessions.Values.OrderByDescending(s => s.TotalMinutes).Take(5).ToList();
+        StringBuilder reply = new StringBuilder("Top sessions: ");
+
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            if (i > 0) reply.Append(", ");
+            reply.Append(sorted[i].Name).Append(" (").Append(sorted[i].TotalMinutes).Append(" min)");
+        }
+
+        int total = sessions.Values.Sum(s => s.TotalMinutes);
+        reply.Append(". Total tracké: ").Append(total).Append(" minutes.");
+
+        return reply.ToString();
+    }
+
+    private string ListContexts()
+    {
+        if (sessions.Count == 0)
+            return "Aucun context sauvé.";
+
+        var recent = sessions.Values.OrderByDescending(s => s.LastSeen).Take(8).ToList();
+        StringBuilder reply = new StringBuilder("Contexts récents: ");
+
+        for (int i = 0; i < recent.Count; i++)
+        {
+            if (i > 0) reply.Append(", ");
+            reply.Append(recent[i].Name);
+        }
+
+        return reply.ToString();
+    }
+
+    private string ExtractContextName(string description)
+    {
+        // Try to extract a meaningful name from the description
+        string cleaned = Wake.Replace(description, "").Trim();
+        cleaned = SaveContext.Replace(cleaned, "").Trim();
+        
+        if (!string.IsNullOrEmpty(cleaned) && cleaned.Length < 50)
+            return cleaned;
+
+        return null;
+    }
+
+    private void LoadSessions()
+    {
+        try
+        {
+            string sessionFile = Path.Combine(dataFolder, "sessions.txt");
+            if (!File.Exists(sessionFile))
+                return;
+
+            string[] lines = File.ReadAllLines(sessionFile);
+            ContextSession current = null;
+
+            foreach (string line in lines)
+            {
+                if (line.StartsWith("SESSION:"))
+                {
+                    current = new ContextSession();
+                    current.Name = line.Substring(8).Trim();
+                    sessions[current.Name] = current;
+                }
+                else if (current != null)
+                {
+                    if (line.StartsWith("FIRST:"))
+                        DateTime.TryParse(line.Substring(6), out current.FirstSeen);
+                    else if (line.StartsWith("LAST:"))
+                        DateTime.TryParse(line.Substring(5), out current.LastSeen);
+                    else if (line.StartsWith("MINUTES:"))
+                        int.TryParse(line.Substring(8), out current.TotalMinutes);
+                    else if (line.StartsWith("SCREEN:"))
+                        current.LastScreen = line.Substring(7);
+                    else if (line.StartsWith("NOTE:"))
+                        current.Notes.Add(line.Substring(5));
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error loading sessions: " + ex.Message);
+        }
+    }
+
+    private void SaveSessions()
+    {
+        try
+        {
+            string sessionFile = Path.Combine(dataFolder, "sessions.txt");
+            StringBuilder content = new StringBuilder();
+
+            foreach (var session in sessions.Values)
+            {
+                content.AppendLine("SESSION:" + session.Name);
+                content.AppendLine("FIRST:" + session.FirstSeen.ToString("o"));
+                content.AppendLine("LAST:" + session.LastSeen.ToString("o"));
+                content.AppendLine("MINUTES:" + session.TotalMinutes);
+                if (!string.IsNullOrEmpty(session.LastScreen))
+                    content.AppendLine("SCREEN:" + session.LastScreen);
+                foreach (string note in session.Notes)
+                    content.AppendLine("NOTE:" + note);
+                content.AppendLine();
+            }
+
+            File.WriteAllText(sessionFile, content.ToString());
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving sessions: " + ex.Message);
+        }
+    }
+}

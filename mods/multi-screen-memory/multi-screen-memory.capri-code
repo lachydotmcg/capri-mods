@@ -1,0 +1,304 @@
+// capri-mod: 1
+// id: multi-screen-memory
+// name: Multi-Screen Memory
+// version: 1.0.0
+// author: flaque
+// description: Se souvient de ce qui était à l'écran. "what was on screen before", "find that page", "screen history".
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class MultiScreenMemory : ICapriMod
+{
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex WhatBefore = new Regex(@"\bwhat\s+was\s+(?:on\s+)?(?:screen|there|that)\s+before\b|\bprevious\s+screen\b|\blast\s+screen\b", Plain);
+    private static readonly Regex FindPage = new Regex(@"\bfind\s+(?:that\s+)?page\b|\bwhere\s+was\s+that\b|\bwhat\s+was\s+i\s+reading\b", Plain);
+    private static readonly Regex ScreenHistory = new Regex(@"\bscreen\s+history\b|\bwhat\s+have\s+i\s+been\s+(?:doing|looking\s+at)\b|\bshow\s+history\b", Plain);
+    private static readonly Regex ScreenSave = new Regex(@"\bsave\s+(?:this\s+)?screen\b|\bremember\s+(?:this\s+)?screen\b|\bmark\s+this\b", Plain);
+    private static readonly Regex ScreenHelp = new Regex(@"\bscreen\s+(?:memory\s+)?help\b|\bhelp\s+screen\b", Plain);
+
+    private ICapriHost capri;
+    private string dataFolder;
+    private string historyFile;
+    private List<ScreenSnapshot> snapshots;
+    private const int MaxSnapshots = 50;
+
+    private class ScreenSnapshot
+    {
+        public DateTime When;
+        public string Description;
+        public bool Saved;
+        public int ViewCount;
+    }
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        dataFolder = Path.Combine(host.Folder, "screen-memory");
+        historyFile = Path.Combine(dataFolder, "history.txt");
+        snapshots = new List<ScreenSnapshot>();
+        
+        if (!Directory.Exists(dataFolder))
+            Directory.CreateDirectory(dataFolder);
+        
+        LoadHistory();
+        capri.Log("Multi-Screen Memory started.");
+    }
+
+    public void Stop()
+    {
+        SaveHistory();
+        capri.Log("Multi-Screen Memory stopped.");
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace((words != null ? words : "").Trim(), "").Trim();
+        if (said.Length == 0) return false;
+
+        // Auto-capture significant context switches
+        AutoCapture(said);
+
+        string reply = Answer(said);
+        if (reply == null) return false;
+        
+        capri.Say(reply);
+        return true;
+    }
+
+    private string Answer(string said)
+    {
+        if (ScreenHelp.IsMatch(said))
+            return "Screen memory commands: 'what was on screen before' to recall, 'save this screen' to mark important, 'screen history' to see recent, 'find that page' to search.";
+
+        if (WhatBefore.IsMatch(said))
+            return RecallPrevious();
+
+        if (ScreenSave.IsMatch(said))
+            return SaveCurrentScreen(said);
+
+        if (ScreenHistory.IsMatch(said))
+            return ShowHistory();
+
+        if (FindPage.IsMatch(said))
+            return FindRecent(said);
+
+        return null;
+    }
+
+    private void AutoCapture(string said)
+    {
+        // Capture when user mentions switching contexts
+        string lower = said.ToLowerInvariant();
+        bool contextSwitch = lower.Contains("open") || lower.Contains("switch") || 
+                           lower.Contains("back to") || lower.Contains("close");
+
+        if (contextSwitch)
+        {
+            // Extract what they're talking about
+            string context = ExtractContext(said);
+            if (!string.IsNullOrEmpty(context))
+            {
+                CaptureSnapshot(context, false);
+            }
+        }
+    }
+
+    private void CaptureSnapshot(string description, bool saved)
+    {
+        // Check if we recently captured something similar
+        var recent = snapshots.FirstOrDefault(s => 
+            (DateTime.Now - s.When).TotalSeconds < 60 && 
+            s.Description.IndexOf(description, StringComparison.OrdinalIgnoreCase) >= 0);
+
+        if (recent != null)
+        {
+            recent.ViewCount++;
+            return; // Don't duplicate
+        }
+
+        ScreenSnapshot snapshot = new ScreenSnapshot
+        {
+            When = DateTime.Now,
+            Description = description,
+            Saved = saved,
+            ViewCount = 1
+        };
+
+        snapshots.Insert(0, snapshot); // Add to front
+
+        // Keep only recent history
+        if (snapshots.Count > MaxSnapshots)
+            snapshots = snapshots.Take(MaxSnapshots).ToList();
+
+        SaveHistory();
+    }
+
+    private string SaveCurrentScreen(string said)
+    {
+        string description = ExtractContext(said);
+        if (string.IsNullOrEmpty(description))
+            description = "Screen at " + DateTime.Now.ToString("HH:mm");
+
+        CaptureSnapshot(description, true);
+        return "Screen saved as '" + description + "'. I'll remember this.";
+    }
+
+    private string RecallPrevious()
+    {
+        if (snapshots.Count < 2)
+            return "No previous screen in memory. I just started tracking.";
+
+        // Get the most recent that's not from right now
+        var previous = snapshots.Skip(1).FirstOrDefault();
+        if (previous == null)
+            return "No previous screen found.";
+
+        TimeSpan ago = DateTime.Now - previous.When;
+        string timeAgo = FormatTimeAgo(ago);
+
+        return "Before this: " + previous.Description + ", " + timeAgo + ".";
+    }
+
+    private string ShowHistory()
+    {
+        if (snapshots.Count == 0)
+            return "No screen history yet. I'll start tracking as you work.";
+
+        var recent = snapshots.Take(8).ToList();
+        StringBuilder reply = new StringBuilder("Recent screens: ");
+
+        for (int i = 0; i < recent.Count; i++)
+        {
+            if (i > 0) reply.Append(", ");
+            
+            TimeSpan ago = DateTime.Now - recent[i].When;
+            if (ago.TotalMinutes < 60)
+                reply.Append(recent[i].Description).Append(" (").Append((int)ago.TotalMinutes).Append("m ago)");
+            else
+                reply.Append(recent[i].Description);
+        }
+
+        return reply.ToString();
+    }
+
+    private string FindRecent(string said)
+    {
+        if (snapshots.Count == 0)
+            return "No screens in memory yet.";
+
+        // Try to match keywords from their query
+        string query = ExtractContext(said);
+        if (string.IsNullOrEmpty(query))
+        {
+            // Just return most viewed/saved
+            var important = snapshots.Where(s => s.Saved || s.ViewCount > 2)
+                                   .OrderByDescending(s => s.ViewCount)
+                                   .FirstOrDefault();
+            
+            if (important != null)
+                return "Most relevant: " + important.Description + ", " + FormatTimeAgo(DateTime.Now - important.When) + ".";
+        }
+        else
+        {
+            // Search for matching description
+            var match = snapshots.FirstOrDefault(s => 
+                s.Description.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0);
+
+            if (match != null)
+                return "Found: " + match.Description + ", " + FormatTimeAgo(DateTime.Now - match.When) + ".";
+        }
+
+        return "Couldn't find that in recent memory. Try 'screen history' to see all.";
+    }
+
+    private string ExtractContext(string said)
+    {
+        string cleaned = Wake.Replace(said, "").Trim();
+        cleaned = ScreenSave.Replace(cleaned, "").Trim();
+        cleaned = FindPage.Replace(cleaned, "").Trim();
+        
+        // Remove common words
+        string[] stopWords = { "the", "this", "that", "was", "is", "on", "screen", "page" };
+        var words = cleaned.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                          .Where(w => !stopWords.Contains(w.ToLowerInvariant()))
+                          .ToArray();
+
+        if (words.Length > 0)
+            return string.Join(" ", words);
+
+        return cleaned;
+    }
+
+    private string FormatTimeAgo(TimeSpan ago)
+    {
+        if (ago.TotalMinutes < 1)
+            return "just now";
+        else if (ago.TotalMinutes < 60)
+            return (int)ago.TotalMinutes + " minutes ago";
+        else if (ago.TotalHours < 24)
+            return (int)ago.TotalHours + " hours ago";
+        else
+            return (int)ago.TotalDays + " days ago";
+    }
+
+    private void LoadHistory()
+    {
+        try
+        {
+            if (!File.Exists(historyFile))
+                return;
+
+            string[] lines = File.ReadAllLines(historyFile);
+            foreach (string line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                string[] parts = line.Split('|');
+                if (parts.Length >= 4)
+                {
+                    ScreenSnapshot snapshot = new ScreenSnapshot();
+                    DateTime.TryParse(parts[0], out snapshot.When);
+                    snapshot.Description = parts[1];
+                    snapshot.Saved = parts[2] == "1";
+                    int.TryParse(parts[3], out snapshot.ViewCount);
+                    snapshots.Add(snapshot);
+                }
+            }
+
+            // Sort by time, newest first
+            snapshots = snapshots.OrderByDescending(s => s.When).ToList();
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error loading screen history: " + ex.Message);
+        }
+    }
+
+    private void SaveHistory()
+    {
+        try
+        {
+            StringBuilder content = new StringBuilder();
+            foreach (var snapshot in snapshots)
+            {
+                content.Append(snapshot.When.ToString("o")).Append("|");
+                content.Append(snapshot.Description).Append("|");
+                content.Append(snapshot.Saved ? "1" : "0").Append("|");
+                content.AppendLine(snapshot.ViewCount.ToString());
+            }
+            File.WriteAllText(historyFile, content.ToString());
+        }
+        catch (Exception ex)
+        {
+            capri.Log("Error saving screen history: " + ex.Message);
+        }
+    }
+}
