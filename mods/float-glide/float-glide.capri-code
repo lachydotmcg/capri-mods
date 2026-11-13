@@ -1,0 +1,104 @@
+// capri-mod: 1
+// id: float-glide
+// name: Float Glide
+// version: 1.0.0
+// author: cyz7z
+// description: She glides to her new spot instead of teleporting.
+using CapriDesktop;
+using System;
+using System.Drawing;
+using System.Reflection;
+using System.Windows.Forms;
+
+public class M : ICapriMod
+{
+    private ICapriHost c;
+    private System.Windows.Forms.Timer t;
+    private object companion;
+    private FieldInfo anchorField;
+    private FieldInfo clockField;
+    private Point glideFrom;
+    private Point glideTo;
+    private bool gliding;
+    private double glideStart;
+    private double glideLen;
+    private Point lastAnchor;
+
+    public void Start(ICapriHost h)
+    {
+        c = h;
+        foreach (System.Windows.Forms.Form f in System.Windows.Forms.Application.OpenForms)
+        {
+            if (f.GetType().Name == "Companion") { companion = f; break; }
+        }
+        if (companion == null) { c.Log("Float: could not find Companion window."); return; }
+        Type ct = companion.GetType();
+        anchorField = ct.GetField("anchor", BindingFlags.NonPublic | BindingFlags.Instance);
+        clockField = ct.GetField("clock", BindingFlags.NonPublic | BindingFlags.Instance);
+        if (anchorField == null || clockField == null) { c.Log("Float: fields not found."); return; }
+        t = new System.Windows.Forms.Timer();
+        t.Interval = 16;
+        t.Tick += OnTick;
+        t.Start();
+        c.Log("Float: running.");
+        lastAnchor = Anchor();
+    }
+
+    private double Now()
+    {
+        object clock = clockField.GetValue(companion);
+        return ((System.Diagnostics.Stopwatch)clock).Elapsed.TotalSeconds;
+    }
+
+    private Point Anchor()
+    {
+        return (Point)anchorField.GetValue(companion);
+    }
+
+    private void SetAnchor(Point p)
+    {
+        anchorField.SetValue(companion, p);
+    }
+
+    private void OnTick(object sender, EventArgs e)
+    {
+        if (companion == null) return;
+        if (c.Her.Dragging) { gliding = false; lastAnchor = Anchor(); return; }
+        Point cur = Anchor();
+        if (!gliding)
+        {
+            if (cur == lastAnchor) return;
+            Point prev = lastAnchor;
+            lastAnchor = cur;
+            double dx = cur.X - prev.X;
+            double dy = cur.Y - prev.Y;
+            double dist = Math.Sqrt(dx * dx + dy * dy);
+            if (dist < 40) return;
+            glideFrom = prev;
+            glideTo = cur;
+            glideStart = Now();
+            glideLen = Math.Max(0.6, Math.Min(2.5, dist / 600.0));
+            gliding = true;
+            SetAnchor(prev);
+        }
+        else
+        {
+            double elapsed = Now() - glideStart;
+            double progress = elapsed / glideLen;
+            if (progress >= 1.0) { gliding = false; lastAnchor = glideTo; return; }
+            double ease = progress * progress * (3.0 - 2.0 * progress);
+            double bob = Math.Sin(Now() * 5.0) * 6.0 * Math.Sin(progress * Math.PI);
+            int nx = glideFrom.X + (int)((glideTo.X - glideFrom.X) * ease);
+            int ny = glideFrom.Y + (int)((glideTo.Y - glideFrom.Y) * ease + bob);
+            SetAnchor(new Point(nx, ny));
+        }
+    }
+
+    public bool Heard(string w) { return false; }
+
+    public void Stop()
+    {
+        if (t != null) { t.Stop(); t.Dispose(); t = null; }
+        c.Log("Float: stopped.");
+    }
+}
