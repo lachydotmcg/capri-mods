@@ -1,0 +1,301 @@
+// capri-mod: 1
+// id: hide-and-seek
+// name: Hide and Seek
+// version: 1.0.0
+// author: Issei
+// description: Say "hide and seek" and she hides on one of your windows, a screen corner, the taskbar or your other monitor. Click her to find her and beat your best time.
+// permissions: settings
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// She says to close your eyes, waits five seconds, then glitches to a hiding spot picked at random: sitting on a window
+// that's open on screen, a bottom corner of a screen, the taskbar, or the other monitor. A click or a head pat finds her.
+// At 30 seconds she makes a little sound, at 60 she gives a hint, and after 3 minutes she comes out. On Hard she also
+// shrinks to half her size while hidden. Afterwards she goes back to where she was, at her own size.
+public class HideAndSeek : ICapriMod
+{
+    // The harness fills these in to test without a clock, real windows, monitors or dice.
+    public Func<DateTime> Clock = delegate { return DateTime.Now; };
+    public Func<List<string>> Windows;
+    public Func<Rectangle[]> Screens;
+    public Func<int, int> Pick;
+
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex Play = new Regex(@"^(?:(?:let'?s|can\s+we|wanna|do\s+you\s+want\s+to|want\s+to)\s+)?(?:play\s+)?hide\s+(?:and|n|&)\s+seek(?:\s+(hard|hard\s+mode|on\s+hard))?(?:\s+(?:with\s+me|please))?\??$|^go\s+hide$|^hide\s+from\s+me$", Plain);
+    private static readonly Regex Hint = new Regex(@"^(?:(?:give\s+me|can\s+i\s+(?:get|have))\s+)?a?\s*hint(?:\s+please)?$|^where\s+are\s+you(?:\s+hiding)?$|^i\s+need\s+a\s+hint$", Plain);
+    private static readonly Regex GiveUp = new Regex(@"^(?:i\s+give\s+up|i\s+can'?t\s+find\s+you|come\s+out(?:\s+come\s+out)?|olly\s+olly\s+oxen\s+free|i\s+surrender|you\s+win)$", Plain);
+    private static readonly Regex Best = new Regex(@"^(?:what'?s\s+)?(?:my\s+)?(?:best|fastest)\s+(?:hide\s+(?:and|n|&)\s+seek\s+)?time$|^(?:my\s+)?hide\s+(?:and|n|&)\s+seek\s+(?:record|best|stats)$", Plain);
+
+    private static readonly string[] Found =
+    {
+        "Found me! {0}.", "Ugh, found. {0}.", "Okay, okay, you got me. {0}.", "How?! {0}.", "Caught. {0}. Not bad."
+    };
+    private static readonly string[] Gloat =
+    {
+        "I was {0} the whole time. {1} and nothing.", "Ha! I was {0}. You looked for {1}.", "Right there, {0}. {1} of searching.", "Too easy. I was {0}. {1}."
+    };
+
+    private ICapriHost capri;
+    private readonly Random random = new Random();
+
+    // The game: where she is and what kind of spot, when she hid, and what she was like before.
+    private bool counting, hidden, hard;
+    private string spot, kind, side, lastSpot;
+    private DateTime since;
+    private Point home;
+    private int sizeBefore;
+    private readonly List<ICapriTimer> timers = new List<ICapriTimer>();
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (Pick == null) Pick = delegate(int n) { return random.Next(n); };
+        if (Windows == null) Windows = OpenWindows;
+        if (Screens == null) Screens = delegate { return Array.ConvertAll(Screen.AllScreens, s => s.WorkingArea); };
+        capri.Her.Clicked += Caught;
+        capri.Her.Patted += Caught;
+    }
+
+    public void Stop()
+    {
+        if (hidden || counting) Home();
+        Cancel();
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace(words ?? "", "").Trim().TrimEnd('.', '!').Trim();
+        Match m = Play.Match(said);
+        if (m.Success)
+        {
+            if (hidden || counting) { Say("We're already playing. Find me!"); return true; }
+            Begin(m.Groups[1].Success);
+            return true;
+        }
+        if (Best.IsMatch(said)) { Say(BestLine()); return true; }
+        if (!hidden) return false;
+        if (Hint.IsMatch(said.TrimEnd('?'))) { Say(HintLine(false)); return true; }
+        if (GiveUp.IsMatch(said.TrimEnd('?'))) { Out(true); return true; }
+        return false;
+    }
+
+    // ---------------------------------------------------------------- the game
+
+    private void Begin(bool hardMode)
+    {
+        hard = hardMode;
+        counting = true;
+        Rectangle b = capri.Her.Bounds;
+        home = new Point(b.Left + b.Width / 2, b.Top + b.Height * 3 / 5);
+        Say(hard ? "Hard mode. Close your eyes. Count to five. No peeking." : "Close your eyes. Count to five.");
+        timers.Add(capri.Timers.After(5, Hide));
+    }
+
+    private void Hide()
+    {
+        counting = false;
+        List<string[]> spots = Spots();
+        // never the same spot twice in a row, when there's anywhere else
+        if (spots.Count > 1) spots.RemoveAll(s => s[0] == lastSpot);
+        string[] pick = spots[Pick(spots.Count)];
+        if (hard)
+        {
+            sizeBefore = capri.Settings.Size;
+            capri.Settings.Size = Math.Max(60, sizeBefore / 2);
+        }
+        if (pick[1] == "window" || pick[1] == "taskbar")
+        {
+            string sat = capri.Her.SitOn(pick[1] == "window" ? pick[3] : "taskbar");
+            if (sat == null || !sat.StartsWith("Sitting on", StringComparison.Ordinal) && !sat.StartsWith("Already sitting on", StringComparison.Ordinal))
+            {
+                List<string[]> corners = spots.FindAll(s => s[1] == "corner");
+                pick = corners[Pick(corners.Count)];
+            }
+        }
+        spot = pick[0]; kind = pick[1]; side = pick[2];
+        lastSpot = spot;
+        if (kind != "window" && kind != "taskbar") capri.Her.MoveTo(new Point(int.Parse(pick[3], CultureInfo.InvariantCulture), int.Parse(pick[4], CultureInfo.InvariantCulture)));
+        hidden = true;
+        since = Clock();
+        timers.Add(capri.Timers.After(30, delegate { if (hidden) capri.Sound("hop"); }));
+        timers.Add(capri.Timers.After(60, delegate { if (hidden) Say(HintLine(true)); }));
+        timers.Add(capri.Timers.After(180, delegate { if (hidden) Out(false); }));
+    }
+
+    // Every place she could hide right now: { id, kind, side, then the window's name or the hip point }.
+    private List<string[]> Spots()
+    {
+        List<string[]> spots = new List<string[]>();
+        Rectangle[] screens = Screens();
+        Rectangle main = screens.Length > 0 ? screens[0] : capri.Her.Screen;
+        foreach (string w in Windows()) spots.Add(new[] { "window:" + w, "window", "", w });
+        spots.Add(new[] { "taskbar", "taskbar", "bottom" });
+        int inset = Math.Max(40, capri.Her.Size / 3);
+        spots.Add(new[] { "corner:left", "corner", "left", (main.Left + inset).ToString(CultureInfo.InvariantCulture), (main.Bottom - 2).ToString(CultureInfo.InvariantCulture) });
+        spots.Add(new[] { "corner:right", "corner", "right", (main.Right - inset).ToString(CultureInfo.InvariantCulture), (main.Bottom - 2).ToString(CultureInfo.InvariantCulture) });
+        for (int i = 1; i < screens.Length; i++)
+        {
+            Rectangle s = screens[i];
+            spots.Add(new[] { "screen:" + i, "screen", s.Left >= main.Right ? "right" : s.Right <= main.Left ? "left" : "other",
+                              (s.Left + s.Width * (2 + Pick(5)) / 8).ToString(CultureInfo.InvariantCulture), (s.Bottom - 2).ToString(CultureInfo.InvariantCulture) });
+        }
+        return spots;
+    }
+
+    private void Caught()
+    {
+        if (!hidden) return;
+        TimeSpan took = Clock() - since;
+        hidden = false;
+        Cancel();
+        string time = Took(took);
+        string line = string.Format(Found[Pick(Found.Length)], time);
+        string key = hard ? "best hard" : "best";
+        bool any = capri.Store.Get(key) != null;
+        double best = capri.Store.Number(key, 0);
+        if (!any || took.TotalSeconds < best)
+        {
+            capri.Store.Set(key, Math.Round(took.TotalSeconds, 1));
+            line += !any ? " That's your first time on the board." : " New best! The old one was " + Took(TimeSpan.FromSeconds(best)) + ".";
+        }
+        else line += " Your best is " + Took(TimeSpan.FromSeconds(best)) + ".";
+        capri.Store.Set("found", capri.Store.Number("found", 0) + 1);
+        Say(line);
+        capri.Timers.After(2.5, Home);
+    }
+
+    // They gave up, or she got bored after three minutes: she comes out by their cursor and gloats.
+    private void Out(bool gaveUp)
+    {
+        TimeSpan took = Clock() - since;
+        hidden = false;
+        Cancel();
+        capri.Store.Set("escaped", capri.Store.Number("escaped", 0) + 1);
+        string where = Described();
+        if (gaveUp) Say(string.Format(Gloat[Pick(Gloat.Length)], where, Took(took)));
+        else Say("Three minutes and you still haven't found me. I was " + where + ". I win.");
+        Home();
+    }
+
+    private void Home()
+    {
+        counting = false;
+        hidden = false;
+        if (hard && sizeBefore > 0) { capri.Settings.Size = sizeBefore; sizeBefore = 0; }
+        capri.Her.MoveTo(home);
+    }
+
+    private void Cancel()
+    {
+        foreach (ICapriTimer t in timers) t.Cancel();
+        timers.Clear();
+    }
+
+    // ---------------------------------------------------------------- words
+
+    private string HintLine(bool free)
+    {
+        string start = free ? "Need a hint? " : "";
+        switch (kind)
+        {
+            case "window": return start + "I'm sitting on something you have open.";
+            case "taskbar": return start + "I'm down low. Like, really low.";
+            case "corner": return start + "I'm on the " + side + " side, near the bottom.";
+            default: return start + "I'm not even on this screen." + (side == "left" || side == "right" ? " Look " + side + "." : "");
+        }
+    }
+
+    private string Described()
+    {
+        switch (kind)
+        {
+            case "window": return "sitting on " + spot.Substring(7);
+            case "taskbar": return "on the taskbar";
+            case "corner": return "in the bottom " + side + " corner";
+            default: return "on your other screen";
+        }
+    }
+
+    private string BestLine()
+    {
+        bool any = capri.Store.Get("best") != null, anyHard = capri.Store.Get("best hard") != null;
+        double best = capri.Store.Number("best", 0), bestHard = capri.Store.Number("best hard", 0);
+        int found = (int)capri.Store.Number("found", 0), escaped = (int)capri.Store.Number("escaped", 0);
+        if (!any && !anyHard) return escaped > 0 ? "You haven't found me yet. I've won " + Plural(escaped, "time") + "." : "We haven't played yet. Say \"hide and seek\".";
+        string line = any ? "Your best is " + Took(TimeSpan.FromSeconds(best)) + "." : "";
+        if (anyHard) line += (line.Length > 0 ? " " : "") + "On hard, " + Took(TimeSpan.FromSeconds(bestHard)) + ".";
+        return line + " You've found me " + Plural(found, "time") + (escaped > 0 ? " and I've got away " + Plural(escaped, "time") : "") + ".";
+    }
+
+    private static string Took(TimeSpan t)
+    {
+        double s = Math.Max(0, t.TotalSeconds);
+        if (s < 60) return s.ToString(s < 10 ? "0.0" : "0", CultureInfo.InvariantCulture) + " seconds";
+        int m = (int)(s / 60), r = (int)Math.Round(s - m * 60);
+        if (r == 60) { m++; r = 0; }
+        return Plural(m, "minute") + (r > 0 ? " " + Plural(r, "second") : "");
+    }
+
+    private static string Plural(int n, string word) { return n + " " + word + (n == 1 ? "" : "s"); }
+
+    private void Say(string line) { capri.Say(line); }
+
+    // ---------------------------------------------------------------- the windows on screen
+
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, IntPtr data);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] private static extern int GetWindowTextLength(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetWindow(IntPtr window, uint command);
+    [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr window, int index);
+    [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Rect rect);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+    [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
+    private delegate bool EnumProc(IntPtr window, IntPtr data);
+    [StructLayout(LayoutKind.Sequential)] private struct Rect { public int Left, Top, Right, Bottom; }
+
+    // Big, visible, top-level app windows that aren't hers, by the name their program gives itself (Discord, Google
+    // Chrome), at most one per program.
+    private static List<string> OpenWindows()
+    {
+        List<string> names = new List<string>();
+        HashSet<uint> seen = new HashSet<uint>();
+        uint mine = (uint)Process.GetCurrentProcess().Id;
+        EnumWindows(delegate(IntPtr w, IntPtr data)
+        {
+            if (!IsWindowVisible(w) || IsIconic(w) || GetWindowTextLength(w) == 0 || GetWindow(w, 4) != IntPtr.Zero) return true;
+            if ((GetWindowLong(w, -20) & 0x80) != 0) return true;   // a tool window
+            int cloaked;
+            if (DwmGetWindowAttribute(w, 14, out cloaked, 4) == 0 && cloaked != 0) return true;
+            Rect r;
+            if (!GetWindowRect(w, out r) || r.Right - r.Left < 320 || r.Bottom - r.Top < 200) return true;
+            uint pid;
+            GetWindowThreadProcessId(w, out pid);
+            if (pid == mine || !seen.Add(pid)) return true;
+            try
+            {
+                Process p = Process.GetProcessById((int)pid);
+                string exe = p.ProcessName.ToLowerInvariant();
+                if (exe == "explorer" || exe == "applicationframehost" || exe == "textinputhost" || exe == "shellexperiencehost") return true;
+                string name = "";
+                try { name = (p.MainModule.FileVersionInfo.FileDescription ?? "").Trim(); } catch (Exception) { }
+                if (name.Length == 0 || name.Length > 40) name = p.ProcessName;
+                names.Add(name);
+            }
+            catch (Exception) { }
+            return names.Count < 12;
+        }, IntPtr.Zero);
+        return names;
+    }
+}

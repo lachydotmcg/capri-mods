@@ -1,0 +1,521 @@
+// capri-mod: 1
+// id: soundboard
+// name: Soundboard
+// version: 1.0.0
+// author: Issei
+// description: Shortcuts that play sounds, Ctrl+Alt+1 to 9 to start with, and she reacts. Comes with six sounds of its own; drop your own WAVs in its folder.
+// permissions: hotkeys
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// The sounds are the WAV files in the mod's "sounds" folder, in name order. The first time it runs it makes six of its own
+// there, synthesised from scratch, so there's nothing to license; delete any you don't want and they stay deleted. Each
+// sound has a shortcut (the first nine get Ctrl+Alt+1 to 9 until you change them), a volume and a reaction from her.
+public class Soundboard : ICapriMod
+{
+    // The harness fills this in to test without dice.
+    public Func<int, int> Pick;
+
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex PlayWords = new Regex(@"^(?:(?:can\s+you|could\s+you|please)\s+)?(?:play|hit|do)\s+(?:the\s+|a\s+|an\s+|that\s+)?(.+?)(?:\s+sound)?(?:\s+please)?$", Plain);
+    private static readonly Regex ListWords = new Regex(@"^(?:list\s+(?:the\s+|your\s+|my\s+)?sounds|what\s+sounds\s+(?:do\s+you\s+have|have\s+you\s+got|are\s+there|can\s+you\s+play)|(?:show|read)\s+(?:me\s+)?(?:the\s+)?(?:sounds|soundboard)|soundboard)$", Plain);
+    private static readonly Regex OpenWords = new Regex(@"^(?:open|show)\s+(?:me\s+)?(?:the\s+|my\s+)?soundboard(?:\s+(?:options|settings))?$", Plain);
+    private static readonly Regex Toggle = new Regex(@"^(?:(?:turn\s+)?(?:the\s+)?soundboard\s+(on|off)|turn\s+(on|off)\s+(?:the\s+)?soundboard|(enable|disable)\s+(?:the\s+)?soundboard)$", Plain);
+
+    private static readonly string[] Reactions = { "none", "glitch", "grin", "dance", "line" };
+    private static readonly string[] AnyLine = { "Ha!", "Classic.", "Again!", "Iconic." };
+
+    private class Sound
+    {
+        public string File, Name, Key, Busy;
+        public int Volume;
+        public string React;
+        public bool Bound;
+    }
+
+    private ICapriHost capri;
+    private readonly Random random = new Random();
+    private readonly List<Sound> sounds = new List<Sound>();
+    private readonly List<string> held = new List<string>();
+    private bool on = true;
+    private ICapriTimer dancing;
+    private int lastAny = -1;
+
+    private string Dir { get { return Path.Combine(capri.Folder, "sounds"); } }
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (Pick == null) Pick = delegate(int n) { return random.Next(n); };
+        on = capri.Store.Flag("on", true);
+        if (!capri.Store.Flag("made sounds", false))
+        {
+            try { Starters.Make(Dir); capri.Store.Set("made sounds", true); }
+            catch (Exception e) { capri.Log("Couldn't make the starter sounds: " + e.Message); }
+        }
+        Scan();
+        Bind();
+        capri.Ui.SetOptions("Soundboard", MakeOptions);
+        capri.Ui.AddMenuItem("Soundboard", delegate { capri.Mainframe.ShowPage("Soundboard", MakeOptions); });
+    }
+
+    public void Stop() { Unbind(); }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace(words ?? "", "").Trim().TrimEnd('.', '!', '?').Trim();
+        Match m;
+        if (OpenWords.IsMatch(said)) { capri.Mainframe.ShowPage("Soundboard", MakeOptions); capri.Say("Here's the soundboard."); return true; }
+        if ((m = Toggle.Match(said)).Success)
+        {
+            string way = (m.Groups[1].Value + m.Groups[2].Value + m.Groups[3].Value).ToLowerInvariant();
+            bool want = way == "on" || way == "enable";
+            if (want == on) { capri.Say("The soundboard's already " + (on ? "on." : "off.")); return true; }
+            on = want;
+            capri.Store.Set("on", on);
+            if (on) { Scan(); Bind(); capri.Say("Soundboard on. " + KeysLine()); }
+            else { Unbind(); capri.Say("Soundboard off. The shortcuts are free again."); }
+            return true;
+        }
+        if (ListWords.IsMatch(said))
+        {
+            Scan();
+            if (sounds.Count == 0) { capri.Say("There aren't any sounds yet. Put WAV files in the soundboard's sounds folder."); return true; }
+            List<string> bits = new List<string>();
+            foreach (Sound s in sounds) bits.Add(s.Name + (on && s.Bound ? " on " + s.Key : ""));
+            capri.Say("I've got " + sounds.Count + (sounds.Count == 1 ? " sound: " : " sounds: ") + Join(bits) + "." + (on ? "" : " The shortcuts are off right now."));
+            return true;
+        }
+        if ((m = PlayWords.Match(said)).Success)
+        {
+            Scan();
+            Sound s = Find(m.Groups[1].Value);
+            if (s == null) return false;     // "play some jazz" is the music player's
+            Play(s);
+            return true;
+        }
+        return false;
+    }
+
+    // ---- the sounds ----
+
+    private void Scan()
+    {
+        List<string> files = new List<string>();
+        try { if (Directory.Exists(Dir)) foreach (string f in Directory.GetFiles(Dir, "*.wav")) files.Add(Path.GetFileName(f)); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        files.Sort(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, Sound> old = new Dictionary<string, Sound>(StringComparer.OrdinalIgnoreCase);
+        foreach (Sound s in sounds) old[s.File] = s;
+        sounds.Clear();
+        for (int i = 0; i < files.Count; i++)
+        {
+            string file = files[i];
+            Sound s;
+            if (!old.TryGetValue(file, out s)) s = new Sound { File = file };
+            s.Name = NameOf(file);
+            string key = capri.Store.Get("key " + file);
+            s.Key = key ?? (i < 9 ? "Ctrl+Alt+" + (i + 1) : "");
+            s.Volume = (int)Math.Max(0, Math.Min(100, capri.Store.Number("volume " + file, 100)));
+            s.React = capri.Store.Get("react " + file) ?? Starters.React(file);
+            sounds.Add(s);
+        }
+    }
+
+    private void Bind()
+    {
+        Unbind();
+        if (!on) return;
+        HashSet<string> used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Sound s in sounds)
+        {
+            s.Bound = false; s.Busy = null;
+            if (s.Key.Length == 0) continue;
+            if (used.Contains(s.Key)) { s.Busy = "another sound has it"; continue; }
+            Sound sound = s;
+            bool took;
+            try { took = capri.Keys.Hotkey(s.Key, delegate { Play(sound); }); }
+            catch (ArgumentException) { s.Busy = "not a shortcut she can use"; continue; }
+            if (!took) { s.Busy = "another app has it"; continue; }
+            s.Bound = true;
+            used.Add(s.Key);
+            held.Add(s.Key);
+        }
+    }
+
+    private void Unbind()
+    {
+        foreach (string k in held) capri.Keys.Remove(k);
+        held.Clear();
+        foreach (Sound s in sounds) s.Bound = false;
+    }
+
+    private void Play(Sound s)
+    {
+        if (!capri.Sounds.Play(Path.Combine("sounds", s.File), s.Volume / 100.0))
+        {
+            capri.Say("I couldn't play " + s.Name + ". It has to be a WAV file.");
+            return;
+        }
+        switch (s.React)
+        {
+            case "glitch": capri.Her.Animate("glitch"); break;
+            case "grin": capri.Her.Animate("grin"); break;
+            case "dance":
+                if (dancing != null) dancing.Cancel();
+                capri.Her.Animate("dance");
+                dancing = capri.Timers.After(3, delegate { dancing = null; capri.Her.Animate("stop_dancing"); });
+                break;
+            case "line":
+                string own = Starters.Line(s.File);
+                if (own != null) { capri.Say(own); break; }
+                int pick = Pick(AnyLine.Length);
+                if (pick == lastAny) pick = (pick + 1) % AnyLine.Length;
+                lastAny = pick;
+                capri.Say(AnyLine[pick]);
+                break;
+        }
+    }
+
+    private Sound Find(string asked)
+    {
+        string want = Squash(asked);
+        if (want.Length == 0) return null;
+        foreach (Sound s in sounds) if (Squash(s.Name) == want) return s;
+        foreach (Sound s in sounds) if (want.Length >= 3 && Squash(s.Name).Contains(want)) return s;
+        return null;
+    }
+
+    private static string NameOf(string file)
+    {
+        string name = Path.GetFileNameWithoutExtension(file).Replace('_', ' ').Replace('-', ' ');
+        return Regex.Replace(name, @"\s+", " ").Trim();
+    }
+
+    private static string Squash(string text) { return Regex.Replace((text ?? "").ToLowerInvariant(), @"[^a-z0-9]", ""); }
+
+    private string KeysLine()
+    {
+        int bound = 0, busy = 0;
+        foreach (Sound s in sounds) { if (s.Bound) bound++; else if (s.Busy != null) busy++; }
+        string line = bound == 1 ? "1 shortcut ready." : bound + " shortcuts ready.";
+        if (busy > 0) line += " " + busy + (busy == 1 ? " is" : " are") + " taken by something else.";
+        return line;
+    }
+
+    private static string Join(List<string> bits)
+    {
+        if (bits.Count == 1) return bits[0];
+        return string.Join(", ", bits.GetRange(0, bits.Count - 1).ToArray()) + " and " + bits[bits.Count - 1];
+    }
+
+    // Ctrl+Alt+1, written any way: "ctrl alt 1", "CTRL+ALT+1", "alt+ctrl+1".
+    private static string Tidy(string keys)
+    {
+        string[] parts = Regex.Split((keys ?? "").Trim(), @"\s*[+\s]\s*");
+        bool ctrl = false, alt = false, shift = false, win = false;
+        string key = null;
+        foreach (string p in parts)
+        {
+            string w = p.ToLowerInvariant();
+            if (w.Length == 0) continue;
+            if (w == "ctrl" || w == "control") ctrl = true;
+            else if (w == "alt") alt = true;
+            else if (w == "shift") shift = true;
+            else if (w == "win" || w == "windows") win = true;
+            else key = p.ToUpperInvariant();
+        }
+        if (key == null) return "";
+        return (ctrl ? "Ctrl+" : "") + (alt ? "Alt+" : "") + (shift ? "Shift+" : "") + (win ? "Win+" : "") + key;
+    }
+
+    // ---- the options page ----
+
+    private Control MakeOptions()
+    {
+        Scan();
+        Bind();
+        FlowLayoutPanel page = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Padding = new Padding(8) };
+        CheckBox onBox = new CheckBox { Text = "Shortcuts on", Checked = on, AutoSize = true };
+        page.Controls.Add(onBox);
+        TableLayoutPanel grid = new TableLayoutPanel { ColumnCount = 6, AutoSize = true };
+        foreach (string head in new[] { "Sound", "Shortcut", "", "Volume", "Reaction", "" })
+            grid.Controls.Add(new Label { Text = head, AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) });
+        List<TextBox> keyBoxes = new List<TextBox>();
+        List<Label> busyLabels = new List<Label>();
+        foreach (Sound s in sounds)
+        {
+            Sound sound = s;
+            grid.Controls.Add(new Label { Text = s.Name, AutoSize = true, Anchor = AnchorStyles.Left });
+            TextBox key = new TextBox { Text = s.Key, Width = 110 };
+            grid.Controls.Add(key);
+            keyBoxes.Add(key);
+            Label busy = new Label { Text = BusyText(s), AutoSize = true, ForeColor = Color.Firebrick, Anchor = AnchorStyles.Left };
+            grid.Controls.Add(busy);
+            busyLabels.Add(busy);
+            NumericUpDown volume = new NumericUpDown { Minimum = 0, Maximum = 100, Increment = 10, Value = s.Volume, Width = 60 };
+            volume.ValueChanged += delegate { sound.Volume = (int)volume.Value; capri.Store.Set("volume " + sound.File, sound.Volume); };
+            grid.Controls.Add(volume);
+            ComboBox react = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80 };
+            react.Items.AddRange(Reactions);
+            react.SelectedItem = Array.IndexOf(Reactions, s.React) >= 0 ? s.React : "none";
+            react.SelectedIndexChanged += delegate { sound.React = (string)react.SelectedItem; capri.Store.Set("react " + sound.File, sound.React); };
+            grid.Controls.Add(react);
+            Button play = new Button { Text = "Play", AutoSize = true };
+            play.Click += delegate { Play(sound); };
+            grid.Controls.Add(play);
+        }
+        page.Controls.Add(grid);
+        if (sounds.Count == 0) page.Controls.Add(new Label { Text = "No sounds yet. Put WAV files (30 seconds at most) in the sounds folder.", AutoSize = true });
+        page.Controls.Add(new Label { Text = "A shortcut is Ctrl, Alt or Win with a key, like Ctrl+Alt+1, or an F key. Leave it empty for none.", AutoSize = true, MaximumSize = new Size(520, 0) });
+
+        FlowLayoutPanel buttons = new FlowLayoutPanel { AutoSize = true };
+        Button save = new Button { Text = "Save shortcuts", AutoSize = true };
+        save.Click += delegate
+        {
+            for (int i = 0; i < sounds.Count && i < keyBoxes.Count; i++)
+            {
+                string tidy = Tidy(keyBoxes[i].Text);
+                keyBoxes[i].Text = tidy;
+                sounds[i].Key = tidy;
+                capri.Store.Set("key " + sounds[i].File, tidy);
+            }
+            Bind();
+            for (int i = 0; i < sounds.Count && i < busyLabels.Count; i++) busyLabels[i].Text = BusyText(sounds[i]);
+        };
+        buttons.Controls.Add(save);
+        Button folder = new Button { Text = "Open sounds folder", AutoSize = true };
+        folder.Click += delegate
+        {
+            try { Directory.CreateDirectory(Dir); System.Diagnostics.Process.Start("explorer.exe", "\"" + Dir + "\""); }
+            catch (Exception e) { capri.Log("Couldn't open the sounds folder: " + e.Message); }
+        };
+        buttons.Controls.Add(folder);
+        page.Controls.Add(buttons);
+        onBox.CheckedChanged += delegate
+        {
+            on = onBox.Checked;
+            capri.Store.Set("on", on);
+            Bind();
+            for (int i = 0; i < sounds.Count && i < busyLabels.Count; i++) busyLabels[i].Text = BusyText(sounds[i]);
+        };
+        return page;
+    }
+
+    private string BusyText(Sound s)
+    {
+        if (s.Busy == null) return "";
+        return s.Busy == "another app has it" ? "In use by another app" : s.Busy == "another sound has it" ? "Another sound has this" : "Not a shortcut she can use";
+    }
+
+    // ---- the six sounds it comes with, made from scratch: 22,050 Hz, 16-bit, mono ----
+
+    private static class Starters
+    {
+        private const int Rate = 22050;
+
+        public static string React(string file)
+        {
+            switch (file.ToLowerInvariant())
+            {
+                case "air horn.wav": return "dance";
+                case "buzzer.wav": return "grin";
+                case "cheer.wav": return "dance";
+                case "drum sting.wav": return "line";
+                case "glitch zap.wav": return "glitch";
+                case "record scratch.wav": return "line";
+            }
+            return "none";
+        }
+
+        public static string Line(string file)
+        {
+            switch (file.ToLowerInvariant())
+            {
+                case "drum sting.wav": return "Ba-dum tss.";
+                case "record scratch.wav": return "Wait. Rewind.";
+            }
+            return null;
+        }
+
+        public static void Make(string dir)
+        {
+            Directory.CreateDirectory(dir);
+            Write(Path.Combine(dir, "glitch zap.wav"), Zap());
+            Write(Path.Combine(dir, "air horn.wav"), Horn());
+            Write(Path.Combine(dir, "drum sting.wav"), Sting());
+            Write(Path.Combine(dir, "buzzer.wav"), Buzzer());
+            Write(Path.Combine(dir, "cheer.wav"), Cheer());
+            Write(Path.Combine(dir, "record scratch.wav"), Scratch());
+        }
+
+        private static double Saw(double phase) { return 2 * (phase - Math.Floor(phase + 0.5)); }
+        private static double Square(double phase) { return phase - Math.Floor(phase) < 0.5 ? 1 : -1; }
+        private static double Tri(double phase) { return 2 * Math.Abs(Saw(phase)) - 1; }
+
+        // Square bursts hopping between pitches, crushed to a few bits, falling away.
+        private static double[] Zap()
+        {
+            Random r = new Random(7);
+            int n = (int)(0.55 * Rate);
+            double[] o = new double[n];
+            double phase = 0, f = 900;
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate;
+                if (i % (Rate / 40) == 0) f = 180 + r.NextDouble() * 1800 * (1 - t / 0.55);
+                phase += f / Rate;
+                double v = Square(phase) * 0.5 + Saw(phase * 1.5) * 0.25;
+                v = Math.Round(v * 4) / 4;
+                double env = Math.Min(1, t / 0.005) * Math.Pow(1 - t / 0.55, 1.5);
+                o[i] = r.NextDouble() < 0.02 ? 0 : v * env;
+            }
+            return o;
+        }
+
+        // Three blasts of a detuned, slightly wobbling saw chord.
+        private static double[] Horn()
+        {
+            double[][] blasts = { new[] { 0.0, 0.22 }, new[] { 0.3, 0.52 }, new[] { 0.62, 1.55 } };
+            int n = (int)(1.6 * Rate);
+            double[] o = new double[n];
+            double[] notes = { 233, 294, 349, 466 };
+            double[] phase = new double[notes.Length * 2];
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate, env = 0;
+                foreach (double[] b in blasts)
+                    if (t >= b[0] && t < b[1]) env = Math.Min(1, (t - b[0]) / 0.015) * Math.Min(1, (b[1] - t) / 0.04);
+                double bend = 1 - 0.03 * Math.Exp(-(t % 0.3) * 30);
+                double v = 0;
+                for (int k = 0; k < notes.Length; k++)
+                {
+                    phase[k * 2] += notes[k] * bend * (1 + 0.004 * Math.Sin(t * 37)) / Rate;
+                    phase[k * 2 + 1] += notes[k] * bend * 1.006 / Rate;
+                    v += Saw(phase[k * 2]) + Saw(phase[k * 2 + 1]);
+                }
+                v /= notes.Length * 2;
+                o[i] = Math.Tanh(v * 2.2) * env * 0.85;
+            }
+            return o;
+        }
+
+        // Two toms and a cymbal.
+        private static double[] Sting()
+        {
+            Random r = new Random(3);
+            int n = (int)(1.5 * Rate);
+            double[] o = new double[n];
+            double p1 = 0, p2 = 0, hp = 0, last = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate, v = 0;
+                if (t < 0.3) { p1 += (90 + 110 * Math.Exp(-t * 25)) / Rate; v += Math.Sin(2 * Math.PI * p1) * Math.Exp(-t * 14); }
+                double t2 = t - 0.17;
+                if (t2 >= 0 && t2 < 0.35) { p2 += (70 + 80 * Math.Exp(-t2 * 25)) / Rate; v += Math.Sin(2 * Math.PI * p2) * Math.Exp(-t2 * 11); }
+                double t3 = t - 0.42;
+                if (t3 >= 0)
+                {
+                    double noise = r.NextDouble() * 2 - 1;
+                    hp = 0.6 * (hp + noise - last); last = noise;   // a rough high-pass, so it hisses like a cymbal
+                    v += hp * Math.Exp(-t3 * 3.2) * Math.Min(1, t3 / 0.002) * 0.9;
+                }
+                o[i] = Math.Tanh(v * 1.3) * 0.85;
+            }
+            return o;
+        }
+
+        // A low, nasty game-show buzz.
+        private static double[] Buzzer()
+        {
+            int n = (int)(0.85 * Rate);
+            double[] o = new double[n];
+            double a = 0, b = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate;
+                a += 98.0 / Rate; b += 103.5 / Rate;
+                double v = (Square(a) + Saw(b)) * 0.5;
+                double env = Math.Min(1, t / 0.01) * Math.Min(1, (0.85 - t) / 0.05);
+                o[i] = Math.Tanh(v * 3) * env * 0.42;
+            }
+            return o;
+        }
+
+        // A bright run up to a held chord, with sparkle on top.
+        private static double[] Cheer()
+        {
+            Random r = new Random(11);
+            int n = (int)(1.7 * Rate);
+            double[] o = new double[n];
+            double[] run = { 523.25, 659.25, 783.99, 1046.5 };
+            double[] chord = { 523.25, 659.25, 783.99, 1046.5, 1318.5 };
+            double[] phase = new double[run.Length + chord.Length];
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate, v = 0;
+                for (int k = 0; k < run.Length; k++)
+                {
+                    double s = t - k * 0.09;
+                    if (s < 0 || s > 0.25) continue;
+                    phase[k] += run[k] / Rate;
+                    v += (Tri(phase[k]) * 0.7 + Square(phase[k]) * 0.15) * Math.Min(1, s / 0.004) * Math.Exp(-s * 9);
+                }
+                double c = t - 0.36;
+                if (c >= 0)
+                    for (int k = 0; k < chord.Length; k++)
+                    {
+                        phase[run.Length + k] += chord[k] * (1 + 0.003 * Math.Sin(c * 31 + k)) / Rate;
+                        v += Tri(phase[run.Length + k]) * 0.32 * Math.Min(1, c / 0.02) * Math.Exp(-c * 2.1);
+                    }
+                if (c >= 0 && r.NextDouble() < 0.004) v += (r.NextDouble() - 0.5) * 1.2 * Math.Exp(-c * 2);
+                o[i] = Math.Tanh(v * 0.9) * 0.85;
+            }
+            return o;
+        }
+
+        // A buzzy, noisy tone dragged back and forth like a record under a hand.
+        private static double[] Scratch()
+        {
+            Random r = new Random(5);
+            int n = (int)(0.7 * Rate);
+            double[] o = new double[n];
+            double phase = 0, lp = 0;
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate;
+                double speed = Math.Sin(Math.PI * Math.Min(1, t / 0.32)) * (t < 0.32 ? 1 : 0) - Math.Sin(Math.PI * Math.Max(0, Math.Min(1, (t - 0.36) / 0.3))) * 0.8;
+                phase += (40 + 700 * Math.Abs(speed)) / Rate;
+                double noise = r.NextDouble() * 2 - 1;
+                lp += (noise - lp) * (0.08 + 0.5 * Math.Abs(speed));
+                double v = (Saw(phase) * 0.6 + lp * 0.9) * Math.Min(1, Math.Abs(speed) * 3);
+                o[i] = Math.Tanh(v * 1.8) * 0.75;
+            }
+            return o;
+        }
+
+        private static void Write(string file, double[] samples)
+        {
+            using (FileStream f = new FileStream(file, FileMode.Create, FileAccess.Write))
+            using (BinaryWriter w = new BinaryWriter(f))
+            {
+                int bytes = samples.Length * 2;
+                w.Write(Encoding.ASCII.GetBytes("RIFF")); w.Write(36 + bytes); w.Write(Encoding.ASCII.GetBytes("WAVE"));
+                w.Write(Encoding.ASCII.GetBytes("fmt ")); w.Write(16); w.Write((short)1); w.Write((short)1);
+                w.Write(Rate); w.Write(Rate * 2); w.Write((short)2); w.Write((short)16);
+                w.Write(Encoding.ASCII.GetBytes("data")); w.Write(bytes);
+                foreach (double s in samples) w.Write((short)Math.Max(short.MinValue, Math.Min(short.MaxValue, s * 32767)));
+            }
+        }
+    }
+}

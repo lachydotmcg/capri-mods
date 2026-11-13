@@ -1,0 +1,462 @@
+// capri-mod: 1
+// id: focus-mode
+// name: Focus Mode
+// version: 1.0.0
+// author: Issei
+// description: Say "focus" for work-and-break rounds. She sits quietly while you work, calls your breaks, pauses when you walk away and keeps your daily count.
+// permissions: chat, settings, system, hotkeys
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// Rounds of work and short breaks, with a long break after every few rounds, until they stop it. While it runs she keeps
+// quiet: her quiet switch goes on and her check-ins and wandering go off, and each goes back to how they had it when
+// focus ends, unless they changed it themselves in the meantime. If they walk away during work, the clock waits.
+public class FocusMode : ICapriMod
+{
+    // The harness fills these in to test without a clock or dice.
+    public Func<DateTime> Clock = delegate { return DateTime.Now; };
+    public Func<int, int> Pick;
+
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex StartWords = new Regex(@"^(?:(?:can\s+you\s+|let'?s\s+|please\s+)?(?:start|begin|do)\s+(?:a\s+|the\s+)?)?(?:focus(?:\s+mode)?|pomodoro|focus\s+(?:session|time))(?:\s+(?:time|session|please|now))?$|^(?:let'?s|time\s+to|help\s+me)\s+focus$|^lock\s+in$", Plain);
+    private static readonly Regex StartFor = new Regex(@"^(?:(?:let'?s\s+|start\s+(?:a\s+)?)?focus|(?:start\s+a\s+)?pomodoro)(?:\s+mode)?\s+(?:for\s+)?(\d{1,3})(?:\s*(?:minutes?|mins?|m))?(?:\s+(?:with|and)\s+(\d{1,2})(?:\s*(?:minutes?|mins?|m))?\s+breaks?)?$", Plain);
+    private static readonly Regex Left = new Regex(@"^(?:how\s+(?:long|much)(?:\s+(?:focus|time|break))?(?:\s+is)?\s+left|how\s+long\s+until\s+(?:my\s+|the\s+)?(?:break|next\s+break)|time\s+left|focus\s+time\s+left|how'?s\s+(?:my\s+)?focus\s+going)$", Plain);
+    private static readonly Regex Skip = new Regex(@"^(?:skip\s+(?:the\s+|my\s+|this\s+)?break|back\s+to\s+work|end\s+(?:the\s+|my\s+)?break(?:\s+early)?|i'?m\s+back\s+to\s+work)$", Plain);
+    private static readonly Regex Pause = new Regex(@"^(?:pause|hold)\s+(?:the\s+)?(?:focus|pomodoro|timer)$|^(?:focus|pomodoro)\s+pause$", Plain);
+    private static readonly Regex Resume = new Regex(@"^(?:resume|unpause|continue)\s+(?:the\s+)?(?:focus|pomodoro|timer)$|^(?:focus|pomodoro)\s+resume$", Plain);
+    private static readonly Regex StopWords = new Regex(@"^(?:stop|end|cancel|quit|finish)\s+(?:the\s+|my\s+)?(?:focus(?:\s+mode)?|pomodoro|focus\s+session)$|^(?:focus|pomodoro)\s+(?:off|stop)$|^i'?m\s+done\s+focusing$", Plain);
+    private static readonly Regex Stats = new Regex(@"^how\s+many\s+(?:focus\s+sessions|pomodoros|focus\s+rounds)(?:\s+(?:today|did\s+i\s+do(?:\s+today)?))?$|^(?:my\s+)?(?:focus|pomodoro)\s+stats$|^how\s+much\s+did\s+i\s+focus(?:\s+today)?$", Plain);
+
+    private static readonly string[] WorkLines =
+    {
+        "Focus on. {0} minutes. I'll be quiet.",
+        "Locking in for {0} minutes. Phone face down.",
+        "{0} minutes, starting now. I'll keep the noise down.",
+        "Okay. {0} minutes of work. I'm right here, not talking."
+    };
+    private static readonly string[] BreakLines =
+    {
+        "Break. {0} minutes. Go look at something that isn't a screen.",
+        "Round done. {0} minute break. Stand up, stretch, drink water.",
+        "That's a round. Take {0} minutes. Your eyes will thank you.",
+        "Nice. {0} minutes off. Move around a bit."
+    };
+    private static readonly string[] LongBreakLines =
+    {
+        "That's a full set of {1}. Long break: {0} minutes. You earned it.",
+        "{1} rounds done. Take a proper {0} minute break. Get food or something.",
+        "Full set. {0} minutes off. Seriously, leave the desk."
+    };
+    private static readonly string[] BackLines =
+    {
+        "Break's over. Round {0}, {1} minutes. Back to it.",
+        "Back to it. Round {0}. {1} minutes, go.",
+        "Time's up. Round {0} starts now."
+    };
+
+    private ICapriHost capri;
+    private ICapriTimer ticking;
+    private readonly Random random = new Random();
+    private int work = 25, rest = 5, longRest = 15, rounds = 4;
+    private string hotkey = "Ctrl+Alt+F";
+    private bool hotkeyHeld;
+
+    // The session: work, break or long (a long break), and when this part ends. Paused keeps how much was left.
+    private string phase;
+    private DateTime ends;
+    private TimeSpan held;
+    private bool paused, pausedForAway, warned;
+    private DateTime awaySince;
+    private int round;              // the round of work they're on, from 1
+    private int doneThisSession;    // rounds of work finished since they said focus
+    private double minutesThisSession;
+    private int sessionWork, sessionRest;   // lengths for this session, which "focus for 50" can change
+
+    // Her switches the mod changed, and what they were before. A switch they flip themselves mid-focus is theirs again.
+    private readonly Dictionary<string, bool> before = new Dictionary<string, bool>();
+    private readonly Dictionary<string, bool> set = new Dictionary<string, bool>();
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (Pick == null) Pick = delegate(int n) { return random.Next(n); };
+        work = (int)capri.Store.Number("work", 25);
+        rest = (int)capri.Store.Number("break", 5);
+        longRest = (int)capri.Store.Number("long break", 15);
+        rounds = (int)capri.Store.Number("rounds", 4);
+        hotkey = capri.Store.Get("hotkey", "Ctrl+Alt+F");
+        // A session left running when Capri closed carries on if it's still in time, so a restart doesn't lose it
+        Restore();
+        capri.Chat.AddContext(delegate
+        {
+            if (phase == null) return null;
+            string what = phase == "work" ? "work, round " + round : phase == "long" ? "long break" : "break";
+            return "Focus mode: " + what + ", " + Minutes(Remaining()) + (paused ? ", paused" : " left") +
+                   (phase == "work" ? ". Keep replies short and nudge them back to work." : ".");
+        });
+        capri.System.Away += delegate { if (phase == "work" && !paused) { Hold(); pausedForAway = true; awaySince = Clock(); } };
+        capri.System.Back += delegate
+        {
+            if (!pausedForAway) return;
+            pausedForAway = false;
+            int gone = (int)Math.Round((Clock() - awaySince).TotalMinutes) + (int)Math.Round(capri.System.AwayMinutes > 0 ? capri.System.AwayMinutes : 5);
+            Carry();
+            Say("Welcome back. You were gone about " + Plural(gone, "minute") + ", so I paused. " + Minutes(Remaining()) + " of focus left.");
+        };
+        capri.Settings.Changed += delegate
+        {
+            // a switch they flipped themselves while focus had it is theirs again: don't put it back later
+            foreach (string name in new List<string>(set.Keys))
+            {
+                bool? now = capri.Settings.IsOn(name);
+                if (now.HasValue && now.Value != set[name]) { set.Remove(name); before.Remove(name); }
+            }
+        };
+        TakeHotkey();
+        capri.Ui.AddMenuItem("Start or pause focus", Toggle);
+        capri.Ui.AddMenuItem("Stop focus", delegate { if (phase != null) Finish(); });
+        capri.Ui.SetOptions("Focus Mode", MakeOptions);
+        ticking = capri.Timers.Every(5, Step);
+    }
+
+    public void Stop()
+    {
+        if (ticking != null) ticking.Cancel();
+        if (hotkeyHeld) capri.Keys.Remove(hotkey);
+        Save();
+        PutBack();
+    }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace(words ?? "", "").Trim().TrimEnd('.', '!', '?').Trim();
+        Match m;
+        if ((m = StartFor.Match(said)).Success)
+        {
+            int minutes = int.Parse(m.Groups[1].Value);
+            int brk = m.Groups[2].Success ? int.Parse(m.Groups[2].Value) : rest;
+            if (minutes < 1 || minutes > 240) { Say("Pick something between 1 and 240 minutes."); return true; }
+            if (brk < 1 || brk > 60) { Say("Breaks can be 1 to 60 minutes."); return true; }
+            Begin(minutes, brk);
+            return true;
+        }
+        if (StartWords.IsMatch(said))
+        {
+            if (phase != null) { Say("Already on. " + Where()); return true; }
+            Begin(work, rest);
+            return true;
+        }
+        if (Stats.IsMatch(said)) { Say(StatsLine()); return true; }
+        if (phase == null)
+        {
+            if (StopWords.IsMatch(said) || Pause.IsMatch(said) || Resume.IsMatch(said)) { Say("Focus isn't on. Say \"focus\" to start."); return true; }
+            return false;
+        }
+        if (Left.IsMatch(said)) { Say(Where()); return true; }
+        if (Skip.IsMatch(said))
+        {
+            if (phase == "work") { Say("You're not on a break. " + Minutes(Remaining()) + " of work left."); return true; }
+            NextWork();
+            return true;
+        }
+        if (Pause.IsMatch(said))
+        {
+            if (paused) { Say("It's already paused. Say \"resume focus\" when you're ready."); return true; }
+            Hold();
+            Say("Paused with " + Minutes(Remaining()) + " left.");
+            return true;
+        }
+        if (Resume.IsMatch(said))
+        {
+            if (!paused) { Say("It's not paused. " + Where()); return true; }
+            pausedForAway = false;
+            Carry();
+            Say("Back on. " + Minutes(Remaining()) + " left.");
+            return true;
+        }
+        if (StopWords.IsMatch(said)) { Finish(); return true; }
+        return false;
+    }
+
+    // ---------------------------------------------------------------- the session
+
+    private void Begin(int minutes, int brk)
+    {
+        sessionWork = minutes; sessionRest = brk;
+        round = 1; doneThisSession = 0; minutesThisSession = 0;
+        Quiet();
+        capri.Mods.Send("focus", "on");
+        StartPhase("work", minutes);
+        capri.Her.Move("sit");
+        Say(string.Format(WorkLines[Pick(WorkLines.Length)], minutes));
+    }
+
+    private void StartPhase(string what, int minutes)
+    {
+        phase = what;
+        paused = false; pausedForAway = false; warned = false;
+        ends = Clock().AddMinutes(minutes);
+        Save();
+    }
+
+    private void Step()
+    {
+        if (phase == null || paused) return;
+        TimeSpan left = ends - Clock();
+        if (phase != "work" && !warned && left.TotalSeconds <= 60 && left.TotalSeconds > 0 && (phase == "long" ? longRest : sessionRest) > 2)
+        {
+            warned = true;
+            Say("One minute left on your break.");
+        }
+        if (left.TotalSeconds > 0) return;
+        if (phase == "work") WorkDone(); else NextWork();
+    }
+
+    private void WorkDone()
+    {
+        doneThisSession++;
+        minutesThisSession += sessionWork;
+        Count(sessionWork);
+        bool full = doneThisSession % rounds == 0;
+        int minutes = full ? longRest : sessionRest;
+        StartPhase(full ? "long" : "break", minutes);
+        capri.Mods.Send("focus", "break");
+        capri.Her.Move("stand_up");
+        capri.Her.Animate("grin");
+        capri.Her.Animate("dance");
+        capri.Timers.After(4, delegate { capri.Her.Animate("stop_dancing"); });
+        if (full) Say(string.Format(LongBreakLines[Pick(LongBreakLines.Length)], minutes, rounds));
+        else Say(string.Format(BreakLines[Pick(BreakLines.Length)], minutes));
+    }
+
+    private void NextWork()
+    {
+        round++;
+        StartPhase("work", sessionWork);
+        capri.Mods.Send("focus", "on");
+        capri.Her.Move("sit");
+        Say(string.Format(BackLines[Pick(BackLines.Length)], round, sessionWork));
+    }
+
+    private void Finish()
+    {
+        // count the part of a round they did, to the minute
+        if (phase == "work")
+        {
+            double done = sessionWork - Remaining().TotalMinutes;
+            if (done >= 1) { minutesThisSession += Math.Floor(done); Count(0, Math.Floor(done)); }
+        }
+        phase = null; paused = false; pausedForAway = false;
+        Save();
+        PutBack();
+        capri.Mods.Send("focus", "off");
+        int total = (int)Math.Round(minutesThisSession);
+        if (total < 1) Say("Focus off. Nothing counted that time.");
+        else Say("Focus off. " + Plural(total, "minute") + " of work, " + Plural(doneThisSession, "full round") + ". " + Today());
+    }
+
+    private void Toggle()
+    {
+        if (phase == null) { Begin(work, rest); return; }
+        if (paused) { pausedForAway = false; Carry(); Say("Back on. " + Minutes(Remaining()) + " left."); }
+        else { Hold(); Say("Paused with " + Minutes(Remaining()) + " left."); }
+    }
+
+    private void Hold() { held = Remaining(); paused = true; Save(); }
+    private void Carry() { ends = Clock() + held; paused = false; Save(); }
+
+    private TimeSpan Remaining()
+    {
+        if (phase == null) return TimeSpan.Zero;
+        TimeSpan left = paused ? held : ends - Clock();
+        return left < TimeSpan.Zero ? TimeSpan.Zero : left;
+    }
+
+    private string Where()
+    {
+        string left = Minutes(Remaining());
+        string when = paused ? "Paused, " + left + " left" : left + " left";
+        if (phase == "work") return when + " in round " + round + ". Then a " + (doneThisSession % rounds == rounds - 1 ? longRest : sessionRest) + " minute break.";
+        return when + " on your " + (phase == "long" ? "long break." : "break.");
+    }
+
+    // ---------------------------------------------------------------- her switches
+
+    private void Quiet()
+    {
+        Want("quiet", true);
+        Want("check_ins", false);
+        Want("wander", false);
+    }
+
+    private void Want(string name, bool on)
+    {
+        bool? now = capri.Settings.IsOn(name);
+        if (!now.HasValue || now.Value == on) return;
+        if (!before.ContainsKey(name)) before[name] = now.Value;
+        set[name] = on;
+        capri.Settings.Turn(name, on);
+    }
+
+    private void PutBack()
+    {
+        foreach (KeyValuePair<string, bool> was in new Dictionary<string, bool>(before))
+        {
+            bool? now = capri.Settings.IsOn(was.Key);
+            bool mine;
+            if (now.HasValue && set.TryGetValue(was.Key, out mine) && now.Value == mine) capri.Settings.Turn(was.Key, was.Value);
+        }
+        before.Clear();
+        set.Clear();
+    }
+
+    // ---------------------------------------------------------------- counts
+
+    private void Count(int fullRoundMinutes) { Count(1, fullRoundMinutes); }
+
+    private void Count(int roundsDone, double minutes)
+    {
+        string day = Clock().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        capri.Store.Set("rounds " + day, capri.Store.Number("rounds " + day, 0) + roundsDone);
+        capri.Store.Set("minutes " + day, capri.Store.Number("minutes " + day, 0) + minutes);
+    }
+
+    private string Today()
+    {
+        string day = Clock().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        int r = (int)capri.Store.Number("rounds " + day, 0);
+        int m = (int)capri.Store.Number("minutes " + day, 0);
+        return "Today: " + Plural(r, "round") + ", " + Hours(m) + ".";
+    }
+
+    private string StatsLine()
+    {
+        DateTime today = Clock().Date;
+        int weekRounds = 0, weekMinutes = 0;
+        for (int i = 0; i < 7; i++)
+        {
+            string day = today.AddDays(-i).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+            weekRounds += (int)capri.Store.Number("rounds " + day, 0);
+            weekMinutes += (int)capri.Store.Number("minutes " + day, 0);
+        }
+        int streak = 0;
+        DateTime d = today;
+        if (capri.Store.Number("minutes " + d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), 0) < 1) d = d.AddDays(-1);
+        while (capri.Store.Number("minutes " + d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), 0) >= 1) { streak++; d = d.AddDays(-1); }
+        string line = Today() + " This week: " + Plural(weekRounds, "round") + ", " + Hours(weekMinutes) + ".";
+        if (streak >= 2) line += " That's " + streak + " days in a row.";
+        else if (weekMinutes == 0) line = "No focus yet this week. Say \"focus\" and we'll fix that.";
+        return line;
+    }
+
+    // ---------------------------------------------------------------- saving and options
+
+    private void Save()
+    {
+        capri.Store.Set("phase", phase ?? "");
+        if (phase == null) return;
+        capri.Store.Set("ends", ends.ToString("o", CultureInfo.InvariantCulture));
+        capri.Store.Set("held", held.TotalSeconds);
+        capri.Store.Set("paused", paused);
+        capri.Store.Set("round", round);
+        capri.Store.Set("done", doneThisSession);
+        capri.Store.Set("session minutes", minutesThisSession);
+        capri.Store.Set("session work", sessionWork);
+        capri.Store.Set("session break", sessionRest);
+    }
+
+    private void Restore()
+    {
+        string was = capri.Store.Get("phase", "");
+        if (was.Length == 0) return;
+        DateTime when;
+        if (!DateTime.TryParse(capri.Store.Get("ends", ""), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out when)) return;
+        bool wasPaused = capri.Store.Flag("paused", false);
+        // more than an hour past its end, it's stale: Capri was closed through it
+        if (!wasPaused && (Clock() - when).TotalMinutes > 60) { capri.Store.Set("phase", ""); return; }
+        phase = was; ends = when; paused = wasPaused;
+        held = TimeSpan.FromSeconds(capri.Store.Number("held", 0));
+        round = (int)capri.Store.Number("round", 1);
+        doneThisSession = (int)capri.Store.Number("done", 0);
+        minutesThisSession = capri.Store.Number("session minutes", 0);
+        sessionWork = (int)capri.Store.Number("session work", work);
+        sessionRest = (int)capri.Store.Number("session break", rest);
+        Quiet();
+    }
+
+    private void TakeHotkey()
+    {
+        if (string.IsNullOrEmpty(hotkey)) return;
+        try { hotkeyHeld = capri.Keys.Hotkey(hotkey, Toggle); }
+        catch (ArgumentException) { hotkeyHeld = false; }
+        if (!hotkeyHeld) capri.Log("focus-mode: couldn't take " + hotkey + ", another app may have it");
+    }
+
+    private Control MakeOptions()
+    {
+        TableLayoutPanel page = new TableLayoutPanel { ColumnCount = 2, AutoSize = true, Padding = new Padding(8) };
+        NumericUpDown w = Number(page, "Work (minutes)", work, 1, 240);
+        NumericUpDown b = Number(page, "Break (minutes)", rest, 1, 60);
+        NumericUpDown l = Number(page, "Long break (minutes)", longRest, 1, 120);
+        NumericUpDown r = Number(page, "Rounds before a long break", rounds, 1, 12);
+        page.Controls.Add(new Label { Text = "Shortcut", AutoSize = true, Anchor = AnchorStyles.Left });
+        TextBox key = new TextBox { Text = hotkey, Width = 140 };
+        page.Controls.Add(key);
+        Label note = new Label { AutoSize = true, ForeColor = Color.Gray, Text = hotkeyHeld ? "" : "Another app has " + hotkey + ". Pick another." };
+        page.Controls.Add(note);
+        page.SetColumnSpan(note, 2);
+        Button save = new Button { Text = "Save", AutoSize = true };
+        save.Click += delegate
+        {
+            work = (int)w.Value; rest = (int)b.Value; longRest = (int)l.Value; rounds = (int)r.Value;
+            capri.Store.Set("work", work); capri.Store.Set("break", rest); capri.Store.Set("long break", longRest); capri.Store.Set("rounds", rounds);
+            string wanted = key.Text.Trim();
+            if (wanted != hotkey)
+            {
+                if (hotkeyHeld) capri.Keys.Remove(hotkey);
+                hotkey = wanted;
+                capri.Store.Set("hotkey", hotkey);
+                TakeHotkey();
+            }
+            note.Text = hotkeyHeld || hotkey.Length == 0 ? "Saved." : "Saved, but another app has " + hotkey + ".";
+        };
+        page.Controls.Add(save);
+        return page;
+    }
+
+    private static NumericUpDown Number(TableLayoutPanel page, string label, int value, int low, int high)
+    {
+        page.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left });
+        NumericUpDown box = new NumericUpDown { Minimum = low, Maximum = high, Value = Math.Max(low, Math.Min(high, value)), Width = 70 };
+        page.Controls.Add(box);
+        return box;
+    }
+
+    // ---------------------------------------------------------------- words
+
+    private void Say(string line) { capri.Say(line); }
+
+    private static string Minutes(TimeSpan t)
+    {
+        int m = (int)Math.Ceiling(t.TotalMinutes - 0.0001);
+        if (m <= 1) return t.TotalSeconds < 50 && t.TotalSeconds > 0 ? "under a minute" : "1 minute";
+        return m + " minutes";
+    }
+
+    private static string Hours(int minutes)
+    {
+        if (minutes < 60) return Plural(minutes, "minute");
+        int h = minutes / 60, m = minutes % 60;
+        return Plural(h, "hour") + (m > 0 ? " " + Plural(m, "minute") : "");
+    }
+
+    private static string Plural(int n, string word) { return n + " " + word + (n == 1 ? "" : "s"); }
+}

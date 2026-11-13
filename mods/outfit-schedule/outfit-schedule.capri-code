@@ -1,0 +1,627 @@
+// capri-mod: 1
+// id: outfit-schedule
+// name: Outfit Schedule
+// version: 1.0.0
+// author: Issei
+// description: Changes her skin by time of day, day of the week or date. "Wear Neon Sign at night", "wear the Santa hat in December". If you change it yourself, it leaves you alone.
+// permissions: skins, system
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Globalization;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// A rule is a time range, days of the week and/or a date range, plus a skin, an accessory or both. Her skin comes from the
+// highest rule that matches and names one; accessories come from every rule that matches, on top of whatever she wears.
+// It only changes her look when what the rules want changes (a rule starting or ending), so a skin you pick yourself stays
+// until the next one. When no rule wants a skin any more, she goes back to what she wore before the schedule changed it.
+public class OutfitSchedule : ICapriMod
+{
+    // The harness fills this in to move the clock.
+    public Func<DateTime> Clock;
+
+    private const RegexOptions Plain = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+    private static readonly Regex Wake = new Regex(@"^\s*(?:(?:hey|hi|ok|okay|yo|oi)[\s,]+)?capri\b[\s,.:;!?-]*|[\s,]+capri[\s.!?]*$", Plain);
+    private static readonly Regex Wear = new Regex(@"^(?:(?:can\s+you|could\s+you|please)\s+)?(?:wear|put\s+on|use|switch\s+to|dress\s+(?:up\s+)?(?:in|as))\s+(.+?)\s+((?:at|in|on|during|from|between|every|all|over|overnight|for)\b.*)$", Plain);
+    private static readonly Regex Own = new Regex(@"^(?:no\s+skin|(?:wear\s+|use\s+)?(?:my|your|her)\s+own\s+look|(?:wear\s+)?(?:your\s+)?(?:normal|default)\s+(?:look|outfit|skin)|wear\s+nothing)\s+((?:at|in|on|during|from|between|every|all|over|overnight)\b.*)$", Plain);
+    private static readonly Regex Read = new Regex(@"^(?:what(?:'?s|\s+is)\s+(?:my|your|the)\s+outfit\s+schedule|(?:read|show|tell\s+me)\s+(?:me\s+)?(?:my|your|the)\s+outfit\s+schedule|outfit\s+schedule)$", Plain);
+    private static readonly Regex Pause = new Regex(@"^(?:pause|stop|turn\s+off)\s+(?:the\s+|my\s+|your\s+)?outfit\s+schedule$", Plain);
+    private static readonly Regex Resume = new Regex(@"^(?:resume|restart|unpause|start|turn\s+on)\s+(?:the\s+|my\s+|your\s+)?outfit\s+schedule$", Plain);
+    private static readonly Regex Clear = new Regex(@"^(?:clear|delete|remove|wipe|reset)\s+(?:the\s+|my\s+|your\s+)?(?:whole\s+)?outfit\s+schedule$", Plain);
+    private static readonly Regex Yes = new Regex(@"^(?:yes|yeah|yep|yup|sure|do\s+it|clear\s+it|yes\s+please|i'?m\s+sure)$", Plain);
+    private static readonly Regex No = new Regex(@"^(?:no|nope|nah|don'?t|cancel|never\s*mind|keep\s+(?:it|them))$", Plain);
+
+    private static readonly string[] DayNames = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    private static readonly string[] MonthNames = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+
+    private class Rule
+    {
+        public int From = -1, To = -1;            // minutes after midnight; -1 for all day
+        public int DateFrom = -1, DateTo = -1;    // month * 100 + day; -1 for any date
+        public bool[] Days;                       // null for every day
+        public string Skin;                       // a skin id, "none" for her own look, or null to leave her skin alone
+        public string Accessory;                  // an accessory id, or null
+    }
+
+    private ICapriHost capri;
+    private readonly List<Rule> rules = new List<Rule>();
+    private bool paused;
+    private DateTime? clearAsked;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (Clock == null) Clock = delegate { return DateTime.Now; };
+        Load();
+        paused = capri.Store.Flag("paused", false);
+        capri.Timers.Every(60, Check);
+        capri.System.Woke += Check;
+        capri.System.Unlocked += Check;
+        capri.System.NewDay += Check;
+        capri.Ui.SetOptions("Outfit Schedule", MakeOptions);
+        Check();
+    }
+
+    public void Stop() { }
+
+    public bool Heard(string words)
+    {
+        string said = Wake.Replace(words ?? "", "").Trim().TrimEnd('.', '!', '?').Trim();
+        Match m;
+        if (clearAsked.HasValue)
+        {
+            bool fresh = (Clock() - clearAsked.Value).TotalSeconds < 60;
+            if (fresh && Yes.IsMatch(said))
+            {
+                clearAsked = null;
+                int n = rules.Count;
+                rules.Clear();
+                Save();
+                Check();
+                capri.Say("Cleared " + Count(n, "rule") + ". I'll wear whatever you put me in.");
+                return true;
+            }
+            if (fresh && No.IsMatch(said)) { clearAsked = null; capri.Say("Okay, the schedule stays."); return true; }
+            clearAsked = null;
+        }
+        if (Read.IsMatch(said)) { capri.Say(Schedule()); return true; }
+        if (Pause.IsMatch(said))
+        {
+            if (paused) { capri.Say("It's already paused."); return true; }
+            paused = true; capri.Store.Set("paused", true);
+            capri.Say("Outfit schedule paused. I'll keep wearing this.");
+            return true;
+        }
+        if (Resume.IsMatch(said))
+        {
+            if (!paused) { capri.Say(rules.Count == 0 ? "It's on, but there aren't any rules yet. Try \"wear Neon Sign at night\"." : "It's already on."); return true; }
+            paused = false; capri.Store.Set("paused", false);
+            capri.Say("Outfit schedule back on.");
+            Check();
+            return true;
+        }
+        if (Clear.IsMatch(said))
+        {
+            if (rules.Count == 0) { capri.Say("There's nothing on the schedule."); return true; }
+            clearAsked = Clock();
+            capri.Say("That removes all " + Count(rules.Count, "rule") + ". Are you sure?");
+            return true;
+        }
+        bool own = false;
+        string what = null, when = null;
+        if ((m = Own.Match(said)).Success) { own = true; when = m.Groups[1].Value; }
+        else if ((m = Wear.Match(said)).Success) { what = m.Groups[1].Value; when = m.Groups[2].Value; }
+        else return false;
+
+        string id = own ? null : FindSkin(what);
+        if (!own && id == null) return false;
+        Rule rule = When(when);
+        if (rule == null)
+        {
+            if (own) return false;
+            capri.Say("I didn't catch when. Try \"at night\", \"on weekends\", \"in December\" or \"from 9am to 5pm\".");
+            return true;
+        }
+        if (own) rule.Skin = "none";
+        else
+        {
+            if (capri.Skins.IsAccessory(id)) rule.Accessory = id; else rule.Skin = id;
+        }
+        Add(rule);
+        capri.Say("Okay. " + Describe(rule) + ".");
+        Check();
+        return true;
+    }
+
+    // ---- what the rules want, and switching to it ----
+
+    private class Look
+    {
+        public string Skin;                                    // null: no rule wants a skin
+        public readonly List<string> Accessories = new List<string>();
+        public Rule Because;
+        public string Key { get { List<string> a = new List<string>(Accessories); a.Sort(StringComparer.Ordinal); return (Skin ?? "-") + "|" + string.Join(",", a.ToArray()); } }
+    }
+
+    private Look Wanted(DateTime now, List<string> missing)
+    {
+        Look look = new Look();
+        HashSet<string> installed = new HashSet<string>(capri.Skins.Installed ?? new string[0], StringComparer.OrdinalIgnoreCase);
+        foreach (Rule r in rules)
+        {
+            if (!Matches(r, now)) continue;
+            bool skinGone = r.Skin != null && r.Skin != "none" && !installed.Contains(r.Skin);
+            bool accGone = r.Accessory != null && !installed.Contains(r.Accessory);
+            if (skinGone) missing.Add(r.Skin);
+            if (accGone) missing.Add(r.Accessory);
+            if (r.Skin != null && !skinGone && look.Skin == null) { look.Skin = r.Skin; look.Because = r; }
+            if (r.Accessory != null && !accGone && !look.Accessories.Contains(r.Accessory)) look.Accessories.Add(r.Accessory);
+        }
+        return look;
+    }
+
+    private void Check()
+    {
+        if (paused) return;
+        DateTime now = Clock();
+        List<string> missing = new List<string>();
+        Look want = Wanted(now, missing);
+        foreach (string id in missing)
+        {
+            if (capri.Store.Flag("told missing " + id, false)) continue;
+            capri.Store.Set("told missing " + id, true);
+            capri.Say("I can't find " + Name(id) + " any more, so I'm skipping its rule on the schedule.");
+        }
+        HashSet<string> installed = new HashSet<string>(capri.Skins.Installed ?? new string[0], StringComparer.OrdinalIgnoreCase);
+        foreach (string key in capri.Store.Keys)
+            if (key.StartsWith("told missing ") && installed.Contains(key.Substring(13))) capri.Store.Remove(key);
+
+        string applied = capri.Store.Get("applied") ?? "-|";
+        if (want.Key == applied) return;     // nothing started or ended: leave her as she is
+        string[] was = applied.Split('|');
+        string wasSkin = was[0] == "-" ? null : was[0];
+        List<string> wasAcc = new List<string>(was.Length > 1 && was[1].Length > 0 ? was[1].Split(',') : new string[0]);
+        List<string> ours = new List<string>((capri.Store.Get("ours") ?? "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+
+        string line = null;
+        if (want.Skin != wasSkin)
+        {
+            if (want.Skin == null)
+            {
+                string back = capri.Store.Get("own skin");
+                capri.Store.Remove("own skin");
+                if (back != null && back != capri.Skins.Current && (back == "none" || installed.Contains(back)))
+                {
+                    capri.Skins.Use(back == "none" ? null : back);
+                    line = back == "none" ? "That's the end of the schedule's outfit. Back to my own look." : "That's the end of the schedule's outfit. Back to " + Name(back) + ".";
+                }
+            }
+            else
+            {
+                if (wasSkin == null) capri.Store.Set("own skin", capri.Skins.Current ?? "none");
+                string target = want.Skin == "none" ? null : want.Skin;
+                if (target != capri.Skins.Current)
+                {
+                    capri.Skins.Use(target);
+                    line = Opening(want.Because, now) + (target == null ? " Back to my own look." : " Switching to " + Name(target) + ".");
+                }
+            }
+        }
+        List<string> wearing = new List<string>(capri.Skins.Accessories ?? new string[0]);
+        List<string> putOn = new List<string>();
+        foreach (string acc in wasAcc)
+            if (!want.Accessories.Contains(acc) && ours.Contains(acc)) { capri.Skins.Equip(acc, false); ours.Remove(acc); }
+        foreach (string acc in want.Accessories)
+            if (!wasAcc.Contains(acc) && !wearing.Contains(acc)) { capri.Skins.Equip(acc, true); ours.Add(acc); putOn.Add(Name(acc)); }
+        if (putOn.Count > 0)
+        {
+            string hat = "Putting on " + string.Join(" and ", putOn.ToArray()) + ".";
+            line = line == null ? Opening(AccRule(want, now), now) + " " + hat : line + " " + hat;
+        }
+        capri.Store.Set("applied", want.Key);
+        capri.Store.Set("ours", string.Join(",", ours.ToArray()));
+        if (line != null) capri.Say(line);
+    }
+
+    private Rule AccRule(Look look, DateTime now)
+    {
+        foreach (Rule r in rules) if (r.Accessory != null && look.Accessories.Contains(r.Accessory) && Matches(r, now)) return r;
+        return null;
+    }
+
+    private static string Opening(Rule r, DateTime now)
+    {
+        if (r == null) return "Schedule says so.";
+        if (r.DateFrom >= 0)
+        {
+            if (r.DateFrom == 1225 || (r.DateFrom >= 1201 && r.DateTo <= 1231 && r.DateTo >= 1224)) return "It's that time of year.";
+            if (r.DateFrom == 1031 && r.DateTo == 1031) return "Happy Halloween.";
+            return "It's the day for it.";
+        }
+        if (r.From >= 0)
+        {
+            int h = now.Hour;
+            if (h >= 21 || h < 5) return "Night shift.";
+            if (h < 12) return "Morning.";
+            if (h < 17) return "Afternoon look.";
+            return "Evening.";
+        }
+        if (r.Days != null)
+        {
+            if (r.Days[0] && r.Days[6] && !r.Days[1]) return "Weekend mode.";
+            if (!r.Days[0] && !r.Days[6]) return "Work week.";
+            return "It's " + DayNames[(int)now.DayOfWeek] + ".";
+        }
+        return "Schedule says so.";
+    }
+
+    private static bool Matches(Rule r, DateTime now)
+    {
+        int minute = now.Hour * 60 + now.Minute;
+        DateTime day = now;   // an overnight rule belongs to the day it started
+        if (r.From >= 0 && r.To >= 0 && r.From != r.To)
+        {
+            if (r.From < r.To) { if (minute < r.From || minute >= r.To) return false; }
+            else
+            {
+                if (minute >= r.To && minute < r.From) return false;
+                if (minute < r.To) day = now.AddDays(-1);
+            }
+        }
+        if (r.Days != null && !r.Days[(int)day.DayOfWeek]) return false;
+        if (r.DateFrom >= 0)
+        {
+            int date = day.Month * 100 + day.Day;
+            if (r.DateFrom <= r.DateTo) { if (date < r.DateFrom || date > r.DateTo) return false; }
+            else if (date > r.DateTo && date < r.DateFrom) return false;
+        }
+        return true;
+    }
+
+    // ---- understanding "at night", "on weekends", "in December", "from 9 to 5" ----
+
+    private static readonly Regex TimeWord = new Regex(@"^(?:(noon|midday|midnight)|(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?)$", Plain);
+
+    private static int ParseTime(string text)
+    {
+        Match m = TimeWord.Match(text.Trim());
+        if (!m.Success) return -1;
+        if (m.Groups[1].Success) return m.Groups[1].Value.ToLowerInvariant() == "midnight" ? 0 : 12 * 60;
+        int h = int.Parse(m.Groups[2].Value), min = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : 0;
+        string ap = m.Groups[4].Value.ToLowerInvariant().Replace(".", "");
+        if (min > 59) return -1;
+        if (ap.Length > 0) { if (h < 1 || h > 12) return -1; if (h == 12) h = 0; if (ap == "pm") h += 12; }
+        else if (h > 23) return -1;
+        return h * 60 + min;
+    }
+
+    private Rule When(string text)
+    {
+        string rest = Regex.Replace(text.ToLowerInvariant().Trim(), @"\s+", " ");
+        Rule r = new Rule();
+        bool any = false;
+        string timeAt = @"(noon|midday|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?)";
+        Regex[] parts =
+        {
+            new Regex(@"^(?:at\s+night(?:time)?|overnight|every\s+night|at\s+nights|during\s+the\s+night)"),
+            new Regex(@"^(?:in\s+the\s+morning(?:s)?|every\s+morning|mornings)"),
+            new Regex(@"^(?:in\s+the\s+afternoon(?:s)?|every\s+afternoon|afternoons)"),
+            new Regex(@"^(?:in\s+the\s+evening(?:s)?|every\s+evening|evenings)"),
+            new Regex(@"^(?:during\s+the\s+day(?:time)?|in\s+the\s+day(?:time)?|by\s+day|daytime)"),
+            new Regex(@"^(?:from|between)\s+" + timeAt + @"\s+(?:to|until|till|and|-)\s+" + timeAt),
+            new Regex(@"^(?:on|at|over|during)\s+(?:the\s+)?weekends?|^weekends"),
+            new Regex(@"^(?:on|during)\s+(?:the\s+)?(?:weekdays?|week|work\s*days?)|^weekdays"),
+            new Regex(@"^(?:on|every)\s+((?:(?:mon|tues|wednes|thurs|fri|satur|sun)days?(?:\s*,\s*|\s+and\s+|\s+)?)+)"),
+            new Regex(@"^(?:in|during|all|for|for\s+all\s+of|throughout|all\s+of)\s+(january|february|march|april|may|june|july|august|september|october|november|december)"),
+            new Regex(@"^(?:on|for|at)\s+(christmas(?:\s+day)?|xmas|christmas\s+eve|halloween|new\s+year'?s(?:\s+day)?|valentine'?s(?:\s+day)?|new\s+year'?s\s+eve)"),
+        };
+        for (int guard = 0; guard < 8 && rest.Length > 0; guard++)
+        {
+            rest = Regex.Replace(rest, @"^(?:and|,|but|only|just)\s*", "").Trim();
+            if (rest.Length == 0) break;
+            Match m = null;
+            int which = -1;
+            for (int i = 0; i < parts.Length; i++) { m = parts[i].Match(rest); if (m.Success) { which = i; break; } }
+            if (which < 0) return null;
+            switch (which)
+            {
+                case 0: r.From = 22 * 60; r.To = 7 * 60; break;
+                case 1: r.From = 6 * 60; r.To = 12 * 60; break;
+                case 2: r.From = 12 * 60; r.To = 17 * 60; break;
+                case 3: r.From = 17 * 60; r.To = 22 * 60; break;
+                case 4: r.From = 7 * 60; r.To = 22 * 60; break;
+                case 5:
+                    int a = ParseTime(m.Groups[1].Value), b = ParseTime(m.Groups[2].Value);
+                    // "from 9 to 5" with no am or pm: the 5 is in the afternoon
+                    if (b >= 0 && a >= 0 && b <= a && !Regex.IsMatch(m.Groups[2].Value, "am|pm|:|noon|midday|midnight") && b + 12 * 60 > a && b < 12 * 60) b += 12 * 60;
+                    if (a < 0 || b < 0 || a == b) return null;
+                    r.From = a; r.To = b; break;
+                case 6: r.Days = new bool[7]; r.Days[0] = r.Days[6] = true; break;
+                case 7: r.Days = new bool[7]; for (int d = 1; d <= 5; d++) r.Days[d] = true; break;
+                case 8:
+                    r.Days = new bool[7];
+                    foreach (Match d in Regex.Matches(m.Groups[1].Value, @"(mon|tues|wednes|thurs|fri|satur|sun)day"))
+                        r.Days[Array.FindIndex(DayNames, n => n.ToLowerInvariant().StartsWith(d.Groups[1].Value))] = true;
+                    break;
+                case 9:
+                    int month = Array.FindIndex(MonthNames, n => n.ToLowerInvariant() == m.Groups[1].Value) + 1;
+                    r.DateFrom = month * 100 + 1; r.DateTo = month * 100 + DateTime.DaysInMonth(2024, month); break;
+                case 10:
+                    string h = m.Groups[1].Value;
+                    int date = h.StartsWith("hallo") ? 1031 : h.StartsWith("val") ? 214 : h.Contains("eve") && h.StartsWith("new") ? 1231
+                             : h.StartsWith("new") ? 101 : h.Contains("eve") ? 1224 : 1225;
+                    r.DateFrom = r.DateTo = date; break;
+            }
+            any = true;
+            rest = rest.Substring(m.Length).Trim();
+        }
+        return any && rest.Length == 0 ? r : null;
+    }
+
+    // The skin they mean: "neon sign", "the crimson Santa hat", "Sakura".
+    private string FindSkin(string asked)
+    {
+        List<string> want = new List<string>();
+        foreach (string w in Regex.Split(asked.ToLowerInvariant(), @"[^a-z0-9]+"))
+            if (w.Length > 0 && w != "the" && w != "my" && w != "your" && w != "skin" && w != "outfit" && w != "look" && w != "a" && w != "an") want.Add(w);
+        if (want.Count == 0) return null;
+        string joined = string.Join("", want.ToArray());
+        string best = null;
+        foreach (string id in capri.Skins.Installed ?? new string[0])
+        {
+            string squashed = id.ToLowerInvariant().Replace("-", "");
+            if (squashed == joined) return id;
+            List<string> has = new List<string>(id.ToLowerInvariant().Split('-'));
+            bool all = true;
+            foreach (string w in want) if (!has.Contains(w) && !(w.EndsWith("s") && has.Contains(w.TrimEnd('s')))) { all = false; break; }
+            if (all && (best == null || id.Length < best.Length)) best = id;
+        }
+        return best;
+    }
+
+    // Specific rules go above broad ones, so a date beats a time of day, which beats days of the week, which beats "always".
+    private static int Rank(Rule r)
+    {
+        return (r.DateFrom >= 0 ? 8 : 0) + (r.From >= 0 ? 4 : 0) + (r.Days != null ? 2 : 0);
+    }
+
+    private void Add(Rule rule)
+    {
+        int at = rules.Count;
+        for (int i = 0; i < rules.Count; i++) if (Rank(rules[i]) < Rank(rule)) { at = i; break; }
+        rules.Insert(at, rule);
+        Save();
+    }
+
+    // ---- saying it back ----
+
+    private static string Name(string id)
+    {
+        if (id == null || id == "none") return "my own look";
+        StringBuilder b = new StringBuilder();
+        foreach (string w in id.Split('-'))
+        {
+            if (w.Length == 0) continue;
+            if (b.Length > 0) b.Append(' ');
+            b.Append(char.ToUpperInvariant(w[0])).Append(w.Substring(1));
+        }
+        return b.ToString();
+    }
+
+    private static string Clock12(int minutes)
+    {
+        int h = minutes / 60, m = minutes % 60;
+        if (minutes == 0) return "midnight";
+        if (minutes == 12 * 60) return "noon";
+        string ap = h < 12 ? "am" : "pm";
+        h = h % 12; if (h == 0) h = 12;
+        return h + (m > 0 ? ":" + m.ToString("00") : "") + ap;
+    }
+
+    private static string DateText(int md) { return (md % 100) + " " + MonthNames[md / 100 - 1]; }
+
+    private static string Describe(Rule r)
+    {
+        string what;
+        if (r.Skin != null && r.Accessory != null) what = Name(r.Skin) + " with " + Name(r.Accessory);
+        else if (r.Skin != null) what = r.Skin == "none" ? "My own look" : Name(r.Skin);
+        else what = Name(r.Accessory) + " on top";
+        List<string> when = new List<string>();
+        if (r.From >= 0)
+        {
+            if (r.From == 22 * 60 && r.To == 7 * 60) when.Add("at night");
+            else if (r.From == 7 * 60 && r.To == 22 * 60) when.Add("during the day");
+            else when.Add("from " + Clock12(r.From) + " to " + Clock12(r.To));
+        }
+        if (r.Days != null)
+        {
+            List<string> d = new List<string>();
+            for (int i = 0; i < 7; i++) if (r.Days[(i + 1) % 7]) d.Add(DayNames[(i + 1) % 7] + "s");
+            if (d.Count == 2 && r.Days[0] && r.Days[6]) when.Add("on weekends");
+            else if (d.Count == 5 && !r.Days[0] && !r.Days[6]) when.Add("on weekdays");
+            else if (d.Count > 0 && d.Count < 7) when.Add("on " + (d.Count == 1 ? d[0] : string.Join(", ", d.GetRange(0, d.Count - 1).ToArray()) + " and " + d[d.Count - 1]));
+        }
+        if (r.DateFrom >= 0)
+        {
+            int month = r.DateFrom / 100;
+            if (r.DateFrom == r.DateTo) when.Add("on " + DateText(r.DateFrom));
+            else if (r.DateFrom % 100 == 1 && r.DateTo / 100 == month && r.DateTo % 100 == DateTime.DaysInMonth(2024, month)) when.Add("in " + MonthNames[month - 1]);
+            else when.Add("from " + DateText(r.DateFrom) + " to " + DateText(r.DateTo));
+        }
+        if (when.Count == 0) when.Add("the rest of the time");
+        return what + " " + string.Join(" ", when.ToArray());
+    }
+
+    private string Schedule()
+    {
+        if (rules.Count == 0) return "There's nothing on the outfit schedule. Try \"wear Neon Sign at night\".";
+        List<string> lines = new List<string>();
+        foreach (Rule r in rules) lines.Add(Describe(r));
+        string count = Count(rules.Count, "rules");
+        string text = (rules.Count == 1 ? "One rule: " : char.ToUpperInvariant(count[0]) + count.Substring(1) + ", top one first: ") + string.Join("; ", lines.ToArray()) + ".";
+        if (paused) text += " It's paused right now.";
+        return text;
+    }
+
+    private static string Count(int n, string what)
+    {
+        string[] words = { "no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten" };
+        string single = what.EndsWith("s") ? what.Substring(0, what.Length - 1) : what;
+        return (n < words.Length ? words[n] : n.ToString(CultureInfo.InvariantCulture)) + " " + (n == 1 ? single : single + "s");
+    }
+
+    // ---- keeping the rules: one line each in her store ----
+
+    private void Save()
+    {
+        List<string> lines = new List<string>();
+        foreach (Rule r in rules)
+        {
+            string days = "";
+            if (r.Days != null) for (int i = 0; i < 7; i++) if (r.Days[i]) days += i;
+            lines.Add(string.Join(";", new[] { "t=" + r.From + "-" + r.To, "d=" + r.DateFrom + "-" + r.DateTo, "w=" + (r.Days == null ? "*" : days), "s=" + (r.Skin ?? ""), "a=" + (r.Accessory ?? "") }));
+        }
+        capri.Store.Set("rules", string.Join("\n", lines.ToArray()));
+    }
+
+    private void Load()
+    {
+        rules.Clear();
+        string saved = capri.Store.Get("rules");
+        if (string.IsNullOrEmpty(saved)) return;
+        foreach (string line in saved.Split('\n'))
+        {
+            try
+            {
+                Rule r = new Rule();
+                foreach (string part in line.Split(';'))
+                {
+                    int eq = part.IndexOf('=');
+                    if (eq < 0) continue;
+                    string k = part.Substring(0, eq), v = part.Substring(eq + 1);
+                    if (k == "t" || k == "d")
+                    {
+                        int dash = v.IndexOf('-', 1);
+                        int a = int.Parse(v.Substring(0, dash), CultureInfo.InvariantCulture), b = int.Parse(v.Substring(dash + 1), CultureInfo.InvariantCulture);
+                        if (k == "t") { r.From = a; r.To = b; } else { r.DateFrom = a; r.DateTo = b; }
+                    }
+                    else if (k == "w" && v != "*") { r.Days = new bool[7]; foreach (char c in v) if (c >= '0' && c <= '6') r.Days[c - '0'] = true; }
+                    else if (k == "s" && v.Length > 0) r.Skin = v;
+                    else if (k == "a" && v.Length > 0) r.Accessory = v;
+                }
+                if (r.Skin != null || r.Accessory != null) rules.Add(r);
+            }
+            catch (FormatException) { }
+            catch (ArgumentOutOfRangeException) { }
+        }
+    }
+
+    // ---- the options page ----
+
+    private Control MakeOptions()
+    {
+        FlowLayoutPanel page = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Padding = new Padding(8) };
+        CheckBox pausedBox = new CheckBox { Text = "Paused", Checked = paused, AutoSize = true };
+        pausedBox.CheckedChanged += delegate { paused = pausedBox.Checked; capri.Store.Set("paused", paused); if (!paused) Check(); };
+        page.Controls.Add(pausedBox);
+        page.Controls.Add(new Label { Text = "Rules (the top one wins when two want a skin):", AutoSize = true });
+        ListBox list = new ListBox { Width = 460, Height = 140, IntegralHeight = false };
+        Action refill = delegate
+        {
+            int keep = list.SelectedIndex;
+            list.Items.Clear();
+            foreach (Rule r in rules) list.Items.Add(Describe(r));
+            if (keep >= 0 && keep < list.Items.Count) list.SelectedIndex = keep;
+        };
+        refill();
+        page.Controls.Add(list);
+        FlowLayoutPanel moves = new FlowLayoutPanel { AutoSize = true };
+        Button up = new Button { Text = "Up", AutoSize = true }, down = new Button { Text = "Down", AutoSize = true }, delete = new Button { Text = "Delete", AutoSize = true };
+        up.Click += delegate { int i = list.SelectedIndex; if (i <= 0) return; Rule r = rules[i]; rules.RemoveAt(i); rules.Insert(i - 1, r); Save(); refill(); list.SelectedIndex = i - 1; Check(); };
+        down.Click += delegate { int i = list.SelectedIndex; if (i < 0 || i >= rules.Count - 1) return; Rule r = rules[i]; rules.RemoveAt(i); rules.Insert(i + 1, r); Save(); refill(); list.SelectedIndex = i + 1; Check(); };
+        delete.Click += delegate { int i = list.SelectedIndex; if (i < 0) return; rules.RemoveAt(i); Save(); refill(); Check(); };
+        moves.Controls.Add(up); moves.Controls.Add(down); moves.Controls.Add(delete);
+        page.Controls.Add(moves);
+
+        page.Controls.Add(new Label { Text = "New rule:", AutoSize = true, Font = new Font(SystemFonts.DefaultFont, FontStyle.Bold) });
+        TableLayoutPanel form = new TableLayoutPanel { ColumnCount = 2, AutoSize = true };
+        TextBox from = new TextBox { Width = 90 }, to = new TextBox { Width = 90 }, dates = new TextBox { Width = 200 };
+        ComboBox days = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
+        days.Items.AddRange(new object[] { "Every day", "Weekdays", "Weekends", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" });
+        days.SelectedIndex = 0;
+        ComboBox skin = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+        ComboBox acc = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
+        List<string> skinIds = new List<string> { null, "none" }, accIds = new List<string> { null };
+        skin.Items.Add("(leave her skin)"); skin.Items.Add("Her own look");
+        acc.Items.Add("(none)");
+        foreach (string id in capri.Skins.Installed ?? new string[0])
+        {
+            if (capri.Skins.IsAccessory(id)) { accIds.Add(id); acc.Items.Add(Name(id)); }
+            else { skinIds.Add(id); skin.Items.Add(Name(id)); }
+        }
+        skin.SelectedIndex = 0; acc.SelectedIndex = 0;
+        string[] labels = { "From (like 10pm)", "To (like 7am)", "Days", "Dates (like December, or 20 December to 6 January)", "Skin", "Accessory" };
+        Control[] boxes = { from, to, days, dates, skin, acc };
+        for (int i = 0; i < labels.Length; i++)
+        {
+            form.Controls.Add(new Label { Text = labels[i], AutoSize = true, Anchor = AnchorStyles.Left, MaximumSize = new Size(220, 0) });
+            form.Controls.Add(boxes[i]);
+        }
+        page.Controls.Add(form);
+        Label problem = new Label { AutoSize = true, ForeColor = Color.Firebrick };
+        Button add = new Button { Text = "Add rule", AutoSize = true };
+        add.Click += delegate
+        {
+            Rule r = new Rule();
+            if (from.Text.Trim().Length > 0 || to.Text.Trim().Length > 0)
+            {
+                r.From = ParseTime(from.Text); r.To = ParseTime(to.Text);
+                if (r.From < 0 || r.To < 0 || r.From == r.To) { problem.Text = "Times look like 10pm, 7:30am or 22:00."; return; }
+            }
+            int d = days.SelectedIndex;
+            if (d == 1) { r.Days = new bool[7]; for (int i = 1; i <= 5; i++) r.Days[i] = true; }
+            else if (d == 2) { r.Days = new bool[7]; r.Days[0] = r.Days[6] = true; }
+            else if (d >= 3) { r.Days = new bool[7]; r.Days[(d - 2) % 7] = true; }
+            if (dates.Text.Trim().Length > 0 && !ReadDates(dates.Text, r)) { problem.Text = "Dates look like December, 25 December, or 20 December to 6 January."; return; }
+            r.Skin = skinIds[skin.SelectedIndex];
+            r.Accessory = accIds[acc.SelectedIndex];
+            if (r.Skin == null && r.Accessory == null) { problem.Text = "Pick a skin, an accessory or both."; return; }
+            problem.Text = "";
+            Add(r);
+            refill();
+            from.Text = to.Text = dates.Text = "";
+            Check();
+        };
+        page.Controls.Add(add);
+        page.Controls.Add(problem);
+        return page;
+    }
+
+    private static bool ReadDates(string text, Rule r)
+    {
+        string t = text.Trim().ToLowerInvariant();
+        int month = Array.FindIndex(MonthNames, n => n.ToLowerInvariant() == t) + 1;
+        if (month > 0) { r.DateFrom = month * 100 + 1; r.DateTo = month * 100 + DateTime.DaysInMonth(2024, month); return true; }
+        string[] ends = Regex.Split(t, @"\s+(?:to|until|till|-)\s+");
+        int a = OneDate(ends[0]), b = ends.Length > 1 ? OneDate(ends[1]) : a;
+        if (a < 0 || b < 0 || ends.Length > 2) return false;
+        r.DateFrom = a; r.DateTo = b;
+        return true;
+    }
+
+    private static int OneDate(string text)
+    {
+        Match m = Regex.Match(text.Trim(), @"^(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?([a-z]+)$|^([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?$");
+        if (!m.Success) return -1;
+        string monthWord = m.Groups[2].Success && m.Groups[2].Length > 0 ? m.Groups[2].Value : m.Groups[3].Value;
+        int day = int.Parse(m.Groups[1].Success && m.Groups[1].Length > 0 ? m.Groups[1].Value : m.Groups[4].Value);
+        int month = Array.FindIndex(MonthNames, n => n.ToLowerInvariant().StartsWith(monthWord) && monthWord.Length >= 3) + 1;
+        if (month == 0 || day < 1 || day > DateTime.DaysInMonth(2024, month)) return -1;
+        return month * 100 + day;
+    }
+}
