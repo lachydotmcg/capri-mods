@@ -1,0 +1,324 @@
+// capri-mod: 1
+// id: track-commentator
+// name: Track Commentator
+// version: 1.2.0
+// author: kyltest12
+// description: Capri comments on new songs in her own style (English and Russian), skips ads, and keeps a list of tracks you liked.
+// permissions: music, brain
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Text.RegularExpressions;
+using CapriDesktop;
+
+public class TrackCommentator : ICapriMod
+{
+    private ICapriHost capri;
+    private bool enabled = true;
+    private int every = 3;
+    private string lang = "en";
+    private int counter;
+    private string pendingKey = "";
+    private string lastCommentedKey = "";
+    private DateTime lastCommentAt = DateTime.MinValue;
+
+    private const string RulesRu =
+        "Ты Capri: дерзкая, тёплая цифровая подруга, которая живёт на рабочем столе. " +
+        "Ответь ОДНОЙ короткой репликой (до 120 символов) на русском: отреагируй на песню, которую слушает пользователь. " +
+        "Не цитируй текст песни. Не выдумывай факты об исполнителе: если не уверена, пошути про название или настроение. " +
+        "Без эмодзи, без кавычек, без пояснений.";
+
+    private const string RulesEn =
+        "You are Capri: a sassy, warm digital friend who lives on the user's desktop. " +
+        "Reply with ONE short line (under 120 characters) in English reacting to the song the user is listening to. " +
+        "Do not quote lyrics. Do not invent facts about the artist: if you are not sure, joke about the title or the mood. " +
+        "No emojis, no quotation marks, no explanations.";
+
+    // ---------- setup ----------
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+
+        string defaultLang = CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "ru" : "en";
+        lang = capri.Store.Get("lang", defaultLang) == "ru" ? "ru" : "en";
+        enabled = capri.Store.Get("enabled", "1") != "0";
+
+        int saved;
+        if (int.TryParse(capri.Store.Get("every", "3"), out saved) && saved >= 1 && saved <= 20)
+            every = saved;
+
+        // A song that is already playing is not a "new" song.
+        CapriTrack current = capri.Music.Now;
+        if (current != null) pendingKey = current.Key;
+
+        capri.Music.Changed += delegate(CapriTrack track)
+        {
+            OnTrack(track);
+        };
+
+        capri.Log("Started. lang=" + lang + ", every " + every + " tracks.");
+    }
+
+    public void Stop()
+    {
+        capri.Log("Stopped.");
+    }
+
+    private string T(string ru, string en)
+    {
+        return lang == "ru" ? ru : en;
+    }
+
+    private void Save()
+    {
+        capri.Store.Set("enabled", enabled ? "1" : "0");
+        capri.Store.Set("every", every.ToString());
+        capri.Store.Set("lang", lang);
+    }
+
+    // ---------- commenting ----------
+
+    private void OnTrack(CapriTrack track)
+    {
+        if (track == null) return;
+
+        capri.Log("track: " + track.Artist + " - " + track.Title + " | video=" + track.Video +
+            " length=" + track.Length + " canSeek=" + track.CanSeek + " canSkip=" + track.CanSkip);
+
+        if (track.Video) { capri.Log("skip: video"); return; }
+        if (IsAd(track)) { capri.Log("skip: looks like an ad"); return; }
+
+        string key = track.Key;
+        if (key == pendingKey) return;
+        pendingKey = key;
+
+        counter++;
+        if (!enabled) return;
+        if (counter < every) return;
+
+        // Wait a bit so skipped songs do not get a comment.
+        capri.Timers.After(12, delegate
+        {
+            Comment(key);
+        });
+    }
+
+    private void Comment(string key)
+    {
+        CapriTrack now = capri.Music.Now;
+        if (now == null || now.Key != key || !now.Playing || IsAd(now)) return;
+        if (key == lastCommentedKey) return;
+        if ((DateTime.Now - lastCommentAt).TotalSeconds < 60) return;
+        if (capri.Chat.Busy) return;
+        if (!capri.Brain.Ready)
+        {
+            capri.Log("no comment: her brain is not set up");
+            return;
+        }
+
+        counter = 0;
+        lastCommentedKey = key;
+        lastCommentAt = DateTime.Now;
+
+        string who = string.IsNullOrEmpty(now.Artist) ? T("неизвестный исполнитель", "unknown artist") : now.Artist;
+        string question = T("Сейчас играет: ", "Now playing: ") + who + " - " + (now.Title ?? "") + ".";
+
+        capri.Brain.Ask(lang == "ru" ? RulesRu : RulesEn, question, delegate(string reply)
+        {
+            if (string.IsNullOrEmpty(reply))
+            {
+                capri.Log("her brain did not answer");
+                return;
+            }
+            reply = reply.Trim();
+            if (reply.Length > 200) reply = reply.Substring(0, 200);
+            capri.Say(reply);
+        });
+    }
+
+    // Ads between songs: music apps report them as a "track" too.
+    private static bool IsAd(CapriTrack t)
+    {
+        string title = (t.Title ?? "").ToLowerInvariant();
+        string artist = (t.Artist ?? "").ToLowerInvariant();
+        string album = (t.Album ?? "").ToLowerInvariant();
+
+        string[] words = new string[] { "advertisement", "реклам", "sponsored" };
+        foreach (string w in words)
+        {
+            if (title.Contains(w) || artist.Contains(w) || album.Contains(w)) return true;
+        }
+
+        // Spotify's free tier names ads "Spotify" with no real artist.
+        if (title == "spotify" && (artist.Length == 0 || artist == "spotify")) return true;
+
+        // A short "track" that can't be skipped or rewound is almost always an ad.
+        if (t.Length > 0 && t.Length <= 45 && !t.CanSeek && !t.CanSkip) return true;
+
+        return false;
+    }
+
+    // ---------- commands (English and Russian) ----------
+
+    public bool Heard(string words)
+    {
+        string line = words.ToLowerInvariant();
+
+        // language
+        bool wantsEn = (line.Contains("english") && Regex.IsMatch(line, @"language|speak|switch|talk|reply"))
+            || (line.Contains("англ") && Regex.IsMatch(line, @"язык|говори|переключ|отвечай"));
+        bool wantsRu = (line.Contains("russian") && Regex.IsMatch(line, @"language|speak|switch|talk|reply"))
+            || (line.Contains("русск") && Regex.IsMatch(line, @"язык|говори|переключ|отвечай"));
+        if (wantsEn || wantsRu)
+        {
+            lang = wantsEn ? "en" : "ru";
+            Save();
+            capri.Say(T("Хорошо, теперь комментирую по-русски.", "Okay, I'll comment in English from now on."));
+            return true;
+        }
+
+        // status
+        if (line.Contains("commentator") && line.Contains("status")
+            || line.Contains("статус") && line.Contains("комментатор"))
+        {
+            CapriTrack now = capri.Music.Now;
+            string playing = now == null ? T("ничего не вижу", "nothing detected") : now.Artist + " - " + now.Title;
+            capri.Say(T(
+                "Комментатор " + (enabled ? "включён" : "выключен") + ", каждый " + every + "-й трек, насчитано " + counter +
+                ". Мозг " + (capri.Brain.Ready ? "готов" : "не настроен") + ". Сейчас: " + playing + ".",
+                "Commentator is " + (enabled ? "on" : "off") + ", every " + every + " tracks, counted " + counter +
+                ". Brain is " + (capri.Brain.Ready ? "ready" : "not set up") + ". Now: " + playing + "."));
+            return true;
+        }
+
+        bool trackWord = line.Contains("трек") || line.Contains("песн") || line.Contains("track") || line.Contains("song");
+
+        // liked tracks: clear / show
+        bool likedWord = line.Contains("любим") || line.Contains("favorite") || line.Contains("favourite") || line.Contains("liked");
+        if (likedWord && trackWord)
+        {
+            if (Regex.IsMatch(line, @"забудь|очист|forget|clear|delete"))
+            {
+                capri.Store.Remove("liked");
+                capri.Say(T("Список любимых треков очищен.", "Your list of liked tracks is cleared."));
+            }
+            else
+            {
+                ShowLiked();
+            }
+            return true;
+        }
+
+        // liked tracks: add current
+        if (trackWord && Regex.IsMatch(line, @"запомни|remember|save"))
+        {
+            Like();
+            return true;
+        }
+
+        // comment frequency / on / off
+        if (line.Contains("коммент") || line.Contains("comment"))
+        {
+            bool off = Regex.IsMatch(line, @"выкл|отключ|хватит|\b(off|disable|stop|mute|quiet)\b");
+            bool on = line.Contains("вкл") || Regex.IsMatch(line, @"\b(on|enable|start|resume)\b");
+            bool changed = false;
+
+            Match m = Regex.Match(line, @"\d+");
+            if (m.Success)
+            {
+                int n;
+                if (int.TryParse(m.Value, out n))
+                {
+                    if (n < 1) n = 1;
+                    if (n > 20) n = 20;
+                    every = n;
+                    changed = true;
+                }
+            }
+            else if (line.Contains("кажд") || Regex.IsMatch(line, @"\bevery\b"))
+            {
+                every = 1;
+                changed = true;
+            }
+
+            if (off)
+            {
+                enabled = false;
+                Save();
+                capri.Say(T("Ладно, про музыку молчу.", "Okay, I'll keep quiet about your music."));
+                return true;
+            }
+
+            if (on || changed)
+            {
+                enabled = true;
+                counter = 0;
+                Save();
+                capri.Say(T(
+                    "Комментирую каждый " + every + "-й трек.",
+                    "Commenting on every " + every + (every == 1 ? " track." : " tracks.")));
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    // ---------- liked tracks ----------
+
+    private void Like()
+    {
+        CapriTrack now = capri.Music.Now;
+        if (now == null || string.IsNullOrEmpty(now.Title))
+        {
+            capri.Say(T("Сейчас ничего не играет.", "Nothing is playing right now."));
+            return;
+        }
+
+        string entry = string.IsNullOrEmpty(now.Artist) ? now.Title : now.Artist + " - " + now.Title;
+        List<string> list = LoadLiked();
+
+        if (list.Contains(entry))
+        {
+            capri.Say(T("Он уже в списке.", "It's already on the list."));
+            return;
+        }
+
+        list.Add(entry);
+        while (list.Count > 100) list.RemoveAt(0);
+        capri.Store.Set("liked", string.Join("\n", list.ToArray()));
+        capri.Say(T("Запомнила: ", "Saved: ") + entry);
+    }
+
+    private void ShowLiked()
+    {
+        List<string> list = LoadLiked();
+        if (list.Count == 0)
+        {
+            capri.Say(T(
+                "Пока список пуст. Скажи «запомни этот трек», пока играет песня.",
+                "The list is empty. Say \"remember this track\" while a song is playing."));
+            return;
+        }
+
+        int from = Math.Max(0, list.Count - 5);
+        string last = string.Join("; ", list.GetRange(from, list.Count - from).ToArray());
+        capri.Say(T(
+            "Последние любимые треки: " + last + ". Всего их " + list.Count + ".",
+            "Latest liked tracks: " + last + ". " + list.Count + " in total."));
+    }
+
+    private List<string> LoadLiked()
+    {
+        List<string> list = new List<string>();
+        string raw = capri.Store.Get("liked", "");
+        foreach (string part in raw.Split('\n'))
+        {
+            if (part.Length > 0) list.Add(part);
+        }
+        return list;
+    }
+}
