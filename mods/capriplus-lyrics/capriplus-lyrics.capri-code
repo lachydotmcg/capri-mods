@@ -1,0 +1,3244 @@
+// capri-mod: 1
+// id: capriplus-lyrics
+// name: Capri+ Lyrics
+// version: 1.0.0
+// author: Capri+ (unofficial community mod)
+// description: Synced lyrics as a drawer out of Capri's music player, in her style, reacting to the music. Looks songs up on lrclib.net with only title, artist, album and length.
+// permissions: music
+// requires: api 3
+
+using System;
+using System.Collections;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using CapriDesktop;
+
+// Capri+ Lyrics, an unofficial community mod (not made by or affiliated with Capri's makers, CD PROJEKT RED or Studio
+// Trigger). It follows what's playing through Capri's own Music API (track, position, playing), looks the track up on LRCLIB,
+// keeps what it finds in its own folder, and shows the lines around "now".
+//
+// While Capri's own music player (her "mini player", which she perches on while music plays) is up, the lyrics are a
+// drawer out of it: a separate window, because no mod can draw into her player, slotted just under it in z-order, flush
+// against its plate and drawn in its style, so the player looks like it grew a lyrics section. With no player up, they
+// hang under Capri in her speech-bubble style instead.
+//
+// Network: only https://lrclib.net/api/get, only with the track's title, artist, album and length, never with anything
+// about the PC, the user or Capri. Lookups can be turned off in Options; the cache still works then.
+// See README.md beside this file in capri-mods.
+namespace CapriPlus.Lyrics
+{
+    // ------------------------------------------------------------------------------------------------- the mod itself
+
+    public class CapriPlusLyrics : ICapriMod
+    {
+        internal const string Version = "1.0.0";
+
+        // Tests replace these: the real ones use a window, Windows itself and the network.
+        internal static Func<DateTime> Clock = delegate { return DateTime.UtcNow; };
+        internal static Func<ICapriHost, ILyricsSurface> MakeSurface = delegate { return new LyricsWindow(); };
+        internal static Func<ICapriHost, IDesktop> MakeDesktop = delegate(ICapriHost host) { return new WindowsDesktop(host); };
+        internal static Func<ILyricsSource> MakeSource = delegate { return new LrclibSource(); };
+        internal static string FontFile;
+
+        private const double AppearSeconds = 0.2, LeaveSeconds = 0.25, FullscreenCheckSeconds = 0.5;
+
+        private ICapriHost capri;
+        private LyricsSettings settings;
+        private LyricsEngine engine;
+        private LyricsArt art;
+        private IDesktop desktop;
+        private ILyricsSurface surface;
+        private ICapriTimer frames;
+        private string shown;
+        private DateTime appearedAt = DateTime.MinValue, leftAt = DateTime.MinValue, fullscreenAt = DateTime.MinValue;
+        internal TrackerInfo LastTracker { get { return desktop == null ? null : desktop.Tracker(); } }
+        private bool fullscreen, wasVisible;
+        private LyricsView lastView;
+        private readonly Random random = new Random();
+        private readonly Reactor reactor = new Reactor(Environment.TickCount);
+        private readonly DateTime started = DateTime.UtcNow;
+        private string reactKey;
+        private bool reduced, listened;
+        private DateTime reducedAt = DateTime.MinValue;
+
+        internal Reactor Reactor { get { return reactor; } }
+        internal int Redraws;
+
+        internal LyricsEngine Engine { get { return engine; } }
+        internal LyricsSettings Settings { get { return settings; } }
+
+        public void Start(ICapriHost host)
+        {
+            capri = host;
+            settings = LyricsSettings.Load(host.Store);
+            engine = new LyricsEngine(settings, new LyricsCache(Path.Combine(host.Folder, "cache")), MakeSource());
+            desktop = MakeDesktop(host);
+            art = new LyricsArt(FontFile);
+            host.Music.Updated += OnMusic;
+            host.Music.Changed += OnMusic;
+            host.Ui.AddMenuItem("Capri+ lyrics: on/off", Toggle);
+            host.Ui.AddMenuItem("Capri+ lyrics: 0.25 s earlier", delegate { Nudge(-250); });
+            host.Ui.AddMenuItem("Capri+ lyrics: 0.25 s later", delegate { Nudge(250); });
+            host.Ui.AddMenuItem("Capri+ lyrics: status", delegate { capri.Ui.Bubble(engine.Status(Clock())); });
+            host.Ui.AddMenuItem("Capri+ lyrics: music diagnostics", delegate { capri.Mainframe.ShowPage("Capri+ Lyrics: music diagnostics", MakeDiagnostics); });
+            host.Ui.SetOptions("Capri+ Lyrics", MakeOptions);
+            frames = host.Timers.Every(0.033, OnFrame);
+            engine.Subscribed(Clock());
+            OnMusic(host.Music.Now);
+            host.Log("Capri+ Lyrics " + Version + " started.");
+        }
+
+        public bool Heard(string words)
+        {
+            return false;
+        }
+
+        public void Stop()
+        {
+            if (frames != null) frames.Cancel();
+            if (engine != null) engine.Stop();
+            if (surface != null) { surface.Close(); surface = null; }
+            if (art != null) art.Dispose();
+        }
+
+        // What's playing, from Capri's own Music API (about once a second, and at once on a new song), as the same timeline
+        // the engine follows: which track, and where it is now. Nothing here goes anywhere but this mod.
+        private void OnMusic(CapriTrack track)
+        {
+            DateTime now = Clock();
+            Dictionary<string, object> feed = J.Of("at", Math.Round(Timeline.Ms(now)));
+            if (track == null || string.IsNullOrEmpty(track.Key)) feed["none"] = true;
+            else
+            {
+                feed["key"] = track.Key;
+                feed["title"] = track.Title ?? "";
+                feed["artist"] = track.Artist ?? "";
+                feed["album"] = track.Album ?? "";
+                feed["app"] = track.App ?? "";
+                feed["music"] = track.Music;
+                feed["video"] = track.Video;
+                feed["playing"] = track.Playing;
+                feed["position"] = Math.Round(Math.Max(0, track.At()), 3);
+                feed["length"] = Math.Round(Math.Max(0, track.Length), 3);
+                feed["rate"] = track.Rate > 0 ? track.Rate : 1.0;
+            }
+            engine.OnFeed(Json.Write(feed), now);
+        }
+
+        private void Toggle()
+        {
+            settings.Enabled = !settings.Enabled;
+            settings.Save(capri.Store);
+            engine.SettingsChanged(Clock());
+            capri.Ui.Bubble("Capri+ lyrics " + (settings.Enabled ? "on." : "off."));
+        }
+
+        private void Nudge(int ms)
+        {
+            settings.OffsetMs = LyricsSettings.Clamp(settings.OffsetMs + ms, LyricsSettings.MinOffset, LyricsSettings.MaxOffset);
+            settings.Save(capri.Store);
+            capri.Ui.Bubble("Lyrics timing " + (settings.OffsetMs == 0 ? "back to 0." : (settings.OffsetMs > 0 ? "+" : "") + settings.OffsetMs + " ms (" + (settings.OffsetMs < 0 ? "earlier" : "later") + ")."));
+        }
+
+        private const double RevealSeconds = 0.24, CollapseSeconds = 0.22;
+
+        // The look the drawer is drawn in this frame: Off is the still 0.2 drawer; any other setting animates the lines.
+        private ReactMode drawMode = ReactMode.Off;
+
+        private void OnFrame()
+        {
+            DateTime now = Clock();
+            engine.Tick(now);
+            LyricsView view = engine.View(now);
+            string state = capri.Her.State;
+            TrackerInfo tracker = desktop.Tracker();
+            bool talking = state == "talking" || state == "thinking";
+            // Her own bubble comes first. It goes over her head, or under her feet when there's no room above; under her
+            // feet while she sits on her player, it would land on the lyrics, so they fold away while she talks.
+            bool bubbleLow = talking && tracker != null && BubbleBelow(desktop.Scale());
+            bool gone = state == "hidden" || Fullscreen(now);
+            bool visible = view.Visible && !gone && !bubbleLow;
+            if (visible && !wasVisible) appearedAt = now;
+            if (!visible && wasVisible) leftAt = gone ? DateTime.MinValue : now;
+            wasVisible = visible;
+            if (visible) lastView = view;
+            double leaving = (now - leftAt).TotalSeconds;
+            if (!visible && (lastView == null || leaving >= Math.Max(LeaveSeconds, CollapseSeconds))) { HideSurface(); return; }
+            LyricsView shown = visible ? view : lastView;
+            double since = (now - appearedAt).TotalSeconds;
+            Reaction react = React(now, shown, visible && tracker != null, talking);
+            if (tracker != null && DrawDrawer(shown, tracker, visible ? Ease(since / RevealSeconds) : 1 - Ease(leaving / CollapseSeconds), talking, react)) return;
+            float glitch = 0;
+            if (visible && since < AppearSeconds) glitch = (float)(1 - since / AppearSeconds);
+            if (!visible) glitch = (float)Math.Min(1, leaving / LeaveSeconds + 0.3);
+            if (shown.JumpGlitch > glitch) glitch = shown.JumpGlitch;
+            DrawBubble(shown, glitch, talking, tracker != null);
+        }
+
+        // The music reaction for this frame. Capri's sound levels are read only while the drawer shows, music plays and she
+        // isn't talking (her own voice is in the same sound), so her listener stops a few seconds after the lyrics go.
+        private Reaction React(DateTime now, LyricsView view, bool drawer, bool talking)
+        {
+            if ((now - reducedAt).TotalSeconds > 2) { reducedAt = now; reduced = desktop.ReducedMotion(); }
+            ReactMode mode = reduced ? ReactMode.Off : settings.React;
+            drawMode = mode;
+            double at = (now - started).TotalSeconds;
+            string key = engine.Track == null ? null : engine.Track.Key;
+            if (key != reactKey || view.JumpGlitch > 0) { reactor.Reset(); reactKey = key; }
+            bool listening = mode != ReactMode.Off && drawer && engine.Playing && !talking;
+            listened = false;
+            if (!listening)
+            {
+                reactor.Feed(0, 0, 0, 0, at, false, mode);
+                return Reaction.None;
+            }
+            listened = true;
+            reactor.Feed(capri.Music.Levels(8), capri.Music.Loudness, at, true, mode);
+            return reactor.Now(at, mode);
+        }
+
+        private static double Ease(double p)
+        {
+            p = Math.Max(0, Math.Min(1, p));
+            return 1 - Math.Pow(1 - p, 3);
+        }
+
+        // Whether her bubble would go under her feet: it goes over her head unless that doesn't leave room for it.
+        private bool BubbleBelow(float s)
+        {
+            return capri.Her.Head.Y - capri.Her.Screen.Top < 160 * s;
+        }
+
+        // The lyrics as a drawer out of her music player. False when it can't fit anywhere around the player without
+        // covering her, and the lyrics go over her head instead.
+        private bool DrawDrawer(LyricsView view, TrackerInfo tracker, double reveal, bool talking, Reaction react)
+        {
+            float s = tracker.Scale;
+            Rectangle area = desktop.AreaOf(tracker.Plate);
+            Drawer drawer = DrawerLayout.Place(tracker.Plate, s, area, capri.Her.Bounds, settings.Lines,
+                delegate(int lines, float width) { return art.DrawerBody(view, settings, s, lines, width); }, art.SideWidth(view, settings, s));
+            if (drawer == null) return false;
+            byte alpha = (byte)Math.Round(255 * Math.Max(0.05, Math.Min(1, settings.Opacity * (talking ? 0.35 : 1))));
+            float tear = Math.Max(view.JumpGlitch, react.Tear);
+            bool animated = drawMode != ReactMode.Off;
+            string signature = "drawer|" + view.Signature + "|" + drawer.Signature + "|" + Math.Round(reveal, 2).ToString(CultureInfo.InvariantCulture) + "|" + alpha + "|" + settings.Signature + "|" + react.Signature
+                + (animated ? "|" + drawMode + "|" + Phase(view, react) : "");
+            if (view.JumpGlitch <= 0 && signature == shown && surface != null && surface.IsShowing) return true;
+            Bitmap image = animated ? art.DrawTransmission(view, settings, drawer, reveal, react, drawMode) : art.DrawDrawer(view, settings, drawer, reveal, react);
+            if (tear > 0) LyricsArt.Tear(image, drawer, s, react.Tear > 0 ? react.Seed : random.Next(1, int.MaxValue));
+            if (surface == null) surface = MakeSurface(capri);
+            surface.Present(image, drawer.At, alpha);
+            surface.Under(tracker.Handle);
+            shown = view.JumpGlitch > 0 ? null : signature;
+            Redraws++;
+            return true;
+        }
+
+        // Which frame of a line change (about 30 a second) or of word-timed singing this is, so the drawer is redrawn while
+        // something moves and left alone once it settles.
+        internal static string Phase(LyricsView view, Reaction react)
+        {
+            string phase = view.Since < LyricsArt.TransitionSeconds(ReactMode.Subtle, Energy.Calm) + 0.05 ? "t" + (int)(view.Since * 30) : "still";
+            foreach (ViewLine line in view.Lines)
+                if (line.Words != null)
+                    foreach (WordSpan word in line.Words)
+                        if (word.Since >= 0 && word.Since < 0.3) phase += "|w" + word.Start + ":" + (int)(word.Since * 30);
+            return phase;
+        }
+
+        private void DrawBubble(LyricsView view, float glitch, bool talking, bool overHer)
+        {
+            float s = desktop.Scale();
+            Rectangle body = capri.Her.Bounds, area = capri.Her.Screen;
+            Point head = capri.Her.Head;
+            double dim = talking ? 0.35 : 1;
+            SizeF panel = art.Measure(view, settings, s, area.Width);
+            // Over her head when her player is under her and there was no room for the lyrics around it.
+            Placement place = OverlayLayout.Place(body, head, area, panel, s, settings.VerticalOffset, overHer);
+            byte alpha = (byte)Math.Round(255 * Math.Max(0.05, Math.Min(1, settings.Opacity * dim)));
+            string signature = "bubble|" + view.Signature + "|" + place.Signature + "|" + s.ToString(CultureInfo.InvariantCulture) + "|" + alpha + "|" + settings.Signature;
+            if (glitch <= 0 && signature == shown && surface != null && surface.IsShowing) return;
+            Bitmap image = art.Draw(view, settings, s, place);
+            if (glitch > 0)
+            {
+                Bitmap broken = LyricsArt.Glitch(image, glitch, s, random);
+                image.Dispose();
+                image = broken;
+            }
+            if (surface == null) surface = MakeSurface(capri);
+            surface.Present(image, place.At, alpha);
+            shown = glitch > 0 ? null : signature;
+        }
+
+        private void HideSurface()
+        {
+            if (surface != null && surface.IsShowing) surface.Hide();
+            shown = null;
+        }
+
+        private bool Fullscreen(DateTime now)
+        {
+            if (settings.Fullscreen) return false;
+            if ((now - fullscreenAt).TotalSeconds < FullscreenCheckSeconds) return fullscreen;
+            fullscreenAt = now;
+            Rectangle body = capri.Her.Bounds;
+            fullscreen = desktop.FullscreenAt(new Point(body.Left + body.Width / 2, body.Top + body.Height / 2));
+            return fullscreen;
+        }
+
+        // What the music reactions see, live, for tuning on a real PC. Only on this page, never on the lyrics.
+        internal string Diagnostics()
+        {
+            DateTime now = Clock();
+            return reactor.Describe((now - started).TotalSeconds, reduced ? ReactMode.Off : settings.React, listened) + (reduced ? "Windows' Animation effects are off, so reactions are off.\n" : "");
+        }
+
+        private Control MakeDiagnostics()
+        {
+            Color back = Color.FromArgb(14, 16, 24);
+            Panel panel = new Panel { Size = new Size(760, 520), BackColor = back };
+            TextBox text = new TextBox
+            {
+                Multiline = true, ReadOnly = true, WordWrap = false, ScrollBars = ScrollBars.Both, BorderStyle = BorderStyle.None,
+                Font = new Font(FontFamily.GenericMonospace, 9.5f), BackColor = back, ForeColor = Color.Gainsboro, Location = new Point(0, 40), Size = new Size(760, 480)
+            };
+            Button copy = new Button { Text = "Copy", Location = new Point(0, 4), Size = new Size(100, 28), FlatStyle = FlatStyle.Flat, ForeColor = Color.White };
+            copy.Click += delegate { Clipboard.SetText(Diagnostics()); };
+            System.Windows.Forms.Timer refresh = new System.Windows.Forms.Timer { Interval = 200 };
+            refresh.Tick += delegate { if (!text.IsDisposed) text.Text = Diagnostics().Replace("\n", "\r\n"); };
+            panel.Disposed += delegate { refresh.Stop(); refresh.Dispose(); };
+            text.Text = Diagnostics().Replace("\n", "\r\n");
+            refresh.Start();
+            panel.Controls.Add(copy);
+            panel.Controls.Add(text);
+            return panel;
+        }
+
+        // ---- Options, beside her other mods in Mainframe.
+
+        private Control MakeOptions()
+        {
+            Panel panel = new Panel { Size = new Size(470, 510), ForeColor = Color.White };
+            int y = 0;
+            Func<string, bool, Action<bool>, CheckBox> check = delegate(string text, bool on, Action<bool> changed)
+            {
+                CheckBox box = new CheckBox { Text = text, Checked = on, AutoSize = true, Location = new Point(0, y) };
+                box.CheckedChanged += delegate { changed(box.Checked); Saved(); };
+                panel.Controls.Add(box);
+                y += 28;
+                return box;
+            };
+            Func<string, int, int, int, int, Func<int, string>, Action<int>, TrackBar> slider = delegate(string text, int min, int max, int step, int value, Func<int, string> show, Action<int> changed)
+            {
+                Label label = new Label { AutoSize = true, Location = new Point(0, y + 4), Text = text + ": " + show(value) };
+                TrackBar bar = new TrackBar { Minimum = min / step, Maximum = max / step, Value = Math.Max(min, Math.Min(max, value)) / step, TickStyle = TickStyle.None, Location = new Point(220, y), Width = 240 };
+                bar.ValueChanged += delegate { changed(bar.Value * step); label.Text = text + ": " + show(bar.Value * step); Saved(); };
+                panel.Controls.Add(label);
+                panel.Controls.Add(bar);
+                y += 36;
+                return bar;
+            };
+            check("Show lyrics", settings.Enabled, delegate(bool on) { settings.Enabled = on; });
+            check("Look up lyrics on lrclib.net (title, artist, album, length)", settings.Online, delegate(bool on) { settings.Online = on; });
+            check("Lyrics for videos too, not only music", settings.Videos, delegate(bool on) { settings.Videos = on; });
+            check("Show over fullscreen apps and games", settings.Fullscreen, delegate(bool on) { settings.Fullscreen = on; });
+            slider("Lines", 1, 3, 1, settings.Lines, delegate(int v) { return v == 1 ? "current" : v == 2 ? "current + next" : "previous, current, next"; }, delegate(int v) { settings.Lines = v; });
+            slider("Text size", 12, 36, 1, settings.FontSize, delegate(int v) { return v + " px"; }, delegate(int v) { settings.FontSize = v; });
+            slider("Opacity", 30, 100, 5, (int)Math.Round(settings.Opacity * 100), delegate(int v) { return v + "%"; }, delegate(int v) { settings.Opacity = v / 100.0; });
+            slider("Distance from her", -100, 300, 5, settings.VerticalOffset, delegate(int v) { return v + " px"; }, delegate(int v) { settings.VerticalOffset = v; });
+            slider("Timing", LyricsSettings.MinOffset, LyricsSettings.MaxOffset, 50, settings.OffsetMs, delegate(int v) { return v == 0 ? "0 ms" : (v > 0 ? "+" : "") + v + " ms (" + (v < 0 ? "earlier" : "later") + ")"; }, delegate(int v) { settings.OffsetMs = v; });
+            slider("Music-reactive", 0, 3, 1, (int)settings.React, delegate(int v) { return v == 0 ? "off" : v == 1 ? "subtle" : v == 2 ? "normal" : "intense"; }, delegate(int v) { settings.React = (ReactMode)v; });
+            slider("Hide when paused after", 0, 120, 5, settings.PausedHideSeconds, delegate(int v) { return v + " s"; }, delegate(int v) { settings.PausedHideSeconds = v; });
+            Button clear = new Button { Text = "Forget saved lyrics", AutoSize = true, Location = new Point(0, y + 4), FlatStyle = FlatStyle.Flat };
+            clear.Click += delegate { int gone = engine.ClearCache(); capri.Ui.Bubble("Forgot " + gone + " saved lyrics."); };
+            panel.Controls.Add(clear);
+            return panel;
+        }
+
+        private void Saved()
+        {
+            settings.Save(capri.Store);
+            engine.SettingsChanged(Clock());
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- settings
+
+    internal enum LyricsMode { Synced, AllowUnsynced, Off }
+
+    internal sealed class LyricsSettings
+    {
+        internal const int MinOffset = -3000, MaxOffset = 3000;
+        internal bool Enabled = true, Online = true, Videos, Fullscreen;
+        // Synced only for now. AllowUnsynced is kept for later and behaves as Synced in 0.1.
+        internal LyricsMode Mode = LyricsMode.Synced;
+        // How much the drawer reacts to the music. Off is the plain Lyrics 0.2 look.
+        internal ReactMode React = ReactMode.Subtle;
+        internal int Lines = 2, FontSize = 15, VerticalOffset, OffsetMs, PausedHideSeconds = 10;
+        internal double Opacity = 0.92;
+
+        internal string Signature { get { return Lines + "," + FontSize + "," + VerticalOffset + "," + Mode + "," + React; } }
+
+        internal static readonly string[] ReactNames = { "off", "subtle", "normal", "intense" };
+
+        internal static int Clamp(int value, int min, int max) { return Math.Max(min, Math.Min(max, value)); }
+
+        internal static LyricsSettings Load(ICapriStore store)
+        {
+            LyricsSettings settings = new LyricsSettings();
+            if (store == null) return settings;
+            settings.Enabled = store.Flag("enabled", true);
+            settings.Online = store.Flag("online", true);
+            settings.Videos = store.Flag("videos", false);
+            settings.Fullscreen = store.Flag("fullscreen", false);
+            string mode = store.Get("mode", "synced");
+            settings.Mode = mode == "off" ? LyricsMode.Off : mode == "allow_unsynced" ? LyricsMode.AllowUnsynced : LyricsMode.Synced;
+            settings.Lines = Clamp((int)store.Number("lines", 2), 1, 3);
+            settings.FontSize = Clamp((int)store.Number("font_size", 15), 12, 36);
+            settings.VerticalOffset = Clamp((int)store.Number("vertical_offset", 0), -100, 300);
+            settings.OffsetMs = Clamp((int)store.Number("offset_ms", 0), MinOffset, MaxOffset);
+            settings.PausedHideSeconds = Clamp((int)store.Number("paused_hide_seconds", 10), 0, 120);
+            settings.Opacity = Math.Max(0.3, Math.Min(1, store.Number("opacity", 0.92)));
+            int react = Array.IndexOf(ReactNames, store.Get("reactive", "subtle"));
+            settings.React = react < 0 ? ReactMode.Subtle : (ReactMode)react;
+            return settings;
+        }
+
+        internal void Save(ICapriStore store)
+        {
+            store.Set("enabled", Enabled);
+            store.Set("online", Online);
+            store.Set("videos", Videos);
+            store.Set("fullscreen", Fullscreen);
+            store.Set("mode", Mode == LyricsMode.Off ? "off" : Mode == LyricsMode.AllowUnsynced ? "allow_unsynced" : "synced");
+            store.Set("lines", Lines);
+            store.Set("font_size", FontSize);
+            store.Set("vertical_offset", VerticalOffset);
+            store.Set("offset_ms", OffsetMs);
+            store.Set("paused_hide_seconds", PausedHideSeconds);
+            store.Set("opacity", Opacity);
+            store.Set("reactive", ReactNames[(int)React]);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- LRC
+
+    internal sealed class LyricWord
+    {
+        internal double Time;
+        internal string Text;
+    }
+
+    internal sealed class LyricLine
+    {
+        internal double Time;
+        internal string Text = "";
+        // Word timings from enhanced LRC (<mm:ss.xx> tags), or null: never made up.
+        internal List<LyricWord> Words;
+    }
+
+    internal sealed class LrcSheet
+    {
+        internal readonly List<LyricLine> Lines = new List<LyricLine>();
+        internal int Skipped;
+        internal bool HasWords;
+
+        internal string Widest
+        {
+            get
+            {
+                string widest = "";
+                foreach (LyricLine line in Lines) if (line.Text.Length > widest.Length) widest = line.Text;
+                return widest;
+            }
+        }
+    }
+
+    internal static class Lrc
+    {
+        internal const int MaxChars = 200 * 1024, MaxLines = 3000, MaxText = 300;
+        private static readonly Regex Stamp = new Regex(@"^\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]", RegexOptions.CultureInvariant);
+        private static readonly Regex Tag = new Regex(@"^\[([A-Za-z#]+):(.*)\]$", RegexOptions.CultureInvariant);
+        private static readonly Regex WordStamp = new Regex(@"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>", RegexOptions.CultureInvariant);
+
+        // Synced lyrics in LRC: "[mm:ss.xx]text", several stamps on one line, [offset:+ms], and enhanced <mm:ss.xx> word
+        // stamps. Lines it can't read are skipped and counted; an empty sheet means nothing usable.
+        internal static LrcSheet Parse(string text)
+        {
+            LrcSheet sheet = new LrcSheet();
+            if (string.IsNullOrEmpty(text)) return sheet;
+            if (text.Length > MaxChars) text = text.Substring(0, MaxChars);
+            double offset = 0;
+            List<KeyValuePair<int, LyricLine>> found = new List<KeyValuePair<int, LyricLine>>();
+            foreach (string raw in text.TrimStart((char)0xFEFF).Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0) continue;
+                List<double> times = new List<double>();
+                int at = 0;
+                bool broken = false;
+                while (true)
+                {
+                    Match stamp = Stamp.Match(line.Substring(at));
+                    if (!stamp.Success) break;
+                    double time = Seconds(stamp);
+                    if (time < 0) { broken = true; break; }
+                    times.Add(time);
+                    at += stamp.Length;
+                }
+                if (times.Count == 0)
+                {
+                    Match tag = Tag.Match(line);
+                    if (tag.Success)
+                    {
+                        int ms;
+                        if (tag.Groups[1].Value.ToLowerInvariant() == "offset" && int.TryParse(tag.Groups[2].Value.Trim(), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out ms)) offset = ms / 1000.0;
+                        continue;
+                    }
+                    sheet.Skipped++;
+                    continue;
+                }
+                if (broken) { sheet.Skipped++; continue; }
+                List<LyricWord> words;
+                string words_text = Words(line.Substring(at), times[0], out words);
+                foreach (double time in times)
+                {
+                    if (found.Count >= MaxLines) break;
+                    LyricLine lyric = new LyricLine { Time = time, Text = words_text };
+                    if (words != null)
+                    {
+                        lyric.Words = new List<LyricWord>();
+                        foreach (LyricWord word in words) lyric.Words.Add(new LyricWord { Time = word.Time + (time - times[0]), Text = word.Text });
+                        sheet.HasWords = true;
+                    }
+                    found.Add(new KeyValuePair<int, LyricLine>(found.Count, lyric));
+                }
+            }
+            // [offset:+ms] makes the lyrics come sooner: a positive offset subtracts from every time.
+            foreach (KeyValuePair<int, LyricLine> pair in found)
+            {
+                pair.Value.Time = Math.Max(0, pair.Value.Time - offset);
+                if (pair.Value.Words != null) foreach (LyricWord word in pair.Value.Words) word.Time = Math.Max(0, word.Time - offset);
+            }
+            found.Sort(delegate(KeyValuePair<int, LyricLine> a, KeyValuePair<int, LyricLine> b)
+            {
+                int byTime = a.Value.Time.CompareTo(b.Value.Time);
+                return byTime != 0 ? byTime : a.Key.CompareTo(b.Key);
+            });
+            foreach (KeyValuePair<int, LyricLine> pair in found) sheet.Lines.Add(pair.Value);
+            return sheet;
+        }
+
+        private static double Seconds(Match stamp)
+        {
+            int minutes = int.Parse(stamp.Groups[1].Value, CultureInfo.InvariantCulture), seconds = int.Parse(stamp.Groups[2].Value, CultureInfo.InvariantCulture);
+            if (seconds >= 60) return -1;
+            double fraction = 0;
+            if (stamp.Groups[3].Success)
+            {
+                string digits = stamp.Groups[3].Value;
+                fraction = int.Parse(digits, CultureInfo.InvariantCulture) / Math.Pow(10, digits.Length);
+            }
+            return minutes * 60 + seconds + fraction;
+        }
+
+        // The text without word stamps, and the words with their times when there are any. The words' texts join up to
+        // exactly the line shown, so how much is sung can be counted in characters.
+        private static string Words(string text, double lineTime, out List<LyricWord> words)
+        {
+            words = null;
+            MatchCollection stamps = WordStamp.Matches(text);
+            if (stamps.Count == 0) return Clean(text);
+            List<LyricWord> found = new List<LyricWord>();
+            string lead = text.Substring(0, stamps[0].Index);
+            if (lead.Trim().Length > 0) found.Add(new LyricWord { Time = lineTime, Text = lead });
+            for (int i = 0; i < stamps.Count; i++)
+            {
+                double time = Seconds(stamps[i]);
+                if (time < 0) return Clean(WordStamp.Replace(text, " "));
+                int start = stamps[i].Index + stamps[i].Length, end = i + 1 < stamps.Count ? stamps[i + 1].Index : text.Length;
+                string piece = text.Substring(start, end - start);
+                if (piece.Length > 0) found.Add(new LyricWord { Time = time, Text = piece });
+            }
+            if (found.Count == 0) return Clean(WordStamp.Replace(text, " "));
+            foreach (LyricWord word in found) word.Text = Regex.Replace(word.Text, @"[\x00-\x1f\x7f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+", " ");
+            found[0].Text = found[0].Text.TrimStart();
+            found[found.Count - 1].Text = found[found.Count - 1].Text.TrimEnd();
+            StringBuilder joined = new StringBuilder();
+            foreach (LyricWord word in found) joined.Append(word.Text);
+            if (joined.Length == 0 || joined.Length > MaxText) return Clean(joined.ToString());
+            words = found;
+            return joined.ToString();
+        }
+
+        internal static string Clean(string text)
+        {
+            string clean = Regex.Replace(text ?? "", @"[\x00-\x1f\x7f​-‏  ‪-‮⁦-⁩]+", " ");
+            clean = Regex.Replace(clean, @"\s+", " ").Trim();
+            return clean.Length <= MaxText ? clean : clean.Substring(0, MaxText);
+        }
+
+        // The line playing at t: the last one starting at or before it, or -1 before the first.
+        internal static int Current(List<LyricLine> lines, double t)
+        {
+            int low = 0, high = lines.Count - 1, found = -1;
+            while (low <= high)
+            {
+                int middle = (low + high) / 2;
+                if (lines[middle].Time <= t + 1e-6) { found = middle; low = middle + 1; }
+                else high = middle - 1;
+            }
+            return found;
+        }
+
+        // How much of a line with word timings has been sung by t, 0 to 1 by characters; -1 when it has no word timings.
+        internal static double Sung(LyricLine line, double t, double lineEnd)
+        {
+            if (line.Words == null || line.Words.Count == 0) return -1;
+            int total = 0;
+            foreach (LyricWord word in line.Words) total += word.Text.Length;
+            if (total == 0) return -1;
+            double sung = 0;
+            for (int i = 0; i < line.Words.Count; i++)
+            {
+                LyricWord word = line.Words[i];
+                if (t < word.Time) break;
+                double end = i + 1 < line.Words.Count ? line.Words[i + 1].Time : Math.Min(lineEnd, word.Time + 3);
+                double part = end > word.Time ? Math.Min(1, (t - word.Time) / (end - word.Time)) : 1;
+                sung += word.Text.Length * part;
+            }
+            return Math.Max(0, Math.Min(1, sung / total));
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- the timeline
+
+    // One reading of what's playing: which track, and where it was at a moment.
+    internal sealed class Timeline
+    {
+        internal string Key = "", Title = "", Artist = "", Album = "", App = "";
+        internal bool Playing, Music, Video;
+        internal double Position, Length, Rate = 1, AtMs;
+
+        private static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        internal static double Ms(DateTime at) { return (at - Epoch).TotalMilliseconds; }
+
+        // Null for "nothing is playing" (or a message without a track).
+        internal static Timeline From(Dictionary<string, object> feed)
+        {
+            if (feed == null || J.Flag(feed, "none", false)) return null;
+            string key = J.Str(feed, "key", "");
+            if (key.Length == 0) return null;
+            return new Timeline
+            {
+                Key = key, Title = J.Str(feed, "title", ""), Artist = J.Str(feed, "artist", ""), Album = J.Str(feed, "album", ""), App = J.Str(feed, "app", ""),
+                Playing = J.Flag(feed, "playing", false), Music = J.Flag(feed, "music", false), Video = J.Flag(feed, "video", false),
+                Position = Math.Max(0, J.Num(feed, "position", 0)), Length = Math.Max(0, J.Num(feed, "length", 0)), Rate = J.Num(feed, "rate", 1) > 0 ? J.Num(feed, "rate", 1) : 1,
+                AtMs = J.Num(feed, "at", 0)
+            };
+        }
+
+        // Where the track has got to at now: position + (now - at) x rate while playing.
+        internal double At(DateTime now)
+        {
+            double at = Position + (Playing ? Math.Max(0, (Ms(now) - AtMs) / 1000.0) * Rate : 0);
+            return Length > 0 ? Math.Min(at, Length) : at;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- the cache
+
+    internal sealed class CacheEntry
+    {
+        internal const string Found = "found", NotFound = "notfound", Instrumental = "instrumental";
+        internal string Status = NotFound, Synced, Plain, Title = "", Artist = "";
+        internal DateTime Saved, Until = DateTime.MaxValue;
+    }
+
+    // Lyrics found, and songs not found, kept in this mod's own folder as one small JSON file each, named by a hash of
+    // artist, title, album and length. Found lyrics stay until there are more than MaxFiles; not found ones for
+    // NotFoundDays, so the song is looked for again later. Failures (network down) are never kept.
+    internal sealed class LyricsCache
+    {
+        internal const int MaxFiles = 2000, MaxBytes = 400 * 1024;
+        internal const double NotFoundDays = 3;
+        private readonly string folder;
+        private static readonly DateTime Epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        internal LyricsCache(string cacheFolder)
+        {
+            folder = cacheFolder;
+        }
+
+        internal string Folder { get { return folder; } }
+
+        internal static string KeyFor(string title, string artist, string album, double length)
+        {
+            string identity = Spoken.Normalize(artist) + "\n" + Spoken.Normalize(title) + "\n" + Spoken.Normalize(album) + "\n" + Math.Round(length).ToString(CultureInfo.InvariantCulture);
+            using (SHA256 sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(identity));
+                StringBuilder hex = new StringBuilder();
+                for (int i = 0; i < 16; i++) hex.Append(hash[i].ToString("x2", CultureInfo.InvariantCulture));
+                return hex.ToString();
+            }
+        }
+
+        private string PathOf(string key) { return Path.Combine(folder, key + ".json"); }
+
+        internal CacheEntry Read(string key, DateTime now)
+        {
+            string file = PathOf(key);
+            try
+            {
+                if (!File.Exists(file) || new FileInfo(file).Length > MaxBytes) return null;
+                Dictionary<string, object> saved = Json.Parse(File.ReadAllText(file, Encoding.UTF8)) as Dictionary<string, object>;
+                if (saved == null || J.Num(saved, "v", 0) != 1) { Delete(file); return null; }
+                CacheEntry entry = new CacheEntry
+                {
+                    Status = J.Str(saved, "status", CacheEntry.NotFound), Synced = J.Str(saved, "synced", null), Plain = J.Str(saved, "plain", null),
+                    Title = J.Str(saved, "title", ""), Artist = J.Str(saved, "artist", ""), Saved = Epoch.AddSeconds(J.Num(saved, "saved", 0))
+                };
+                double until = J.Num(saved, "until", 0);
+                if (until > 0) entry.Until = Epoch.AddSeconds(until);
+                if (entry.Status != CacheEntry.Found && entry.Status != CacheEntry.NotFound && entry.Status != CacheEntry.Instrumental) { Delete(file); return null; }
+                if (now >= entry.Until) { Delete(file); return null; }
+                return entry;
+            }
+            catch (Exception error)
+            {
+                if (!(error is IOException || error is UnauthorizedAccessException || error is FormatException)) throw;
+                Delete(file);
+                return null;
+            }
+        }
+
+        // False when it couldn't be saved; the lyrics still show, they're just looked up again next time.
+        internal bool Write(string key, CacheEntry entry, DateTime now)
+        {
+            Dictionary<string, object> saved = J.Of("v", 1, "status", entry.Status, "title", entry.Title, "artist", entry.Artist, "saved", Math.Round((now - Epoch).TotalSeconds));
+            if (entry.Synced != null) saved["synced"] = entry.Synced;
+            if (entry.Plain != null) saved["plain"] = entry.Plain;
+            if (entry.Status == CacheEntry.NotFound) saved["until"] = Math.Round((now.AddDays(NotFoundDays) - Epoch).TotalSeconds);
+            string text = Json.Write(saved);
+            if (Encoding.UTF8.GetByteCount(text) > MaxBytes) return false;
+            try
+            {
+                Directory.CreateDirectory(folder);
+                string file = PathOf(key), writing = file + ".new";
+                File.WriteAllText(writing, text, new UTF8Encoding(false));
+                if (File.Exists(file)) File.Delete(file);
+                File.Move(writing, file);
+                Prune();
+                return true;
+            }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
+        internal int Count
+        {
+            get
+            {
+                try { return Directory.Exists(folder) ? Directory.GetFiles(folder, "*.json").Length : 0; }
+                catch (IOException) { return 0; }
+            }
+        }
+
+        // Oldest first, until there are MaxFiles.
+        internal void Prune()
+        {
+            string[] files = Directory.GetFiles(folder, "*.json");
+            if (files.Length <= MaxFiles) return;
+            Array.Sort(files, delegate(string a, string b) { return File.GetLastWriteTimeUtc(a).CompareTo(File.GetLastWriteTimeUtc(b)); });
+            for (int i = 0; i < files.Length - MaxFiles; i++) Delete(files[i]);
+        }
+
+        internal int Clear()
+        {
+            int gone = 0;
+            try
+            {
+                if (!Directory.Exists(folder)) return 0;
+                foreach (string file in Directory.GetFiles(folder, "*.json")) { Delete(file); gone++; }
+            }
+            catch (IOException) { }
+            return gone;
+        }
+
+        private static void Delete(string file)
+        {
+            try { if (File.Exists(file)) File.Delete(file); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- the lyrics source
+
+    // Everything that may leave the PC for a lookup. Nothing else is ever sent.
+    internal sealed class LyricsQuery
+    {
+        internal string Title = "", Artist = "", Album = "";
+        internal double Length;
+    }
+
+    internal enum FetchStatus { Found, NotFound, Instrumental, Failed }
+
+    internal sealed class FetchResult
+    {
+        internal FetchStatus Status;
+        internal string Synced, Plain, Problem;
+        internal int Requests;
+    }
+
+    internal interface ILyricsSource
+    {
+        // done may be called on any thread.
+        void Fetch(LyricsQuery query, Action<FetchResult> done);
+    }
+
+    // LRCLIB's /api/get, over HTTPS, on a worker thread, never on Capri's window thread. Up to three tries per track: with
+    // the album, without it, then with the title's "(feat. ...)" / "- Remastered" parts taken off. Each is a GET with
+    // track_name, artist_name, album_name (only in the first) and duration, and a User-Agent naming this mod; no cookies,
+    // no credentials, no redirects followed.
+    internal sealed class LrclibSource : ILyricsSource
+    {
+        internal const string Endpoint = "https://lrclib.net/api/get";
+        internal const string Agent = "CapriPlus-Lyrics/1.0.0 (unofficial Capri community mod; https://github.com/lachydotmcg/capri-mods)";
+        internal const int TimeoutMs = 8000, MaxResponse = 512 * 1024;
+        private static readonly Regex Extras = new Regex(@"\s*[\(\[](?:feat\.?|ft\.?|with |remaster|live|explicit|radio edit|mono|stereo|deluxe|bonus)[^\)\]]*[\)\]]|\s+-\s+(?:.*remaster.*|.*\bversion\b.*|live\b.*|radio edit|mono|stereo|explicit)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+        internal static string Plainer(string title)
+        {
+            return Extras.Replace(title ?? "", "").Trim();
+        }
+
+        // The addresses tried, in order.
+        internal static List<string> Addresses(LyricsQuery query)
+        {
+            List<string> tries = new List<string>();
+            string duration = query.Length > 0 ? "&duration=" + ((int)Math.Round(query.Length)).ToString(CultureInfo.InvariantCulture) : "";
+            string artist = "&artist_name=" + Uri.EscapeDataString(query.Artist);
+            if (query.Album.Length > 0) tries.Add(Endpoint + "?track_name=" + Uri.EscapeDataString(query.Title) + artist + "&album_name=" + Uri.EscapeDataString(query.Album) + duration);
+            tries.Add(Endpoint + "?track_name=" + Uri.EscapeDataString(query.Title) + artist + duration);
+            string plainer = Plainer(query.Title);
+            if (plainer.Length > 0 && plainer != query.Title) tries.Add(Endpoint + "?track_name=" + Uri.EscapeDataString(plainer) + artist + duration);
+            return tries;
+        }
+
+        public void Fetch(LyricsQuery query, Action<FetchResult> done)
+        {
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                FetchResult result;
+                try { result = Lookup(query); }
+                catch (Exception error) { result = new FetchResult { Status = FetchStatus.Failed, Problem = error.GetType().Name + ": " + error.Message }; }
+                done(result);
+            });
+        }
+
+        private static FetchResult Lookup(LyricsQuery query)
+        {
+            int requests = 0;
+            foreach (string address in Addresses(query))
+            {
+                int status;
+                string body = Get(address, out status);
+                requests++;
+                if (status == 404 || status == 400) continue;
+                if (status != 200 || body == null) return new FetchResult { Status = FetchStatus.Failed, Problem = "lrclib.net answered " + status, Requests = requests };
+                FetchResult found = Read(body);
+                found.Requests = requests;
+                return found;
+            }
+            return new FetchResult { Status = FetchStatus.NotFound, Requests = requests };
+        }
+
+        // LRCLIB's answer: instrumental, syncedLyrics and plainLyrics.
+        internal static FetchResult Read(string body)
+        {
+            Dictionary<string, object> answer;
+            try { answer = Json.Parse(body) as Dictionary<string, object>; }
+            catch (FormatException) { return new FetchResult { Status = FetchStatus.Failed, Problem = "lrclib.net sent something that isn't JSON" }; }
+            if (answer == null) return new FetchResult { Status = FetchStatus.Failed, Problem = "lrclib.net sent something unexpected" };
+            if (J.Flag(answer, "instrumental", false)) return new FetchResult { Status = FetchStatus.Instrumental };
+            string synced = J.Str(answer, "syncedLyrics", null), plain = J.Str(answer, "plainLyrics", null);
+            if (string.IsNullOrEmpty(synced) && string.IsNullOrEmpty(plain)) return new FetchResult { Status = FetchStatus.NotFound };
+            return new FetchResult { Status = FetchStatus.Found, Synced = string.IsNullOrEmpty(synced) ? null : synced, Plain = string.IsNullOrEmpty(plain) ? null : plain };
+        }
+
+        private static string Get(string address, out int status)
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(address);
+            request.Method = "GET";
+            request.UserAgent = Agent;
+            request.Accept = "application/json";
+            request.Timeout = TimeoutMs;
+            request.ReadWriteTimeout = TimeoutMs;
+            request.AllowAutoRedirect = false;
+            request.UseDefaultCredentials = false;
+            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            try
+            {
+                using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
+                {
+                    status = (int)response.StatusCode;
+                    using (Stream stream = response.GetResponseStream())
+                    using (MemoryStream kept = new MemoryStream())
+                    {
+                        byte[] buffer = new byte[8192];
+                        int read;
+                        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            if (kept.Length + read > MaxResponse) { status = 413; return null; }
+                            kept.Write(buffer, 0, read);
+                        }
+                        return Encoding.UTF8.GetString(kept.ToArray());
+                    }
+                }
+            }
+            catch (WebException error)
+            {
+                HttpWebResponse answer = error.Response as HttpWebResponse;
+                if (answer == null) throw;
+                using (answer) status = (int)answer.StatusCode;
+                return null;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- the engine
+
+    internal enum LyricsStatus { Idle, Waiting, Loading, Synced, Unsynced, NotFound, Instrumental, Failed, Skipped }
+
+    internal enum LineRole { Previous, Current, Next }
+
+    internal sealed class ViewLine
+    {
+        internal string Text;
+        internal LineRole Role;
+        // 0 to 1 of the line sung, from word timings; -1 when the lyrics only time whole lines.
+        internal double Sung = -1;
+        internal bool Gap;
+        // The current line's words, only when the lyrics really time them: never made up.
+        internal List<WordSpan> Words;
+    }
+
+    internal sealed class WordSpan
+    {
+        // Where the word is in the line's text, in characters.
+        internal int Start, Length;
+        // 0 to 1 of the word sung, or -1 before it starts.
+        internal double Progress = -1;
+        // Seconds since the word started (or -1 before it).
+        internal double Since = -1;
+    }
+
+    // What to show right now; a renderer draws it, the engine never touches a window.
+    internal sealed class LyricsView
+    {
+        internal bool Visible;
+        internal string Why = "";
+        internal readonly List<ViewLine> Lines = new List<ViewLine>();
+        internal string Widest = "";
+        // 0 to 1 since the current line changed, for its slide; 1 when settled.
+        internal double Slide = 1;
+        // A seek or a jump: her glitch for a moment instead of a slide.
+        internal float JumpGlitch;
+        internal string Signature = "";
+        // The line that was current before this one, for its exit; seconds since the current line changed; and whether
+        // it changed to the next line in order (a jump decodes straight in).
+        internal string Outgoing = "";
+        internal double Since = 99;
+        internal bool Sequential = true;
+    }
+
+    // Everything about lyrics that isn't drawing: following the feed, the cache, lookups, and which lines to show. It runs
+    // on Capri's window thread; lookups come back through a queue it drains on each frame.
+    internal sealed class LyricsEngine
+    {
+        internal const double DebounceSeconds = 1.5, RetryMinutes = 10, LeadSeconds = 6, TailSeconds = 6, ResubscribeSeconds = 30, SlideSeconds = 0.18, JumpSeconds = 0.2;
+
+        internal Timeline Track;
+        internal LyricsStatus State = LyricsStatus.Idle;
+        internal LrcSheet Sheet;
+        internal string Problem = "";
+        internal int Lookups, CacheHits;
+
+        private readonly LyricsSettings settings;
+        private readonly LyricsCache cache;
+        private readonly ILyricsSource source;
+        private readonly ConcurrentQueue<Arrival> arrivals = new ConcurrentQueue<Arrival>();
+        private readonly Dictionary<string, DateTime> failedUntil = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+        private int generation;
+        private string cacheKey;
+        private DateTime lookupAt, heardAt = DateTime.MinValue, subscribedAt = DateTime.MinValue, pausedSince = DateTime.MaxValue, changedAt = DateTime.MinValue, jumpedAt = DateTime.MinValue;
+        private int lastIndex = -2;
+        private DateTime turnedAt = DateTime.MinValue;
+        private bool turnedInOrder = true;
+        private volatile bool stopped;
+
+        private sealed class Arrival
+        {
+            internal int Generation;
+            internal string Key, Title, Artist;
+            internal FetchResult Result;
+        }
+
+        internal LyricsEngine(LyricsSettings lyricsSettings, LyricsCache lyricsCache, ILyricsSource lyricsSource)
+        {
+            settings = lyricsSettings;
+            cache = lyricsCache;
+            source = lyricsSource;
+        }
+
+        internal bool Playing { get { return Track != null && Track.Playing; } }
+
+        internal void Stop() { stopped = true; }
+
+        internal void Subscribed(DateTime now) { subscribedAt = now; }
+
+        // Media went away: show nothing until it's back and sends again.
+        internal void MediaGone()
+        {
+            Track = null;
+            ForgetTrack();
+        }
+
+        // Media only sends while something changes or plays, so a long silence while it runs means it lost track of this
+        // subscriber (it restarted before its ready reached us, say).
+        internal bool WantsResubscribe(DateTime now, bool mediaRunning)
+        {
+            return mediaRunning && (now - heardAt).TotalSeconds > ResubscribeSeconds && (now - subscribedAt).TotalSeconds > ResubscribeSeconds;
+        }
+
+        internal void OnFeed(string data, DateTime now)
+        {
+            Dictionary<string, object> feed;
+            try { feed = Json.Parse(data) as Dictionary<string, object>; }
+            catch (FormatException) { return; }
+            heardAt = now;
+            Timeline fresh = Timeline.From(feed);
+            if (fresh == null) { Track = null; ForgetTrack(); return; }
+            bool newTrack = Track == null || Track.Key != fresh.Key;
+            if (!fresh.Playing && (newTrack || Track.Playing)) pausedSince = now;
+            if (fresh.Playing) pausedSince = DateTime.MaxValue;
+            if (!newTrack && Math.Abs(fresh.At(now) - Track.At(now)) > 2) jumpedAt = now;
+            Track = fresh;
+            if (newTrack) NewTrack(now);
+        }
+
+        private void ForgetTrack()
+        {
+            generation++;
+            Sheet = null;
+            State = LyricsStatus.Idle;
+            cacheKey = null;
+            lastIndex = -2;
+            pausedSince = DateTime.MaxValue;
+        }
+
+        private void NewTrack(DateTime now)
+        {
+            ForgetTrack();
+            Problem = "";
+            if (!settings.Enabled || settings.Mode == LyricsMode.Off) { State = LyricsStatus.Skipped; Problem = "lyrics are off"; return; }
+            if (Track.Video && !settings.Videos) { State = LyricsStatus.Skipped; Problem = "it's a video"; return; }
+            if (Track.Title.Trim().Length == 0 || Track.Artist.Trim().Length == 0) { State = LyricsStatus.Skipped; Problem = "no title and artist to look up"; return; }
+            cacheKey = LyricsCache.KeyFor(Track.Title, Track.Artist, Track.Album, Track.Length);
+            CacheEntry saved = cache.Read(cacheKey, now);
+            if (saved != null)
+            {
+                CacheHits++;
+                Apply(saved.Status == CacheEntry.Found ? FetchStatus.Found : saved.Status == CacheEntry.Instrumental ? FetchStatus.Instrumental : FetchStatus.NotFound, saved.Synced, saved.Plain, "saved");
+                return;
+            }
+            DateTime until;
+            if (failedUntil.TryGetValue(cacheKey, out until) && now < until) { State = LyricsStatus.Failed; Problem = "lrclib.net didn't answer; trying again later"; return; }
+            if (!settings.Online) { State = LyricsStatus.NotFound; Problem = "online lookups are off and none are saved"; return; }
+            // Songs skipped within a second or two are never looked up.
+            State = LyricsStatus.Waiting;
+            lookupAt = now.AddSeconds(DebounceSeconds);
+        }
+
+        // A setting changed: turning lyrics off forgets the song; turning lyrics, lookups or videos on looks again (the
+        // cache first, so nothing is fetched twice).
+        internal void SettingsChanged(DateTime now)
+        {
+            if (Track == null) return;
+            if (!settings.Enabled || settings.Mode == LyricsMode.Off) { ForgetTrack(); State = LyricsStatus.Skipped; Problem = "lyrics are off"; return; }
+            if (State == LyricsStatus.Skipped || State == LyricsStatus.NotFound || State == LyricsStatus.Failed || State == LyricsStatus.Idle) NewTrack(now);
+        }
+
+        internal void Tick(DateTime now)
+        {
+            Arrival arrival;
+            while (arrivals.TryDequeue(out arrival))
+            {
+                if (stopped) continue;
+                if (arrival.Result.Status != FetchStatus.Failed)
+                {
+                    CacheEntry entry = new CacheEntry
+                    {
+                        Status = arrival.Result.Status == FetchStatus.Found ? CacheEntry.Found : arrival.Result.Status == FetchStatus.Instrumental ? CacheEntry.Instrumental : CacheEntry.NotFound,
+                        Synced = arrival.Result.Synced, Plain = arrival.Result.Plain, Title = arrival.Title, Artist = arrival.Artist
+                    };
+                    cache.Write(arrival.Key, entry, now);
+                }
+                else failedUntil[arrival.Key] = now.AddMinutes(RetryMinutes);
+                if (arrival.Generation != generation) continue;
+                if (arrival.Result.Status == FetchStatus.Failed) { State = LyricsStatus.Failed; Problem = arrival.Result.Problem ?? "lookup failed"; continue; }
+                Apply(arrival.Result.Status, arrival.Result.Synced, arrival.Result.Plain, "lrclib.net");
+            }
+            if (State != LyricsStatus.Waiting || Track == null || now < lookupAt || stopped) return;
+            State = LyricsStatus.Loading;
+            Lookups++;
+            int asked = generation;
+            string key = cacheKey;
+            LyricsQuery query = new LyricsQuery { Title = Track.Title.Trim(), Artist = Track.Artist.Trim(), Album = Track.Album.Trim(), Length = Track.Length };
+            source.Fetch(query, delegate(FetchResult result) { arrivals.Enqueue(new Arrival { Generation = asked, Key = key, Title = query.Title, Artist = query.Artist, Result = result }); });
+        }
+
+        private void Apply(FetchStatus status, string synced, string plain, string from)
+        {
+            Sheet = null;
+            if (status == FetchStatus.Instrumental) { State = LyricsStatus.Instrumental; Problem = "instrumental"; return; }
+            if (status == FetchStatus.NotFound) { State = LyricsStatus.NotFound; Problem = "no lyrics on " + from; return; }
+            LrcSheet sheet = Lrc.Parse(synced);
+            if (sheet.Lines.Count > 0) { Sheet = sheet; State = LyricsStatus.Synced; Problem = ""; return; }
+            State = plain != null ? LyricsStatus.Unsynced : LyricsStatus.NotFound;
+            Problem = synced != null ? "its synced lyrics couldn't be read" : "only unsynced lyrics";
+        }
+
+        internal int ClearCache()
+        {
+            failedUntil.Clear();
+            return cache.Clear();
+        }
+
+        // ---- what to show
+
+        internal LyricsView View(DateTime now)
+        {
+            LyricsView view = new LyricsView();
+            if (!settings.Enabled || settings.Mode == LyricsMode.Off) return Hidden(view, "off");
+            if (Track == null) return Hidden(view, "nothing playing");
+            if (State != LyricsStatus.Synced || Sheet == null) return Hidden(view, State.ToString().ToLowerInvariant() + (Problem.Length > 0 ? ": " + Problem : ""));
+            if (!Track.Playing && (now - pausedSince).TotalSeconds > settings.PausedHideSeconds) return Hidden(view, "paused");
+            List<LyricLine> lines = Sheet.Lines;
+            double t = Track.At(now) - settings.OffsetMs / 1000.0;
+            int current = Lrc.Current(lines, t);
+            if (current < 0 && lines[0].Time - t > LeadSeconds) return Hidden(view, "before the first line");
+            if (current == lines.Count - 1 && t - lines[current].Time > TailSeconds) return Hidden(view, "after the last line");
+            if (current != lastIndex)
+            {
+                // The next line in order slides in; anything else (a seek, a restart, the first show) glitches.
+                bool following = lastIndex >= -1 && current == lastIndex + 1 && (now - jumpedAt).TotalSeconds > JumpSeconds;
+                if (following) changedAt = now;
+                else if (lastIndex != -2) jumpedAt = now;
+                if (!following) changedAt = DateTime.MinValue;
+                turnedAt = lastIndex == -2 ? DateTime.MinValue : now;
+                turnedInOrder = following;
+                lastIndex = current;
+            }
+            view.Visible = true;
+            view.Widest = Sheet.Widest;
+            view.Since = Math.Min(99, Math.Max(0, (now - turnedAt).TotalSeconds));
+            view.Sequential = turnedInOrder;
+            view.Outgoing = current > 0 ? lines[current - 1].Text : "";
+            view.Slide = Math.Min(1, Math.Max(0, (now - changedAt).TotalSeconds / SlideSeconds));
+            double sinceJump = (now - jumpedAt).TotalSeconds;
+            view.JumpGlitch = sinceJump >= 0 && sinceJump < JumpSeconds ? (float)(1 - sinceJump / JumpSeconds) * 0.6f : 0;
+            if (settings.Lines >= 3 && current > 0) view.Lines.Add(Line(lines[current - 1], LineRole.Previous, t, -1));
+            if (current >= 0)
+            {
+                double end = current + 1 < lines.Count ? lines[current + 1].Time : lines[current].Time + 5;
+                view.Lines.Add(Line(lines[current], LineRole.Current, t, end));
+            }
+            if (settings.Lines >= 2 && current + 1 < lines.Count) view.Lines.Add(Line(lines[current + 1], LineRole.Next, t, -1));
+            if (settings.Lines == 1 && current < 0) view.Lines.Add(Line(lines[0], LineRole.Next, t, -1));
+            StringBuilder signature = new StringBuilder(Track.Key).Append('|').Append(current).Append('|').Append(Math.Round(view.Slide, 2).ToString(CultureInfo.InvariantCulture));
+            foreach (ViewLine line in view.Lines) signature.Append('|').Append(line.Role).Append(':').Append(Math.Round(line.Sung, 2).ToString(CultureInfo.InvariantCulture));
+            view.Signature = signature.ToString();
+            return view;
+        }
+
+        private static ViewLine Line(LyricLine line, LineRole role, double t, double end)
+        {
+            ViewLine shown = new ViewLine { Text = line.Text, Role = role, Gap = line.Text.Length == 0 };
+            if (role != LineRole.Current) return shown;
+            shown.Sung = Lrc.Sung(line, t, end);
+            if (line.Words == null || line.Words.Count == 0) return shown;
+            shown.Words = new List<WordSpan>();
+            int at = 0;
+            for (int i = 0; i < line.Words.Count; i++)
+            {
+                LyricWord word = line.Words[i];
+                double wordEnd = i + 1 < line.Words.Count ? line.Words[i + 1].Time : Math.Min(end, word.Time + 3);
+                WordSpan span = new WordSpan { Start = at, Length = word.Text.Length };
+                if (t >= word.Time)
+                {
+                    span.Since = t - word.Time;
+                    span.Progress = wordEnd > word.Time ? Math.Min(1, (t - word.Time) / (wordEnd - word.Time)) : 1;
+                }
+                shown.Words.Add(span);
+                at += word.Text.Length;
+            }
+            return shown;
+        }
+
+        private static LyricsView Hidden(LyricsView view, string why)
+        {
+            view.Visible = false;
+            view.Why = why;
+            view.Signature = "hidden:" + why;
+            return view;
+        }
+
+        internal string Status(DateTime now)
+        {
+            string what = Track == null ? "nothing playing" : State == LyricsStatus.Synced ? Sheet.Lines.Count + " synced lines" : State.ToString().ToLowerInvariant() + (Problem.Length > 0 ? " (" + Problem + ")" : "");
+            return "Capri+ Lyrics " + CapriPlusLyrics.Version + ": " + (settings.Enabled ? "" : "off, ") + what + "; timing " + settings.OffsetMs + " ms; " + cache.Count + " songs saved; " + Lookups + " lookups this session.";
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- placement
+
+    internal sealed class Placement
+    {
+        internal Point At;
+        internal Size Size;
+        internal RectangleF Panel;
+        internal float TipX, TipY;
+        internal bool Below;
+
+        internal string Signature
+        {
+            get { return At.X + "," + At.Y + "," + Size.Width + "," + Size.Height + "," + Below + "," + Math.Round(TipX); }
+        }
+    }
+
+    // Where the panel goes, in screen pixels: hanging under her feet with its tail pointing up at her, like her bubble's
+    // tail points at her head; above her head when there's no room below; always inside the working area of the monitor
+    // she's on, whatever its coordinates (monitors left of or above the main one are negative).
+    internal static class OverlayLayout
+    {
+        internal static Placement Place(Rectangle body, Point head, Rectangle area, SizeF panel, float s, int offset, bool above = false)
+        {
+            float margin = 12 * s, top = 10 * s, tail = 16 * s;
+            int width = (int)Math.Ceiling(panel.Width + margin * 2), height = (int)Math.Ceiling(top + panel.Height + tail + 4 * s);
+            int feetX = body.Left + body.Width / 2, gap = (int)Math.Round(offset * s);
+            int below = body.Bottom + gap;
+            bool fits = !above && below + height <= area.Bottom;
+            int y = fits ? below : head.Y - height - gap;
+            y = Math.Max(area.Top, Math.Min(area.Bottom - height, y));
+            int x = width >= area.Width ? area.Left : Math.Max(area.Left, Math.Min(area.Right - width, feetX - width / 2));
+            RectangleF rect = new RectangleF(margin, fits ? tail + 4 * s : top, panel.Width, panel.Height);
+            float tipX = Math.Max(rect.Left + 24 * s, Math.Min(rect.Right - 24 * s, feetX - x));
+            return new Placement { At = new Point(x, y), Size = new Size(width, height), Panel = rect, TipX = tipX, TipY = fits ? 0 : height - 1, Below = fits };
+        }
+    }
+
+    internal static class FullscreenRule
+    {
+        private static readonly string[] Shell = { "Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd" };
+
+        // A window covering its whole monitor, taskbar included, that isn't the desktop itself.
+        internal static bool Covers(Rectangle window, Rectangle monitor, string className, bool minimized)
+        {
+            if (minimized || Array.IndexOf(Shell, className ?? "") >= 0) return false;
+            return window.Left <= monitor.Left + 1 && window.Top <= monitor.Top + 1 && window.Right >= monitor.Right - 1 && window.Bottom >= monitor.Bottom - 1;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- reacting to the music
+
+    internal enum ReactMode { Off, Subtle, Normal, Intense }
+
+    internal enum Energy { Calm, Building, Energetic }
+
+    // How the drawer reacts this frame. Every value is 0 to 1 except Shift (pixels at 100%, signed) and Sweep (-1 when no
+    // scan is passing). None is the plain Lyrics 0.2 look.
+    internal sealed class Reaction
+    {
+        internal static readonly Reaction None = new Reaction();
+        // Bass: the player's glow and edge pulse.
+        internal float Glow;
+        // Hits: the current line's cyan/pink ghosts separate.
+        internal float Ghost;
+        // Treble: a few scanlines flare and slip.
+        internal float Scan;
+        // Treble: extra slivers torn off the edge, like the player's own.
+        internal float Slivers;
+        // Mids (vocals, mostly): the current line's ghosts glow a little more.
+        internal float Emphasis;
+        // A strong moment: the player's tear, for a moment.
+        internal float Tear;
+        // A strong moment: the text slips sideways by this many pixels (at 100%).
+        internal float Shift;
+        // A strong moment, from 1 at its start down to 0 at its end: slices of the current line slip, the colours split
+        // wide, the edge breaks, and for its first frame the line drops out like a lost transmission.
+        internal float Strong;
+        // A mid or treble hit: a few characters of the current line double sideways for a frame.
+        internal float Flicker;
+        // The current line's slow chromatic breathing, 0 to 1.
+        internal float Breath;
+        // A scan of light passing along the current line, 0 to 1 of the way, or -1.
+        internal float Sweep = -1;
+        // How alive the song is right now, relative to itself.
+        internal float Level;
+        internal Energy State;
+        // Picks where slivers, flares, slices and tears go; the same for every frame of one event.
+        internal int Seed;
+
+        internal bool IsNone
+        {
+            get { return Glow == 0 && Ghost == 0 && Scan == 0 && Slivers == 0 && Emphasis == 0 && Tear == 0 && Shift == 0 && Strong == 0 && Flicker == 0 && Breath == 0 && Sweep < 0; }
+        }
+
+        // Rounded to steps a person can see, so the drawer is only redrawn when the reaction visibly changes.
+        internal string Signature
+        {
+            get
+            {
+                if (IsNone) return "calm";
+                return Math.Round(Glow * 8) + "," + Math.Round(Ghost * 6) + "," + Math.Round(Scan * 4) + "," + Math.Round(Slivers * 3) + "," + Math.Round(Emphasis * 5) + ","
+                    + Math.Round(Shift * 2) + "," + Math.Round(Strong * 8) + "," + Math.Round(Flicker * 3) + "," + Math.Round(Breath * 5) + "," + Math.Round(Sweep * 24) + ","
+                    + (Tear > 0 || Strong > 0 || Scan > 0 || Slivers > 0 || Flicker > 0 ? Seed : 0);
+            }
+        }
+    }
+
+    // Turns Capri's sound levels into reactions, judged against the song itself rather than how loud it's playing.
+    //
+    // Capri's bands are decibels squeezed into 0 to 1, from a meter that jumps up on a hit and falls slowly. Turning the
+    // volume down shifts every band by the same amount, so how much the bands jump from one frame to the next (the flux)
+    // doesn't depend on the volume. For each of four signals (bass, mids, treble, all bands) the flux is compared with its
+    // own recent average and spread: a z-score. A hit is a flux well above what this song has been doing; a strong moment
+    // is a much bigger one, or a drop (the level leaping to the top of this song's recent range). Strong moments need less
+    // the more energetic the song is right now, have cooldowns, and if an energetic stretch goes long without one the bar
+    // slowly lowers, so energetic music always gets some. Every impulse dies away, so nothing sticks.
+    //
+    // Music.Loudness (RMS x 3.2, clipped at 1) sits at 1.0 on most mastered music, so it's only shown in the diagnostics.
+    internal sealed class Reactor
+    {
+        internal const int Bass = 0, Mid = 1, High = 2, All = 3;
+        internal static readonly string[] Names = { "bass", "mids", "treble", "all" };
+        private static readonly double[] Decay = { 0.11, 0.15, 0.07, 0.12 };
+        private static readonly double[] Cooldown = { 0.16, 0.18, 0.11, 0.2 };
+        private const double StatsSeconds = 4, ShortSeconds = 0.6, MidSeconds = 4, HoldSeconds = 0.35;
+        private const float FluxGate = 0.02f, SpreadFloor = 0.004f, RangeFloor = 0.08f;
+
+        private readonly float[] previous = new float[8];
+        // peak: how big this song's hits usually are, per signal; punch: this frame's jump against that.
+        private readonly float[] peak = new float[4], punch = new float[4];
+        private readonly int[] learned = new int[4];
+        private readonly float[] level = new float[4], flux = new float[4], mean = new float[4], spread = new float[4], variance = new float[4], z = new float[4], impulse = new float[4];
+        private readonly double[] hitAt = { -99, -99, -99, -99 };
+        private readonly Random random;
+        private double last = double.NaN, holdUntil, strongAt = -99, strongUntil = -99, strongLength = 0.15, blipAt, blipUntil = -99, sweepAt, sweepFrom = -99, busy;
+        private float energyShort, energyMid, low = -1, high = -1, vocals, loudness;
+        private bool resting = true, listening;
+        private int seed = 1, flickerSeed;
+        private double flickerUntil = -99;
+        // For the diagnostics: what happened, and why the last candidate strong moment wasn't one.
+        private string rejected = "none yet";
+        private readonly Queue<double> recentHits = new Queue<double>(), recentStrong = new Queue<double>();
+        private float lastStrongZ;
+
+        internal int Hits, Strong;
+
+        internal Reactor(int randomSeed)
+        {
+            random = new Random(randomSeed);
+            blipAt = 6 + random.NextDouble() * 8;
+            sweepAt = 4 + random.NextDouble() * 4;
+        }
+
+        internal float Impulse(int channel) { return impulse[channel]; }
+        internal float Z(int channel) { return z[channel]; }
+
+        // How alive the song is now, 0 to 1, against its own recent quietest and loudest.
+        internal float Level
+        {
+            get { return high - low < 1e-6f ? 0 : Clamp((energyShort - low) / Math.Max(RangeFloor, high - low)); }
+        }
+
+        // How busy and hard-hitting the rhythm is, 0 to 1: hits in the last couple of seconds, each counted by how hard it
+        // was. Jumps are in Capri's dB scale, so this doesn't depend on the volume either. A song that's loud and driving
+        // all the way through has no quieter part to compare with, and this is what tells it's energetic.
+        internal float Lively { get { return Clamp((float)(busy / 4.5)); } }
+
+        internal Energy State
+        {
+            get
+            {
+                float level = Level, lively = Lively, rise = high - low < 1e-6f ? 0 : (energyShort - energyMid) / Math.Max(RangeFloor, high - low);
+                // Still climbing reads as building, even when it's already near its loudest; it's energetic once it holds.
+                if (rise > 0.12f && Math.Max(level, lively) >= 0.2f && lively < 0.75f) return Energy.Building;
+                if (level >= 0.68f && lively >= 0.3f || lively >= 0.55f) return Energy.Energetic;
+                if (level >= 0.35f || lively >= 0.35f) return Energy.Building;
+                return Energy.Calm;
+            }
+        }
+
+        // Bass, mids and treble from 8 of Capri's bands (40 Hz to 16 kHz, about an octave each): 40-180 Hz, 375 Hz-3.5 kHz,
+        // 3.5-16 kHz.
+        internal static void Split(float[] bands, out float bass, out float mid, out float high)
+        {
+            bass = mid = high = 0;
+            if (bands == null || bands.Length < 8) return;
+            bass = Math.Max(bands[0], bands[1]);
+            mid = (bands[3] + bands[4] + bands[5]) / 3;
+            high = (bands[6] + bands[7]) / 2;
+        }
+
+        // A seek, a new track or a resume: the sound may jump for reasons that aren't the music, so the frame-to-frame
+        // comparison starts again from here and nothing counts for a moment. What's been learned about the song stays.
+        internal void Reset() { resting = true; }
+
+        // The old shape, for callers with just bass, mids, treble and loudness: spread over 8 bands.
+        internal void Feed(float bass, float mids, float treble, float loud, double now, bool active, ReactMode mode)
+        {
+            Feed(new[] { bass, bass, (bass + mids) / 2, mids, mids, mids, treble, treble }, loud, now, active, mode);
+        }
+
+        internal void Feed(float[] bands, float loud, double now, bool active, ReactMode mode)
+        {
+            double step = double.IsNaN(last) ? 0 : Math.Max(0, Math.Min(0.25, now - last));
+            last = now;
+            for (int c = 0; c < 4; c++) impulse[c] *= (float)Math.Exp(-step / Decay[c]);
+            busy *= Math.Exp(-step / 2);
+            Trim(recentHits, now);
+            Trim(recentStrong, now);
+            loudness = Clamp(loud);
+            listening = active && mode != ReactMode.Off && bands != null && bands.Length >= 8;
+            if (!listening)
+            {
+                vocals *= (float)Math.Exp(-step / 0.3);
+                resting = true;
+                return;
+            }
+            float bass, mids, treble, all = 0;
+            Split(bands, out bass, out mids, out treble);
+            for (int i = 0; i < 8; i++) all += Clamp(bands[i]) / 8;
+            level[Bass] = bass; level[Mid] = mids; level[High] = treble; level[All] = all;
+            vocals += (mids - vocals) * Ease(step, 0.4);
+            // What this song's quietest and loudest have been lately: each follows quickly toward its own side, slowly back.
+            if (low < 0) { low = high = energyShort = energyMid = all; }
+            energyShort += (all - energyShort) * Ease(step, ShortSeconds);
+            energyMid += (all - energyMid) * Ease(step, MidSeconds);
+            low += (energyShort - low) * Ease(step, energyShort < low ? 1.0 : 20);
+            high += (energyShort - high) * Ease(step, energyShort > high ? 0.5 : 20);
+            if (resting)
+            {
+                for (int i = 0; i < 8; i++) previous[i] = Clamp(bands[i]);
+                holdUntil = now + HoldSeconds;
+                resting = false;
+                return;
+            }
+            // Flux: how far each signal's bands jumped up since the last frame. Falls don't count.
+            float fBass = Up(bands, 0, 2), fMid = Up(bands, 3, 6), fHigh = Up(bands, 6, 8), fAll = Up(bands, 0, 8);
+            for (int i = 0; i < 8; i++) previous[i] = Clamp(bands[i]);
+            flux[Bass] = fBass; flux[Mid] = fMid; flux[High] = fHigh; flux[All] = fAll;
+            bool hit = false;
+            for (int c = 0; c < 4; c++)
+            {
+                z[c] = (flux[c] - mean[c]) / Math.Max(SpreadFloor, spread[c]);
+                punch[c] = learned[c] < 4 ? 0 : flux[c] / Math.Max(FluxGate, peak[c]);
+                float needed = mode == ReactMode.Subtle ? 2.6f : 2.0f;
+                // A hit stands out from this song's usual movement (z) and is a real jump, a couple of dB at least, not
+                // the meter's jitter. Both are in Capri's dB scale, so they don't depend on how loud it's playing.
+                if (now >= holdUntil && flux[c] > FluxGate && flux[c] > 2 * mean[c] && z[c] > needed && now - hitAt[c] >= Cooldown[c])
+                {
+                    float strength = Math.Max(0.25f, Math.Min(1, (z[c] - 1.5f) / 4) * Math.Min(1, 0.2f + flux[c] / 0.12f));
+                    impulse[c] = Math.Max(impulse[c], strength);
+                    hitAt[c] = now;
+                    if (!hit)
+                    {
+                        busy += Math.Min(1, flux[c] / 0.15f);
+                        Hits++;
+                        recentHits.Enqueue(now);
+                        seed = random.Next(1, int.MaxValue);
+                    }
+                    if (c == Mid || c == High) { flickerUntil = now + 0.06; flickerSeed = random.Next(1, int.MaxValue); }
+                    hit = true;
+                }
+                // How big this song's hits usually are: learned from each hit, after it's been judged.
+                if (flux[c] > FluxGate && z[c] > 2.0f && now >= holdUntil)
+                {
+                    peak[c] = learned[c] == 0 ? flux[c] : peak[c] + (flux[c] - peak[c]) * 0.12f;
+                    learned[c]++;
+                }
+                // The song's normal flux, and how much it varies: the spread is a running deviation, so regular beats
+                // are part of normal and only what stands out from them is a hit.
+                float a = Ease(step, StatsSeconds);
+                mean[c] += (flux[c] - mean[c]) * a;
+                variance[c] += ((flux[c] - mean[c]) * (flux[c] - mean[c]) - variance[c]) * a;
+                spread[c] = (float)Math.Sqrt(variance[c]);
+            }
+            ConsiderStrong(now, mode);
+            if (energyShort > 0.02f && now >= blipAt) { blipUntil = now + 0.09; blipAt = now + 6 + random.NextDouble() * 8; }
+            if (now >= sweepAt)
+            {
+                sweepFrom = now;
+                Energy state = State;
+                sweepAt = now + (state == Energy.Energetic ? 3 + random.NextDouble() * 3 : state == Energy.Building ? 5 + random.NextDouble() * 4 : 8 + random.NextDouble() * 6);
+            }
+        }
+
+        // How many times bigger than this song's usual hit a jump must be to be a strong moment, by how energetic the
+        // song is now; a little lower the longer energetic music has gone without one.
+        internal float StrongBar(ReactMode mode, Energy state, double now)
+        {
+            if (mode == ReactMode.Subtle || mode == ReactMode.Off) return float.MaxValue;
+            bool intense = mode == ReactMode.Intense;
+            float bar = state == Energy.Energetic ? (intense ? 1.2f : 1.55f) : state == Energy.Building ? (intense ? 1.35f : 1.8f) : (intense ? 1.7f : 2.3f);
+            if (state != Energy.Calm)
+            {
+                double waited = now - strongAt - (intense ? 3 : 8);
+                if (waited > 0) bar -= (float)Math.Min(intense ? 0.15 : 0.4, waited * 0.05);
+            }
+            return bar;
+        }
+
+        private void ConsiderStrong(double now, ReactMode mode)
+        {
+            Energy state = State;
+            // Kicks, drops and full-band hits make strong moments; hi-hats and cymbals alone never do.
+            if (flux[Bass] <= FluxGate * 0.5f) return;
+            float best = Math.Max(z[Bass] > 2.0f ? punch[Bass] : 0, z[All] > 2.0f ? punch[All] : 0);
+            bool drop = high - low > RangeFloor && (energyShort - energyMid) / (high - low) > 0.35f && energyShort - energyMid > 0.04f && Math.Max(z[Bass], z[All]) > 2.0f;
+            if (best < 1.0f && !drop) return;
+            if (now < holdUntil) return;
+            if (mode == ReactMode.Subtle) { rejected = "Subtle never has strong moments"; return; }
+            float bar = StrongBar(mode, state, now);
+            double wait = mode == ReactMode.Intense ? 1.1 : 3.5;
+            if (!drop && best < bar) { rejected = best.ToString("0.00", CultureInfo.InvariantCulture) + "x a usual hit, under the bar of " + bar.ToString("0.00", CultureInfo.InvariantCulture) + "x (" + state.ToString().ToLowerInvariant() + ")"; return; }
+            if (flux[All] < FluxGate && !drop) { rejected = "too small to count (flux " + flux[All].ToString("0.000", CultureInfo.InvariantCulture) + ")"; return; }
+            if (now - strongAt < wait) { rejected = "cooldown, " + (wait - (now - strongAt)).ToString("0.0", CultureInfo.InvariantCulture) + " s left"; return; }
+            strongAt = now;
+            strongLength = mode == ReactMode.Intense ? 0.18 : 0.14;
+            strongUntil = now + strongLength;
+            lastStrongZ = best;
+            Strong++;
+            recentStrong.Enqueue(now);
+            seed = random.Next(1, int.MaxValue);
+            rejected = "none: the last candidate was strong (" + (drop ? "a drop" : best.ToString("0.00", CultureInfo.InvariantCulture) + "x a usual hit") + ")";
+        }
+
+        internal Reaction Now(double now, ReactMode mode)
+        {
+            if (mode == ReactMode.Off || !listening) return Reaction.None;
+            Energy state = State;
+            float lift = Math.Max(Level, Lively * 0.8f);
+            float k = mode == ReactMode.Subtle ? 0.45f : mode == ReactMode.Intense ? 1.4f : 1f;
+            // Calm songs react less; energetic ones more.
+            float alive = state == Energy.Calm ? 0.6f : state == Energy.Building ? 0.85f : 1f;
+            Reaction react = new Reaction { Seed = seed, State = state, Level = lift };
+            float playing = Math.Min(1, energyShort * 6);
+            react.Breath = Clamp((float)(0.5 + 0.5 * Math.Sin(2 * Math.PI * now / 3.4)) * (0.3f + 0.7f * lift) * playing);
+            react.Glow = Clamp((0.1f * react.Breath + 0.65f * impulse[Bass] + 0.1f * impulse[All] + 0.12f * lift) * k * alive);
+            react.Ghost = Clamp((0.55f * impulse[High] + 0.35f * impulse[All] + (now < blipUntil ? 0.3f : 0)) * k * alive);
+            react.Scan = Clamp(impulse[High] * 0.9f * k * alive * (mode == ReactMode.Subtle ? 0.5f : 1));
+            react.Slivers = impulse[High] > 0.3f ? Clamp(impulse[High] * k * alive) : 0;
+            react.Emphasis = Clamp((vocals - 0.25f) * 1.6f) * 0.6f * Math.Min(1, k);
+            react.Flicker = now < flickerUntil && mode != ReactMode.Subtle ? Clamp(0.6f * k * alive) : 0;
+            if (react.Flicker > 0) react.Seed = flickerSeed;
+            if (now < strongUntil)
+            {
+                react.Strong = Clamp((float)((strongUntil - now) / strongLength));
+                react.Tear = now < strongAt + 0.12 ? (mode == ReactMode.Intense ? 1 : 0.7f) : 0;
+                react.Shift = (seed % 2 == 0 ? 1 : -1) * Math.Min(2.5f, (1.2f + 1.3f * react.Strong) * Math.Min(1, k));
+                react.Ghost = Math.Max(react.Ghost, react.Strong);
+                react.Seed = seed;
+            }
+            double sweep = now - sweepFrom;
+            react.Sweep = playing > 0.1f && sweep >= 0 && sweep < 0.45 ? (float)(sweep / 0.45) : -1;
+            // Too small to see: treat as calm, so nothing redraws for it.
+            if (react.Glow < 0.04f) react.Glow = 0;
+            if (react.Ghost < 0.04f) react.Ghost = 0;
+            if (react.Scan < 0.05f) react.Scan = 0;
+            if (react.Emphasis < 0.04f) react.Emphasis = 0;
+            if (react.Breath < 0.05f) react.Breath = 0;
+            return react;
+        }
+
+        // Everything it knows, for the diagnostics page.
+        internal string Describe(double now, ReactMode mode, bool listening)
+        {
+            StringBuilder text = new StringBuilder();
+            text.Append("Music reactions: ").Append(mode.ToString().ToLowerInvariant()).Append(listening ? ", listening" : ", not listening (no drawer, paused, talking, or off)").Append('\n');
+            text.Append("State: ").Append(State.ToString().ToLowerInvariant()).Append(", level ").Append(F(Level)).Append(" of this song's recent range ").Append(F(low)).Append(" - ").Append(F(high))
+                .Append(", rhythm ").Append(F(Lively)).Append('\n');
+            text.Append("Energy now ").Append(F(energyShort)).Append(", over 4 s ").Append(F(energyMid)).Append('\n');
+            text.Append("Capri's loudness ").Append(F(loudness)).Append(loudness >= 0.98f ? " (pinned at the top, so it isn't used)" : "").Append('\n');
+            text.Append('\n').Append("signal   level   flux    usual   spread  z       hit     punch   impulse").Append('\n');
+            for (int c = 0; c < 4; c++)
+                text.Append(Names[c].PadRight(9)).Append(F(level[c]).PadRight(8)).Append(F(flux[c], "0.000").PadRight(8)).Append(F(mean[c], "0.000").PadRight(8))
+                    .Append(F(spread[c], "0.000").PadRight(8)).Append(F(z[c], "0.0").PadRight(8)).Append(F(peak[c], "0.000").PadRight(8)).Append(F(punch[c], "0.00").PadRight(8))
+                    .Append(F(impulse[c])).Append('\n');
+            text.Append("(flux: how far it jumped this frame; usual and spread: its normal movement; z: how much this stands out;").Append('\n');
+            text.Append(" hit: this song's typical hit; punch: this jump against that)").Append('\n');
+            text.Append('\n').Append("A hit needs z over ").Append(mode == ReactMode.Subtle ? "2.6" : "2.0").Append(", flux over ").Append(F(FluxGate, "0.000")).Append(" and over twice its usual").Append('\n');
+            float bar = StrongBar(mode, State, now);
+            text.Append("A strong moment now needs a hit with punch over ").Append(bar > 1000 ? "(never in this mode)" : F(bar, "0.00") + "x").Append(" in the bass or overall, or a drop; cooldown ").Append(mode == ReactMode.Intense ? "1.1" : "3.5").Append(" s").Append('\n');
+            text.Append("Eligible now: ").Append(bar < 1000 && now - strongAt >= (mode == ReactMode.Intense ? 1.1 : 3.5) && now >= holdUntil ? "yes" : "no").Append('\n');
+            text.Append("Last strong moment: ").Append(strongAt < 0 ? "none" : (now - strongAt).ToString("0.0", CultureInfo.InvariantCulture) + " s ago, punch " + F(lastStrongZ, "0.00") + "x").Append('\n');
+            text.Append("Last rejected: ").Append(rejected).Append('\n');
+            text.Append("Last 60 s: ").Append(recentHits.Count).Append(" hits, ").Append(recentStrong.Count).Append(" strong; since start ").Append(Hits).Append(" hits, ").Append(Strong).Append(" strong").Append('\n');
+            return text.ToString();
+        }
+
+        private static string F(float value) { return F(value, "0.00"); }
+        private static string F(float value, string format) { return value.ToString(format, CultureInfo.InvariantCulture); }
+
+        private static void Trim(Queue<double> times, double now) { while (times.Count > 0 && now - times.Peek() > 60) times.Dequeue(); }
+
+        private float Up(float[] bands, int from, int to)
+        {
+            float sum = 0;
+            for (int i = from; i < to; i++) sum += Math.Max(0, Clamp(bands[i]) - previous[i]);
+            return sum / (to - from);
+        }
+
+        private static float Ease(double step, double seconds) { return (float)(1 - Math.Exp(-step / seconds)); }
+
+        private static float Clamp(float value) { return float.IsNaN(value) ? 0 : Math.Max(0, Math.Min(1, value)); }
+    }
+
+    // ------------------------------------------------------------------------------------------------- the player drawer
+
+    internal enum DrawerSide { Below, Right, Left }
+
+    internal sealed class Drawer
+    {
+        internal DrawerSide Side;
+        // The window: where it goes and how big it is.
+        internal Point At;
+        internal Size Size;
+        // The whole panel in the window's bitmap, including the strip tucked under the player's edge.
+        internal RectangleF Panel;
+        // The part that shows, on screen.
+        internal Rectangle Shows;
+        internal float Scale, Tuck;
+        // A row of the player's scanlines, in the bitmap, so the lyrics' scanlines carry straight on from the player's.
+        internal float ScanStart;
+        // Lines that fit here, which may be fewer than the setting.
+        internal int Lines;
+
+        internal string Signature { get { return Side + "," + At.X + "," + At.Y + "," + Size.Width + "," + Size.Height + "," + Lines; } }
+    }
+
+    // Where the drawer goes around Capri's music player. In order: out of its bottom edge with every line asked for; out
+    // of its bottom with fewer (3, 2, then 1); out of its right side, then its left, as tall as the player. Never over her
+    // body, never past her screen's working area. Null when none of those fit, and the lyrics go over her head instead.
+    internal static class DrawerLayout
+    {
+        // How far the drawer reaches up under the player's edge (at 100%), filling the player's rounded corners, so the
+        // two read as one plate with the player's own bottom edge as the seam between them.
+        internal const float Tuck = 16;
+        internal const float MinSide = 180;
+
+        internal static Drawer Place(Rectangle plate, float s, Rectangle area, Rectangle her, int lines, Func<int, float, float> body, float sideWidth)
+        {
+            int glow = (int)Math.Round(TrackerInfo.Glow * s), tuck = (int)Math.Ceiling(Tuck * s);
+            Rectangle clear = her.Width > 8 * s && her.Height > 8 * s ? Rectangle.Inflate(her, -(int)(4 * s), -(int)(4 * s)) : her;
+            int wanted = Math.Max(1, Math.Min(3, lines));
+            for (int n = wanted; n >= 1; n--)
+            {
+                int height = (int)Math.Ceiling(body(n, plate.Width - 36 * s));
+                Rectangle shows = new Rectangle(plate.Left, plate.Bottom, plate.Width, height);
+                if (shows.Bottom > area.Bottom || shows.IntersectsWith(clear)) continue;
+                return new Drawer
+                {
+                    Side = DrawerSide.Below, Lines = n, Scale = s, Tuck = tuck, Shows = shows,
+                    At = new Point(plate.Left - glow, plate.Bottom - tuck), Size = new Size(plate.Width + glow * 2, tuck + height + glow),
+                    Panel = new RectangleF(glow, 0, plate.Width, tuck + height), ScanStart = plate.Top - (plate.Bottom - tuck)
+                };
+            }
+            foreach (DrawerSide side in new[] { DrawerSide.Right, DrawerSide.Left })
+            {
+                float room = side == DrawerSide.Right ? area.Right - plate.Right : plate.Left - area.Left;
+                int width = (int)Math.Floor(Math.Min(sideWidth, room));
+                if (width < MinSide * s) continue;
+                int fit = 0;
+                for (int n = wanted; n >= 1 && fit == 0; n--) if (body(n, width - 36 * s) <= plate.Height) fit = n;
+                if (fit == 0) continue;
+                Rectangle shows = side == DrawerSide.Right ? new Rectangle(plate.Right, plate.Top, width, plate.Height) : new Rectangle(plate.Left - width, plate.Top, width, plate.Height);
+                if (shows.IntersectsWith(clear)) continue;
+                return new Drawer
+                {
+                    Side = side, Lines = fit, Scale = s, Tuck = tuck, Shows = shows, ScanStart = glow,
+                    At = side == DrawerSide.Right ? new Point(plate.Right - tuck, plate.Top - glow) : new Point(plate.Left - width - glow, plate.Top - glow),
+                    Size = new Size(tuck + width + glow, plate.Height + glow * 2),
+                    Panel = side == DrawerSide.Right ? new RectangleF(0, glow, tuck + width, plate.Height) : new RectangleF(glow, glow, width + tuck, plate.Height)
+                };
+            }
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- drawing
+
+    // Draws the lyrics the way Capri draws her speech bubble (SpeechBox.Render in capri-desktop's app/Talk.cs): her plate
+    // with cut corners and a tail, a soft cyan glow, her near-black panel, faint scanlines, a 2 px cyan edge, her red tick,
+    // her mono font, and her colours. The current line is larger and bright, the lines around it smaller and dim.
+    internal sealed class LyricsArt : IDisposable
+    {
+        internal static readonly Color Panel = Color.FromArgb(9, 11, 15);
+        internal static readonly Color Cyan = Color.FromArgb(58, 214, 235);
+        internal static readonly Color Red = Color.FromArgb(232, 36, 64);
+        internal static readonly Color Ink = Color.FromArgb(232, 236, 240);
+        internal static readonly Color Dim = Color.FromArgb(122, 128, 138);
+        internal static readonly Color Pink = Color.FromArgb(255, 46, 136);
+        // Her music player's plate (MiniPlayer.Render in app/Player.cs): near black, almost opaque.
+        internal static readonly Color PlayerFill = Color.FromArgb(250, 5, 6, 9);
+        private const int PanelAlpha = 215;
+
+        private readonly PrivateFontCollection fonts = new PrivateFontCollection();
+        private IntPtr memory = IntPtr.Zero;
+        private readonly FontFamily family;
+
+        internal LyricsArt(string fontFile)
+        {
+            family = Family(fontFile);
+        }
+
+        internal string FontName { get { return family.Name; } }
+
+        // Her own font, read from Capri's resources (only read: Capri is never changed), or the ones she falls back to.
+        private FontFamily Family(string fontFile)
+        {
+            try
+            {
+                // Tests and previews only: a font file, or the name of an installed font.
+                if (!string.IsNullOrEmpty(fontFile) && File.Exists(fontFile))
+                {
+                    fonts.AddFontFile(fontFile);
+                    return fonts.Families[0];
+                }
+                if (!string.IsNullOrEmpty(fontFile)) return new FontFamily(fontFile);
+                using (Stream stream = typeof(ICapriMod).Assembly.GetManifestResourceStream("Capri.Font.Mono.ttf"))
+                    if (stream != null)
+                    {
+                        byte[] bytes = new byte[stream.Length];
+                        int read = 0;
+                        while (read < bytes.Length) { int got = stream.Read(bytes, read, bytes.Length - read); if (got <= 0) break; read += got; }
+                        memory = Marshal.AllocCoTaskMem(bytes.Length);
+                        Marshal.Copy(bytes, 0, memory, bytes.Length);
+                        fonts.AddMemoryFont(memory, bytes.Length);
+                        if (fonts.Families.Length > 0) return fonts.Families[0];
+                    }
+            }
+            catch (Exception error)
+            {
+                if (!(error is IOException || error is ArgumentException || error is ExternalException || error is OutOfMemoryException)) throw;
+            }
+            foreach (string name in new[] { "Cascadia Mono", "Consolas", "Courier New" })
+            {
+                try
+                {
+                    FontFamily installed = new FontFamily(name);
+                    if (installed.IsStyleAvailable(FontStyle.Regular)) return installed;
+                }
+                catch (ArgumentException) { }
+            }
+            return FontFamily.GenericMonospace;
+        }
+
+        public void Dispose()
+        {
+            foreach (Font font in kept.Values) font.Dispose();
+            kept.Clear();
+            fonts.Dispose();
+            if (memory != IntPtr.Zero) { Marshal.FreeCoTaskMem(memory); memory = IntPtr.Zero; }
+        }
+
+        private sealed class Metrics
+        {
+            internal float Current, Side, CurrentRow, SideRow, Top, Bottom, Inset, Right;
+            internal int Sides;
+        }
+
+        private static Metrics Sizes(LyricsSettings settings, float s)
+        {
+            Metrics m = new Metrics { Current = settings.FontSize * s };
+            m.Side = m.Current * 0.78f;
+            m.CurrentRow = m.Current * 1.32f;
+            m.SideRow = m.Side * 1.4f;
+            m.Top = 12 * s;
+            m.Bottom = 10 * s;
+            m.Inset = 24 * s;
+            m.Right = 14 * s;
+            m.Sides = settings.Lines - 1;
+            return m;
+        }
+
+        private Font Make(float pixels) { return new Font(family, Math.Max(4, pixels), FontStyle.Regular, GraphicsUnit.Pixel); }
+
+        // Fonts kept between frames for the animated drawer, which redraws often: one per size.
+        private readonly Dictionary<int, Font> kept = new Dictionary<int, Font>();
+
+        private Font Kept(float pixels)
+        {
+            int key = (int)Math.Round(pixels * 4);
+            Font font;
+            if (!kept.TryGetValue(key, out font)) { font = Make(key / 4f); kept[key] = font; }
+            return font;
+        }
+
+        // The panel's size. It's worked out from the song's longest line and the settings, not the lines on show, so it
+        // stays the same size for the whole song instead of twitching line to line.
+        internal SizeF Measure(LyricsView view, LyricsSettings settings, float s, int areaWidth)
+        {
+            Metrics m = Sizes(settings, s);
+            using (Bitmap scratch = new Bitmap(1, 1))
+            using (Graphics graphics = Graphics.FromImage(scratch))
+            using (Font current = Make(m.Current))
+            {
+                float cw = Width(graphics, "MMMMMMMMMM", current) / 10;
+                float most = Math.Max(cw * 14, Math.Min(cw * 46, areaWidth - 2 * 12 * s - m.Inset - m.Right - 8 * s));
+                float widest = Width(graphics, view.Widest ?? "", current);
+                float text = Math.Max(cw * 14, Math.Min(most, widest + cw));
+                int rows = widest > most ? 2 : 1;
+                return new SizeF(m.Inset + text + m.Right, m.Top + rows * m.CurrentRow + m.Sides * m.SideRow + m.Bottom);
+            }
+        }
+
+        private static float Width(Graphics graphics, string text, Font font)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            return graphics.MeasureString(text, font, PointF.Empty, StringFormat.GenericTypographic).Width;
+        }
+
+        // How far along the line text reaches, trailing spaces included (Width leaves them out).
+        private static float Advance(Graphics graphics, string text, Font font)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            return Width(graphics, text + "|", font) - Width(graphics, "|", font);
+        }
+
+        internal Bitmap Draw(LyricsView view, LyricsSettings settings, float s, Placement place)
+        {
+            Metrics m = Sizes(settings, s);
+            Bitmap image = new Bitmap(Math.Max(1, place.Size.Width), Math.Max(1, place.Size.Height), PixelFormat.Format32bppArgb);
+            RectangleF panel = place.Panel;
+            using (Graphics graphics = Graphics.FromImage(image))
+            using (GraphicsPath path = Plate(panel, 10 * s, place.TipX, place.TipY, 18 * s))
+            using (Font current = Make(m.Current))
+            using (Font side = Make(m.Side))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                using (Pen glow = new Pen(Color.FromArgb(46, Cyan), 7 * s)) graphics.DrawPath(glow, path);
+                using (Brush fill = new SolidBrush(Color.FromArgb(PanelAlpha, Panel))) graphics.FillPath(fill, path);
+                graphics.SetClip(path);
+                using (Pen scan = new Pen(Color.FromArgb(9, 255, 255, 255), Math.Max(1, s)))
+                    for (float row = panel.Top; row < panel.Bottom; row += 3 * s) graphics.DrawLine(scan, panel.Left, row, panel.Right, row);
+                graphics.ResetClip();
+                using (Pen edge = new Pen(Cyan, 2 * s)) graphics.DrawPath(edge, path);
+                using (Brush red = new SolidBrush(Red)) graphics.FillRectangle(red, panel.Left + 10 * s, panel.Top + 13 * s, 3 * s, Math.Max(2 * s, panel.Height - 26 * s));
+
+                float x = panel.Left + m.Inset, textWidth = panel.Width - m.Inset - m.Right;
+                graphics.SetClip(new RectangleF(panel.Left + 16 * s, panel.Top + 3 * s, panel.Width - 18 * s, panel.Height - 6 * s));
+                float ease = 1 - (float)Math.Pow(1 - view.Slide, 3);
+                float y = panel.Top + m.Top + (1 - ease) * m.SideRow;
+                int currentRows = (int)Math.Round((panel.Height - m.Top - m.Bottom - m.Sides * m.SideRow) / m.CurrentRow);
+                ViewLine before = Find(view, LineRole.Previous), now = Find(view, LineRole.Current), next = Find(view, LineRole.Next);
+                if (settings.Lines >= 3)
+                {
+                    if (before != null) Side(graphics, before, side, x, y, textWidth, 150);
+                    y += m.SideRow;
+                }
+                if (now != null) Current(graphics, now, current, x, y, textWidth, Math.Max(1, currentRows), s, (int)(150 + 105 * ease), Red, 60, Cyan, 70, Cyan, 255);
+                y += Math.Max(1, currentRows) * m.CurrentRow;
+                if (next != null && settings.Lines >= 2) Side(graphics, next, side, x, y, textWidth, 215);
+                else if (next != null && now == null) Side(graphics, next, side, x, panel.Top + m.Top, textWidth, 215);
+                graphics.ResetClip();
+            }
+            return image;
+        }
+
+        private static ViewLine Find(LyricsView view, LineRole role)
+        {
+            foreach (ViewLine line in view.Lines) if (line.Role == role) return line;
+            return null;
+        }
+
+        private static void Side(Graphics graphics, ViewLine line, Font font, float x, float y, float width, int alpha, float shift = 0)
+        {
+            x += shift;
+            string text = line.Gap ? ". . ." : Cut(graphics, line.Text, font, width);
+            using (Brush dim = new SolidBrush(Color.FromArgb(alpha, Dim))) graphics.DrawString(text, font, dim, x, y, StringFormat.GenericTypographic);
+        }
+
+        // Bright, with the cyan and red ghosts her art uses; the part already sung turns cyan when the lyrics time words.
+        private static void Current(Graphics graphics, ViewLine line, Font font, float x, float y, float width, int rows, float s, int alpha,
+            Color leftGhost, int leftAlpha, Color rightGhost, int rightAlpha, Color sungColour, int sungAlpha, float spread = 0, float shift = 0)
+        {
+            x += shift * s;
+            if (line.Gap)
+            {
+                using (Brush dim = new SolidBrush(Color.FromArgb(alpha, Dim))) graphics.DrawString(". . .", font, dim, x, y, StringFormat.GenericTypographic);
+                return;
+            }
+            List<string> wrapped = Wrap(graphics, line.Text, font, width);
+            if (wrapped.Count > rows)
+            {
+                string rest = string.Join(" ", wrapped.GetRange(rows - 1, wrapped.Count - rows + 1).ToArray());
+                wrapped = wrapped.GetRange(0, rows - 1);
+                wrapped.Add(Cut(graphics, rest, font, width));
+            }
+            int sung = line.Sung < 0 ? -1 : (int)Math.Round(line.Sung * line.Text.Length), counted = 0;
+            float row = font.Size * 1.32f;
+            // A line shorter than the rows kept for the song's longest one sits in the middle of them.
+            y += (rows - wrapped.Count) * row / 2;
+            using (Brush red = new SolidBrush(Color.FromArgb(alpha * leftAlpha / 255, leftGhost)))
+            using (Brush cyanGhost = new SolidBrush(Color.FromArgb(alpha * rightAlpha / 255, rightGhost)))
+            using (Brush ink = new SolidBrush(Color.FromArgb(alpha, Ink)))
+            using (Brush waiting = new SolidBrush(Color.FromArgb(alpha * 200 / 255, Ink)))
+            using (Brush done = new SolidBrush(Color.FromArgb(alpha * sungAlpha / 255, sungColour)))
+                for (int i = 0; i < wrapped.Count; i++)
+                {
+                    string text = wrapped[i];
+                    float top = y + i * row;
+                    graphics.DrawString(text, font, red, x - (1.1f + spread) * s, top, StringFormat.GenericTypographic);
+                    graphics.DrawString(text, font, cyanGhost, x + (1.2f + spread) * s, top, StringFormat.GenericTypographic);
+                    graphics.DrawString(text, font, sung < 0 ? ink : waiting, x, top, StringFormat.GenericTypographic);
+                    if (sung > counted)
+                    {
+                        int here = Math.Min(text.Length, sung - counted);
+                        if (here > 0) graphics.DrawString(text.Substring(0, here), font, done, x, top, StringFormat.GenericTypographic);
+                    }
+                    counted += text.Length + 1;
+                }
+        }
+
+        internal static List<string> Wrap(Graphics graphics, string text, Font font, float width)
+        {
+            List<string> rows = new List<string>();
+            string row = "";
+            foreach (string word in (text ?? "").Split(' '))
+            {
+                string tried = row.Length == 0 ? word : row + " " + word;
+                if (Width(graphics, tried, font) <= width || row.Length == 0 && Width(graphics, word, font) <= width) { row = tried; continue; }
+                if (row.Length > 0) rows.Add(row);
+                row = word;
+                while (row.Length > 1 && Width(graphics, row, font) > width)
+                {
+                    int fit = row.Length - 1;
+                    while (fit > 1 && Width(graphics, row.Substring(0, fit), font) > width) fit--;
+                    rows.Add(row.Substring(0, fit));
+                    row = row.Substring(fit);
+                }
+            }
+            if (row.Length > 0) rows.Add(row);
+            return rows;
+        }
+
+        internal static string Cut(Graphics graphics, string text, Font font, float width)
+        {
+            if (Width(graphics, text, font) <= width) return text;
+            int keep = text.Length;
+            while (keep > 1 && Width(graphics, text.Substring(0, keep) + "...", font) > width) keep--;
+            return text.Substring(0, keep).TrimEnd() + "...";
+        }
+
+        // ---- the player drawer: her music player's look (MiniPlayer.Render in app/Player.cs), continued
+
+        private sealed class DrawerMetrics
+        {
+            internal float Current, Side, CurrentRow, SideRow, Top, Bottom, Inset, Right;
+        }
+
+        private static DrawerMetrics DrawerSizes(LyricsSettings settings, float s)
+        {
+            DrawerMetrics m = new DrawerMetrics { Current = settings.FontSize * s };
+            m.Side = m.Current * 0.8f;
+            m.CurrentRow = m.Current * 1.3f;
+            m.SideRow = m.Side * 1.45f;
+            m.Top = 8 * s;
+            m.Bottom = 12 * s;
+            // Lined up with the song's title on the player, 18 px in.
+            m.Inset = 18 * s;
+            m.Right = 18 * s;
+            return m;
+        }
+
+        private int CurrentRows(LyricsView view, Font current, float width)
+        {
+            using (Bitmap scratch = new Bitmap(1, 1))
+            using (Graphics graphics = Graphics.FromImage(scratch)) return Width(graphics, view.Widest ?? "", current) > width ? 2 : 1;
+        }
+
+        // How tall the part that shows is, for a number of lines and a text width. Set by the song's longest line, so it
+        // doesn't change size line to line.
+        internal float DrawerBody(LyricsView view, LyricsSettings settings, float s, int lines, float textWidth)
+        {
+            DrawerMetrics m = DrawerSizes(settings, s);
+            using (Font current = Make(m.Current))
+                return m.Top + (lines >= 3 ? m.SideRow : 0) + CurrentRows(view, current, textWidth) * m.CurrentRow + (lines >= 2 ? m.SideRow : 0) + m.Bottom;
+        }
+
+        // How wide a drawer out of the player's side wants to be.
+        internal float SideWidth(LyricsView view, LyricsSettings settings, float s)
+        {
+            DrawerMetrics m = DrawerSizes(settings, s);
+            using (Bitmap scratch = new Bitmap(1, 1))
+            using (Graphics graphics = Graphics.FromImage(scratch))
+            using (Font current = Make(m.Current))
+            {
+                float cw = Width(graphics, "MMMMMMMMMM", current) / 10;
+                return Math.Max(20 * cw, Math.Min(46 * cw, Width(graphics, view.Widest ?? "", current) + cw)) + m.Inset + m.Right;
+            }
+        }
+
+        // The drawer, opened as far as reveal (0 shut, 1 open): it slides out from under the player.
+        internal Bitmap DrawDrawer(LyricsView view, LyricsSettings settings, Drawer drawer, double reveal, Reaction react = null)
+        {
+            react = react ?? Reaction.None;
+            float s = drawer.Scale;
+            DrawerMetrics m = DrawerSizes(settings, s);
+            Bitmap image = new Bitmap(Math.Max(1, drawer.Size.Width), Math.Max(1, drawer.Size.Height), PixelFormat.Format32bppArgb);
+            float open = (float)Math.Max(0, Math.Min(1, reveal));
+            RectangleF whole = drawer.Panel, panel;
+            float tuck = drawer.Tuck;
+            if (drawer.Side == DrawerSide.Below) panel = new RectangleF(whole.Left, whole.Top, whole.Width, tuck + (whole.Height - tuck) * open);
+            else if (drawer.Side == DrawerSide.Right) panel = new RectangleF(whole.Left, whole.Top, tuck + (whole.Width - tuck) * open, whole.Height);
+            else { float width = tuck + (whole.Width - tuck) * open; panel = new RectangleF(whole.Right - width, whole.Top, width, whole.Height); }
+            float shows = drawer.Side == DrawerSide.Below ? panel.Height - tuck : panel.Width - tuck;
+            if (shows < 1) return image;
+            float radius = Math.Min(16 * s, shows / 2);
+            using (Graphics graphics = Graphics.FromImage(image))
+            using (GraphicsPath fill = DrawerPath(panel, drawer.Side, radius, true))
+            using (GraphicsPath edge = DrawerPath(panel, drawer.Side, radius, false))
+            using (Font current = Make(m.Current))
+            using (Font side = Make(m.Side))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                // Pink on the left, cyan on the right, like the player. A drawer out of a side mirrors it from the seam.
+                PointF from, to;
+                Color first = Pink, last = Cyan;
+                if (drawer.Side == DrawerSide.Below) { from = new PointF(panel.Left - 1, 0); to = new PointF(panel.Right + 1, 0); }
+                else if (drawer.Side == DrawerSide.Right) { from = new PointF(panel.Left - 1, 0); to = new PointF(panel.Right + 1, 0); first = Cyan; last = Pink; }
+                else { from = new PointF(panel.Left - 1, 0); to = new PointF(panel.Right + 1, 0); first = Cyan; last = Pink; }
+                // The player's two glow strokes (alpha 30 and 70); the bass makes them swell.
+                int wideAlpha = 30 + (int)(60 * react.Glow), nearAlpha = Math.Min(200, 70 + (int)(90 * react.Glow));
+                using (LinearGradientBrush haze = new LinearGradientBrush(from, to, Color.FromArgb(wideAlpha, first), Color.FromArgb(wideAlpha, last)))
+                using (Pen wide = new Pen(haze, 14 * s)) graphics.DrawPath(wide, edge);
+                using (LinearGradientBrush haze = new LinearGradientBrush(from, to, Color.FromArgb(nearAlpha, first), Color.FromArgb(nearAlpha, last)))
+                using (Pen near = new Pen(haze, 6 * s)) graphics.DrawPath(near, edge);
+                using (Brush brush = new SolidBrush(PlayerFill)) graphics.FillPath(brush, fill);
+                graphics.SetClip(fill);
+                using (Pen scan = new Pen(Color.FromArgb(9, 255, 255, 255), Math.Max(1, s)))
+                {
+                    float step = 3 * s, row = drawer.ScanStart + (float)Math.Ceiling((panel.Top - drawer.ScanStart) / step) * step;
+                    for (; row < panel.Bottom; row += step) graphics.DrawLine(scan, panel.Left, row, panel.Right, row);
+                }
+                // Treble: a few scanlines flare and slip sideways, tinted like the player's tear.
+                if (react.Scan > 0)
+                {
+                    Random place = new Random(react.Seed);
+                    float step = 3 * s, top = panel.Top + drawer.Tuck * (drawer.Side == DrawerSide.Below ? 1 : 0);
+                    float row = drawer.ScanStart + (float)Math.Ceiling((top + place.Next(Math.Max(1, (int)(panel.Bottom - top - 4 * step))) - drawer.ScanStart) / step) * step;
+                    float slip = (place.Next(2) == 0 ? -1 : 1) * 3 * s * react.Scan;
+                    using (Pen flare = new Pen(Color.FromArgb((int)(9 + 46 * react.Scan), 255, 255, 255), Math.Max(1, s)))
+                    using (Pen tint = new Pen(Color.FromArgb((int)(40 * react.Scan), place.Next(2) == 0 ? Pink : Cyan), Math.Max(1, s)))
+                        for (int i = 0; i < 3; i++, row += step)
+                        {
+                            graphics.DrawLine(flare, panel.Left + slip, row, panel.Right + slip, row);
+                            graphics.DrawLine(tint, panel.Left + slip, row + s, panel.Right + slip, row + s);
+                        }
+                }
+                graphics.ResetClip();
+                using (LinearGradientBrush ink = new LinearGradientBrush(from, to, first, last))
+                using (Pen line = new Pen(ink, 1.6f * s * (1 + 0.35f * react.Glow))) graphics.DrawPath(line, edge);
+                // Treble: a sliver or two more torn off the edge, the player's pink and cyan, for a moment.
+                if (react.Slivers > 0)
+                {
+                    Random place = new Random(react.Seed ^ 0x5f3759df);
+                    int alpha = (int)(210 * react.Slivers);
+                    for (int i = 0; i < 1 + (react.Slivers > 0.6f ? 1 : 0); i++)
+                    {
+                        bool pink = place.Next(2) == 0;
+                        float length = (10 + place.Next(18)) * s;
+                        using (Brush sliver = new SolidBrush(Color.FromArgb(alpha, pink ? Pink : Cyan)))
+                            graphics.FillRectangle(sliver, panel.Left + (float)place.NextDouble() * (panel.Width - length), panel.Bottom + 1.4f * s, length, 1.6f * s);
+                    }
+                }
+                // Her glitch slivers, where the player has them: torn off the far bottom corner, or the top of a side drawer.
+                if (drawer.Side == DrawerSide.Below)
+                    using (Brush pink = new SolidBrush(Color.FromArgb(210, Pink))) graphics.FillRectangle(pink, panel.Left + panel.Width * 0.72f, panel.Bottom + 1.4f * s, 18 * s, 1.6f * s);
+                else
+                    using (Brush cyan = new SolidBrush(Color.FromArgb(210, Cyan))) graphics.FillRectangle(cyan, panel.Left + panel.Width * 0.5f, panel.Top - 3 * s, 28 * s, 1.6f * s);
+
+                // The lines: in what shows of the drawer, clear of the tucked strip.
+                RectangleF room = drawer.Side == DrawerSide.Below ? new RectangleF(panel.Left, panel.Top + tuck, panel.Width, panel.Height - tuck)
+                    : drawer.Side == DrawerSide.Right ? new RectangleF(panel.Left + tuck, panel.Top, panel.Width - tuck, panel.Height) : new RectangleF(panel.Left, panel.Top, panel.Width - tuck, panel.Height);
+                float textWidth = (drawer.Side == DrawerSide.Below ? whole.Width : whole.Width - tuck) - m.Inset - m.Right;
+                int rows = CurrentRows(view, current, textWidth);
+                float content = (drawer.Lines >= 3 ? m.SideRow : 0) + rows * m.CurrentRow + (drawer.Lines >= 2 ? m.SideRow : 0);
+                float x = (drawer.Side == DrawerSide.Left ? whole.Left : drawer.Side == DrawerSide.Right ? whole.Left + tuck : whole.Left) + m.Inset;
+                float y = drawer.Side == DrawerSide.Below ? whole.Top + tuck + m.Top : whole.Top + (whole.Height - content) / 2;
+                float ease = 1 - (float)Math.Pow(1 - view.Slide, 3);
+                y += (1 - ease) * m.SideRow * 0.5f;
+                graphics.SetClip(new RectangleF(room.Left + 4 * s, room.Top + 2 * s, room.Width - 8 * s, room.Height - 4 * s));
+                ViewLine before = Find(view, LineRole.Previous), now = Find(view, LineRole.Current), next = Find(view, LineRole.Next);
+                if (drawer.Lines >= 3)
+                {
+                    if (before != null) Side(graphics, before, side, x, y, textWidth, 150, react.Shift * s * 0.3f);
+                    y += m.SideRow;
+                }
+                int fade = (int)(170 + 85 * ease);
+                // The current line reacts most: its ghosts part on hits and glow a little with the vocals; the lines around
+                // it only slip a third as far. Never more than a few pixels, so it always reads.
+                int ghostAlpha = Math.Min(230, 140 + (int)(70 * react.Ghost + 60 * react.Emphasis));
+                if (now != null) Current(graphics, now, current, x, y, textWidth, rows, s, fade, Pink, ghostAlpha, Cyan, ghostAlpha, Cyan, 225, 2.4f * react.Ghost, react.Shift);
+                else if (next != null && drawer.Lines == 1) Side(graphics, next, side, x, y, textWidth, 200, react.Shift * s * 0.3f);
+                y += rows * m.CurrentRow;
+                if (next != null && drawer.Lines >= 2) Side(graphics, next, side, x, y, textWidth, 200, react.Shift * s * 0.3f);
+                graphics.ResetClip();
+            }
+            return image;
+        }
+
+        // The drawer's outline: rounded on its far side, square where it tucks under the player. The edge path leaves the
+        // tucked side open, so no glow or edge is drawn across the seam: the player's own bottom edge is the seam.
+        private static GraphicsPath DrawerPath(RectangleF box, DrawerSide side, float radius, bool closed)
+        {
+            GraphicsPath path = new GraphicsPath();
+            float d = radius * 2;
+            if (side == DrawerSide.Below)
+            {
+                path.AddLine(box.Right, box.Top, box.Right, box.Bottom - radius);
+                path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90);
+                path.AddArc(box.Left, box.Bottom - d, d, d, 90, 90);
+                path.AddLine(box.Left, box.Bottom - radius, box.Left, box.Top);
+            }
+            else if (side == DrawerSide.Right)
+            {
+                path.AddLine(box.Left, box.Top, box.Right - radius, box.Top);
+                path.AddArc(box.Right - d, box.Top, d, d, 270, 90);
+                path.AddArc(box.Right - d, box.Bottom - d, d, d, 0, 90);
+                path.AddLine(box.Right - radius, box.Bottom, box.Left, box.Bottom);
+            }
+            else
+            {
+                path.AddLine(box.Right, box.Bottom, box.Left + radius, box.Bottom);
+                path.AddArc(box.Left, box.Bottom - d, d, d, 90, 90);
+                path.AddArc(box.Left, box.Top, d, d, 180, 90);
+                path.AddLine(box.Left + radius, box.Top, box.Right, box.Top);
+            }
+            if (closed) path.CloseFigure();
+            return path;
+        }
+
+        // ---- the animated drawer (Subtle, Normal, Intense): lyrics as a transmission, in Capri's own visual language
+
+        // How long a line change takes, by mode and how energetic the song is: calm songs change gracefully, energetic
+        // ones snap.
+        internal static double TransitionSeconds(ReactMode mode, Energy state)
+        {
+            if (mode == ReactMode.Subtle) return 0.34;
+            double seconds = state == Energy.Energetic ? 0.19 : state == Energy.Building ? 0.25 : 0.32;
+            return mode == ReactMode.Intense ? seconds * 0.85 : seconds;
+        }
+
+        private const string Noise = "/\\|_-=+:<>";
+
+        // The drawer with the lines animated: the old current line breaks up and lifts away into the previous line's place,
+        // the new one decodes in behind Capri's block caret (the caret she types her replies with), and the next line
+        // comes in quietly from the right after her "> " prompt mark. Between changes the current line breathes, now and
+        // then a scan of light runs along its letters, and hits make bits of it flicker. A strong moment slices it,
+        // splits its colours wide, breaks the edge and drops the line out for a frame, then it snaps back clean.
+        internal Bitmap DrawTransmission(LyricsView view, LyricsSettings settings, Drawer drawer, double reveal, Reaction react, ReactMode mode)
+        {
+            react = react ?? Reaction.None;
+            float s = drawer.Scale;
+            DrawerMetrics m = DrawerSizes(settings, s);
+            Bitmap image = new Bitmap(Math.Max(1, drawer.Size.Width), Math.Max(1, drawer.Size.Height), PixelFormat.Format32bppArgb);
+            float open = (float)Math.Max(0, Math.Min(1, reveal));
+            RectangleF whole = drawer.Panel, panel;
+            float tuck = drawer.Tuck;
+            if (drawer.Side == DrawerSide.Below) panel = new RectangleF(whole.Left, whole.Top, whole.Width, tuck + (whole.Height - tuck) * open);
+            else if (drawer.Side == DrawerSide.Right) panel = new RectangleF(whole.Left, whole.Top, tuck + (whole.Width - tuck) * open, whole.Height);
+            else { float width = tuck + (whole.Width - tuck) * open; panel = new RectangleF(whole.Right - width, whole.Top, width, whole.Height); }
+            float showing = drawer.Side == DrawerSide.Below ? panel.Height - tuck : panel.Width - tuck;
+            if (showing < 1) return image;
+            float k = mode == ReactMode.Subtle ? 0.5f : mode == ReactMode.Intense ? 1.35f : 1f;
+            Font current = Kept(m.Current), side = Kept(m.Side);
+            using (Graphics graphics = Graphics.FromImage(image))
+            {
+                graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+                Live(graphics, drawer, panel, Math.Min(16 * s, showing / 2), s, react);
+
+                RectangleF room = drawer.Side == DrawerSide.Below ? new RectangleF(panel.Left, panel.Top + tuck, panel.Width, panel.Height - tuck)
+                    : drawer.Side == DrawerSide.Right ? new RectangleF(panel.Left + tuck, panel.Top, panel.Width - tuck, panel.Height) : new RectangleF(panel.Left, panel.Top, panel.Width - tuck, panel.Height);
+                float textWidth = (drawer.Side == DrawerSide.Below ? whole.Width : whole.Width - tuck) - m.Inset - m.Right;
+                int rows = CurrentRows(view, current, textWidth);
+                float content = (drawer.Lines >= 3 ? m.SideRow : 0) + rows * m.CurrentRow + (drawer.Lines >= 2 ? m.SideRow : 0);
+                float x = (drawer.Side == DrawerSide.Right ? whole.Left + tuck : whole.Left) + m.Inset;
+                float top = drawer.Side == DrawerSide.Below ? whole.Top + tuck + m.Top : whole.Top + (whole.Height - content) / 2;
+                float prevY = top, curY = top + (drawer.Lines >= 3 ? m.SideRow : 0), nextY = curY + rows * m.CurrentRow;
+                float cw = Width(graphics, "MMMMMMMMMM", current) / 10;
+                graphics.SetClip(new RectangleF(room.Left + 4 * s, room.Top + 2 * s, room.Width - 8 * s, room.Height - 4 * s));
+
+                double length = TransitionSeconds(mode, react.State);
+                double p = view.Sequential ? view.Since / length : view.Since / 0.2;
+                bool turning = p < 1;
+                int frame = (int)(view.Since * 30);
+                Random fixedForThisLine = new Random(view.Outgoing.Length * 7919 + (view.Lines.Count > 0 ? (view.Lines[0].Text ?? "").Length : 0));
+                ViewLine before = Find(view, LineRole.Previous), now = Find(view, LineRole.Current), next = Find(view, LineRole.Next);
+
+                // The previous line: smaller, dim, set in a little, as if it's falling behind. During a change it fades in
+                // once the old current line has lifted into its place.
+                if (drawer.Lines >= 3 && before != null)
+                {
+                    double come = turning && view.Sequential ? Math.Max(0, Math.Min(1, (p - 0.35) / 0.4)) : 1;
+                    Side(graphics, before, side, x + 10 * s, prevY, textWidth - 10 * s, (int)(140 * come), react.Shift * s * 0.3f);
+                }
+
+                // The old current line breaks up on its way out: colours part, it splits into slices that slip apart, it
+                // dims, and it lifts toward the previous line's place.
+                if (turning && view.Sequential && view.Outgoing.Length > 0 && p < 0.55)
+                {
+                    float q = (float)(p / 0.55);
+                    float liftTo = drawer.Lines >= 3 ? prevY : curY - m.SideRow * 0.6f;
+                    float y = curY + (liftTo - curY) * (1 - (1 - q) * (1 - q));
+                    int alpha = (int)(230 * (1 - q));
+                    float row = m.CurrentRow;
+                    for (int slice = 0; slice < 3; slice++)
+                    {
+                        float slip = mode == ReactMode.Subtle ? 0 : (float)(fixedForThisLine.NextDouble() * 2 - 1) * 5 * s * k * q * (1 - q) * 4;
+                        graphics.SetClip(new RectangleF(room.Left + 4 * s, y + slice * row / 3, room.Width - 8 * s, row / 3 + 1));
+                        graphics.IntersectClip(new RectangleF(room.Left + 4 * s, room.Top + 2 * s, room.Width - 8 * s, room.Height - 4 * s));
+                        Ghosted(graphics, Cut(graphics, view.Outgoing, current, textWidth), current, x + slip, y, s, alpha, (1.1f + 3 * q * k), 150, Color.FromArgb(Math.Max(0, alpha * 3 / 4), Ink));
+                    }
+                    graphics.SetClip(new RectangleF(room.Left + 4 * s, room.Top + 2 * s, room.Width - 8 * s, room.Height - 4 * s));
+                }
+
+                // The current line: decoded in, then alive.
+                if (now != null)
+                {
+                    double decode = turning ? Math.Max(0, Math.Min(1, (p - (view.Sequential ? 0.12 : 0)) / (view.Sequential ? 0.62 : 0.9))) : 1;
+                    CurrentAlive(graphics, now, current, x, curY, textWidth, rows, s, cw, react, mode, k, decode, frame, Math.Max(0, 1 - (float)p));
+                    // Her red tick marks the line she's on, like the bar in her speech bubble.
+                    using (Brush red = new SolidBrush(Color.FromArgb((int)(200 * Math.Min(1, decode * 1.5)), Red)))
+                        graphics.FillRectangle(red, x - 10 * s, curY + 3 * s, 2.4f * s, rows * m.CurrentRow - 7 * s);
+                    if (turning && mode != ReactMode.Subtle && p < 0.6) Ticks(graphics, x - 6 * s, curY, textWidth + 12 * s, rows * m.CurrentRow, s, (int)(220 * (1 - p / 0.6)));
+                }
+                else if (next != null && drawer.Lines == 1) Side(graphics, next, side, x, curY, textWidth, 200, 0);
+
+                // The next line comes in quietly from the right, after her "> " prompt mark.
+                if (next != null && drawer.Lines >= 2)
+                {
+                    double come = turning && view.Sequential ? Math.Max(0, Math.Min(1, (p - 0.5) / 0.5)) : 1;
+                    float slide = (float)(1 - come) * 14 * s;
+                    float mark = Width(graphics, ">", side) + Width(graphics, "MMMMMMMMMM", side) / 10 * 0.7f;
+                    using (Brush red = new SolidBrush(Color.FromArgb((int)(150 * come), Red))) graphics.DrawString(">", side, red, x + slide, nextY, StringFormat.GenericTypographic);
+                    Side(graphics, next, side, x + mark + slide, nextY, textWidth - mark, (int)(200 * come), react.Shift * s * 0.3f);
+                }
+                graphics.ResetClip();
+
+                // A strong moment: slices of the current line slip sideways, and for its first frame the line drops out.
+                if (react.Strong > 0 && now != null) Corrupt(image, graphics, new RectangleF(room.Left, curY, room.Width, rows * m.CurrentRow), s, react, k);
+            }
+            return image;
+        }
+
+        // Her player's panel, as DrawDrawer draws it, plus a broken edge on a strong moment.
+        private static void Live(Graphics graphics, Drawer drawer, RectangleF panel, float radius, float s, Reaction react)
+        {
+            using (GraphicsPath fill = DrawerPath(panel, drawer.Side, radius, true))
+            using (GraphicsPath edge = DrawerPath(panel, drawer.Side, radius, false))
+            {
+                Color first = drawer.Side == DrawerSide.Below ? Pink : Cyan, last = drawer.Side == DrawerSide.Below ? Cyan : Pink;
+                PointF from = new PointF(panel.Left - 1, 0), to = new PointF(panel.Right + 1, 0);
+                int wideAlpha = 30 + (int)(60 * react.Glow), nearAlpha = Math.Min(200, 70 + (int)(90 * react.Glow));
+                using (LinearGradientBrush haze = new LinearGradientBrush(from, to, Color.FromArgb(wideAlpha, first), Color.FromArgb(wideAlpha, last)))
+                using (Pen wide = new Pen(haze, 14 * s)) graphics.DrawPath(wide, edge);
+                using (LinearGradientBrush haze = new LinearGradientBrush(from, to, Color.FromArgb(nearAlpha, first), Color.FromArgb(nearAlpha, last)))
+                using (Pen near = new Pen(haze, 6 * s)) graphics.DrawPath(near, edge);
+                using (Brush brush = new SolidBrush(PlayerFill)) graphics.FillPath(brush, fill);
+                graphics.SetClip(fill);
+                float step = 3 * s;
+                using (Pen scan = new Pen(Color.FromArgb(9, 255, 255, 255), Math.Max(1, s)))
+                    for (float row = drawer.ScanStart + (float)Math.Ceiling((panel.Top - drawer.ScanStart) / step) * step; row < panel.Bottom; row += step) graphics.DrawLine(scan, panel.Left, row, panel.Right, row);
+                float flare = Math.Max(react.Scan, react.Strong);
+                if (flare > 0)
+                {
+                    Random place = new Random(react.Seed);
+                    float top = panel.Top + (drawer.Side == DrawerSide.Below ? drawer.Tuck : 0);
+                    float row = drawer.ScanStart + (float)Math.Ceiling((top + place.Next(Math.Max(1, (int)(panel.Bottom - top - 4 * step))) - drawer.ScanStart) / step) * step;
+                    float slip = (place.Next(2) == 0 ? -1 : 1) * 3 * s * flare;
+                    int lines = react.Strong > 0 ? 6 : 3;
+                    using (Pen bright = new Pen(Color.FromArgb((int)(9 + 46 * flare), 255, 255, 255), Math.Max(1, s)))
+                    using (Pen tint = new Pen(Color.FromArgb((int)(40 * flare), place.Next(2) == 0 ? Pink : Cyan), Math.Max(1, s)))
+                        for (int i = 0; i < lines; i++, row += step)
+                        {
+                            graphics.DrawLine(bright, panel.Left + slip, row, panel.Right + slip, row);
+                            graphics.DrawLine(tint, panel.Left + slip, row + s, panel.Right + slip, row + s);
+                        }
+                }
+                graphics.ResetClip();
+                using (LinearGradientBrush ink = new LinearGradientBrush(from, to, first, last))
+                using (Pen line = new Pen(ink, 1.6f * s * (1 + 0.35f * react.Glow))) graphics.DrawPath(line, edge);
+                Random torn = new Random(react.Seed ^ 0x5f3759df);
+                if (react.Slivers > 0)
+                    for (int i = 0; i < 1 + (react.Slivers > 0.6f ? 1 : 0); i++)
+                    {
+                        float length = (10 + torn.Next(18)) * s;
+                        using (Brush sliver = new SolidBrush(Color.FromArgb((int)(210 * react.Slivers), torn.Next(2) == 0 ? Pink : Cyan)))
+                            graphics.FillRectangle(sliver, panel.Left + (float)torn.NextDouble() * (panel.Width - length), panel.Bottom + 1.4f * s, length, 1.6f * s);
+                    }
+                // A strong moment breaks the edge: short pieces of it knocked out of line.
+                if (react.Strong > 0)
+                    for (int i = 0; i < 3; i++)
+                    {
+                        float length = (14 + torn.Next(30)) * s, along = (float)torn.NextDouble();
+                        float shove = (torn.Next(2) == 0 ? -1 : 1) * (3 + torn.Next(4)) * s * react.Strong;
+                        bool leftSide = torn.Next(2) == 0;
+                        using (Pen piece = new Pen(Color.FromArgb((int)(230 * react.Strong), leftSide ? first : last), 1.8f * s))
+                        {
+                            if (i == 0) graphics.DrawLine(piece, panel.Left + along * (panel.Width - length), panel.Bottom + shove, panel.Left + along * (panel.Width - length) + length, panel.Bottom + shove);
+                            else
+                            {
+                                float edgeX = leftSide ? panel.Left : panel.Right, y = panel.Top + along * Math.Max(1, panel.Height - length);
+                                graphics.DrawLine(piece, edgeX + shove, y, edgeX + shove, y + length);
+                            }
+                        }
+                    }
+            }
+        }
+
+        // Text with her pink and cyan ghosts either side, then the line itself.
+        private static void Ghosted(Graphics graphics, string text, Font font, float x, float y, float s, int ghostAlpha, float spread, int ghostOf, Color ink)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            int alpha = Math.Max(0, Math.Min(255, ghostAlpha * ghostOf / 255));
+            using (Brush pink = new SolidBrush(Color.FromArgb(alpha, Pink)))
+            using (Brush cyan = new SolidBrush(Color.FromArgb(alpha, Cyan)))
+            using (Brush main = new SolidBrush(ink))
+            {
+                graphics.DrawString(text, font, pink, x - spread * s, y, StringFormat.GenericTypographic);
+                graphics.DrawString(text, font, cyan, x + spread * s, y, StringFormat.GenericTypographic);
+                graphics.DrawString(text, font, main, x, y, StringFormat.GenericTypographic);
+            }
+        }
+
+        // The current line: decoded up to `decode` (0 to 1) behind her caret, then breathing, scanned, flickering, and,
+        // where the lyrics time words, lit up word by word as it's sung.
+        private void CurrentAlive(Graphics graphics, ViewLine line, Font font, float x, float y, float width, int rows, float s, float cw, Reaction react, ReactMode mode,
+            float k, double decode, int frame, float settling)
+        {
+            if (line.Gap)
+            {
+                using (Brush dim = new SolidBrush(Color.FromArgb((int)(220 * decode), Dim))) graphics.DrawString(". . .", font, dim, x, y, StringFormat.GenericTypographic);
+                return;
+            }
+            List<string> wrapped = Wrap(graphics, line.Text, font, width);
+            if (wrapped.Count > rows)
+            {
+                string rest = string.Join(" ", wrapped.GetRange(rows - 1, wrapped.Count - rows + 1).ToArray());
+                wrapped = wrapped.GetRange(0, rows - 1);
+                wrapped.Add(Cut(graphics, rest, font, width));
+            }
+            float row = font.Size * 1.32f;
+            y += (rows - wrapped.Count) * row / 2;
+            x += react.Shift * s;
+            int total = 0;
+            foreach (string piece in wrapped) total += piece.Length + 1;
+            int revealed = decode >= 1 ? int.MaxValue : (int)Math.Round(decode * total);
+            // Colours part as it decodes and snap together when it lands; between changes they breathe with the song.
+            float spread = 1.1f + 0.7f * react.Breath + 2.4f * react.Ghost + 2.6f * settling * (mode == ReactMode.Subtle ? 0.4f : 1);
+            int ghostAlpha = Math.Min(235, 140 + (int)(70 * react.Ghost + 60 * react.Emphasis + 40 * settling));
+            bool karaoke = line.Words != null && line.Words.Count > 0;
+            int counted = 0;
+            for (int i = 0; i < wrapped.Count; i++)
+            {
+                string text = wrapped[i];
+                float top = y + i * row;
+                int shown = Math.Max(0, Math.Min(text.Length, revealed - counted));
+                if (shown > 0)
+                {
+                    string visible = text.Substring(0, shown);
+                    Ghosted(graphics, visible, font, x, top, s, 255, spread, ghostAlpha, Color.FromArgb(karaoke ? 200 : 255, Ink));
+                    if (karaoke) Sung(graphics, line, text, counted, font, x, top, row, s);
+                    if (react.Flicker > 0 && decode >= 1) Flicker(graphics, text, font, x, top, s, react, i);
+                }
+                // Her caret, and a couple of characters still decoding just ahead of it.
+                if (shown < text.Length && revealed >= counted && revealed <= counted + text.Length)
+                {
+                    float at = x + Advance(graphics, text.Substring(0, shown), font);
+                    if (mode != ReactMode.Subtle)
+                        using (Brush noise = new SolidBrush(Color.FromArgb(150, Cyan)))
+                            for (int n = 0; n < 2 && shown + n < text.Length; n++)
+                            {
+                                if (text[shown + n] == ' ') continue;
+                                char glyph = Noise[(frame * 7 + (counted + shown + n) * 13) % Noise.Length];
+                                graphics.DrawString(glyph.ToString(), font, noise, at + n * cw, top, StringFormat.GenericTypographic);
+                            }
+                    using (Brush caret = new SolidBrush(Color.FromArgb(230, Cyan))) graphics.FillRectangle(caret, at + s, top + s, cw * 0.85f, row - 5 * s);
+                }
+                if (react.Sweep >= 0 && decode >= 1) Sweep(graphics, text, font, x, top, row, s, react.Sweep);
+                counted += text.Length + 1;
+            }
+        }
+
+        // Word-timed lyrics: what's been sung lit in her cyan with a glow; the word being sung flashes as it starts, gets a
+        // cyan underline that grows as it's sung, and trails a pink ghost for a moment.
+        private static void Sung(Graphics graphics, ViewLine line, string text, int rowStart, Font font, float x, float top, float row, float s)
+        {
+            WordSpan active = null;
+            int sung = 0;
+            foreach (WordSpan word in line.Words)
+            {
+                if (word.Progress < 0) break;
+                sung = word.Start + (int)Math.Round(word.Length * word.Progress);
+                active = word;
+            }
+            int here = Math.Max(0, Math.Min(text.Length, sung - rowStart));
+            if (here > 0)
+            {
+                string done = text.Substring(0, here);
+                using (Brush glow = new SolidBrush(Color.FromArgb(70, Cyan)))
+                {
+                    graphics.DrawString(done, font, glow, x - 0.9f * s, top, StringFormat.GenericTypographic);
+                    graphics.DrawString(done, font, glow, x + 0.9f * s, top, StringFormat.GenericTypographic);
+                }
+                if (active != null && active.Since >= 0 && active.Since < 0.25)
+                    using (Brush trail = new SolidBrush(Color.FromArgb((int)(100 * (1 - active.Since / 0.25)), Pink)))
+                        graphics.DrawString(done, font, trail, x + 2.2f * s, top, StringFormat.GenericTypographic);
+                using (Brush cyan = new SolidBrush(Cyan)) graphics.DrawString(done, font, cyan, x, top, StringFormat.GenericTypographic);
+            }
+            if (active == null || active.Progress >= 1 && active.Since > 0.3) return;
+            int from = active.Start - rowStart, to = active.Start + active.Length - rowStart;
+            if (to <= 0 || from >= text.Length) return;
+            from = Math.Max(0, from);
+            to = Math.Min(text.Length, to);
+            float left = x + Advance(graphics, text.Substring(0, from), font), wordWidth = Width(graphics, text.Substring(from, to - from).TrimEnd(), font);
+            if (active.Since >= 0 && active.Since < 0.09)
+                using (Brush flash = new SolidBrush(Ink)) graphics.DrawString(text.Substring(from, to - from), font, flash, left, top, StringFormat.GenericTypographic);
+            using (Pen underline = new Pen(Color.FromArgb(220, Cyan), 1.4f * s))
+                graphics.DrawLine(underline, left, top + row * 0.9f, left + wordWidth * (float)Math.Max(0.05, active.Progress), top + row * 0.9f);
+        }
+
+        // On a mid or treble hit a few characters double sideways in pink for a frame. The real text stays where it is.
+        private static void Flicker(Graphics graphics, string text, Font font, float x, float top, float s, Reaction react, int row)
+        {
+            Random pick = new Random(react.Seed + row * 31);
+            if (text.Length < 3 || pick.Next(2) == 0 && row > 0) return;
+            int length = 2 + pick.Next(3), from = pick.Next(Math.Max(1, text.Length - length));
+            string piece = text.Substring(from, Math.Min(length, text.Length - from));
+            float at = x + Advance(graphics, text.Substring(0, from), font) + (pick.Next(2) == 0 ? -2 : 2) * s;
+            using (Brush pink = new SolidBrush(Color.FromArgb((int)(170 * react.Flicker), Pink))) graphics.DrawString(piece, font, pink, at, top, StringFormat.GenericTypographic);
+        }
+
+        // A narrow band of cyan light running along the letters (and only the letters) of the current line.
+        private void Sweep(Graphics graphics, string text, Font font, float x, float top, float row, float s, float at)
+        {
+            if (string.IsNullOrEmpty(text.Trim())) return;
+            float width = Width(graphics, text, font), band = 30 * s, middle = x - band + (width + 2 * band) * at;
+            Region before = graphics.Clip;
+            using (GraphicsPath letters = new GraphicsPath())
+            {
+                letters.AddString(text, font.FontFamily, (int)font.Style, font.Size, new PointF(x, top), StringFormat.GenericTypographic);
+                graphics.SetClip(letters, CombineMode.Intersect);
+                using (LinearGradientBrush light = new LinearGradientBrush(new PointF(middle - band, 0), new PointF(middle + band, 0), Color.FromArgb(0, Cyan), Color.FromArgb(0, Cyan)))
+                {
+                    ColorBlend blend = new ColorBlend { Colors = new[] { Color.FromArgb(0, Cyan), Color.FromArgb(160, Cyan), Color.FromArgb(220, Color.White), Color.FromArgb(160, Cyan), Color.FromArgb(0, Cyan) }, Positions = new[] { 0f, 0.3f, 0.5f, 0.7f, 1f } };
+                    light.InterpolationColors = blend;
+                    graphics.FillRectangle(light, middle - band, top, band * 2, row);
+                }
+            }
+            graphics.Clip = before;
+        }
+
+        // Thin corner marks around the current line while it changes: red at the top left, cyan at the bottom right, like
+        // the hot red strokes on her Mainframe's clipped corners.
+        private static void Ticks(Graphics graphics, float x, float y, float width, float height, float s, int alpha)
+        {
+            if (alpha <= 0) return;
+            float arm = 7 * s;
+            using (Pen red = new Pen(Color.FromArgb(alpha, Red), 1.3f * s))
+            {
+                graphics.DrawLine(red, x, y, x + arm, y);
+                graphics.DrawLine(red, x, y, x, y + arm);
+            }
+            using (Pen cyan = new Pen(Color.FromArgb(alpha, Cyan), 1.3f * s))
+            {
+                graphics.DrawLine(cyan, x + width, y + height, x + width - arm, y + height);
+                graphics.DrawLine(cyan, x + width, y + height, x + width, y + height - arm);
+            }
+        }
+
+        // A strong moment on the current line: three slices of it slip sideways by different amounts, tinted pink and
+        // cyan, and at its very start the line drops out behind a bright scan, a lost transmission for one frame.
+        private static void Corrupt(Bitmap image, Graphics graphics, RectangleF line, float s, Reaction react, float k)
+        {
+            Random place = new Random(react.Seed * 17 + 3);
+            Rectangle area = Rectangle.Intersect(Rectangle.Round(line), new Rectangle(0, 0, image.Width, image.Height));
+            if (area.Width <= 0 || area.Height <= 2) return;
+            using (Bitmap clean = image.Clone(area, image.PixelFormat))
+            using (Brush clear = new SolidBrush(PlayerFill))
+            {
+                if (react.Strong > 0.85f)
+                {
+                    graphics.FillRectangle(clear, area);
+                    using (Pen scan = new Pen(Color.FromArgb(200, Color.White), Math.Max(1, s))) graphics.DrawLine(scan, area.Left, area.Top + area.Height / 2, area.Right, area.Top + area.Height / 2);
+                    using (Pen cyan = new Pen(Color.FromArgb(150, Cyan), Math.Max(1, s))) graphics.DrawLine(cyan, area.Left, area.Top + area.Height / 2 + 2 * s, area.Right, area.Top + area.Height / 2 + 2 * s);
+                    return;
+                }
+                int slices = 3, height = area.Height / slices;
+                graphics.CompositingMode = CompositingMode.SourceCopy;
+                graphics.FillRectangle(clear, area);
+                graphics.CompositingMode = CompositingMode.SourceOver;
+                for (int i = 0; i < slices; i++)
+                {
+                    int top = i * height, band = i == slices - 1 ? area.Height - top : height;
+                    float shove = (place.Next(2) == 0 ? -1 : 1) * (i == 1 ? 4 + place.Next(9) : 1 + place.Next(3)) * s * react.Strong * Math.Min(1.4f, k);
+                    graphics.DrawImage(clean, new RectangleF(area.Left + shove, area.Top + top, area.Width, band), new RectangleF(0, top, area.Width, band), GraphicsUnit.Pixel);
+                    using (Brush tint = new SolidBrush(Color.FromArgb((int)(50 * react.Strong), i % 2 == 0 ? Pink : Cyan))) graphics.FillRectangle(tint, area.Left, area.Top + top, area.Width, band);
+                }
+            }
+        }
+
+        // The player's tear (MiniPlayer.Tear in app/Player.cs): three rows of the plate slip sideways, tinted pink and cyan.
+        // On a seek, for a moment.
+        internal static void Tear(Bitmap image, Drawer drawer, float s, int seed)
+        {
+            Random roll = new Random(seed);
+            RectangleF panel = drawer.Panel;
+            using (Bitmap clean = image.Clone(new Rectangle(0, 0, image.Width, image.Height), image.PixelFormat))
+            using (Graphics graphics = Graphics.FromImage(image))
+            using (Brush clear = new SolidBrush(Color.Transparent))
+                for (int i = 0; i < 3; i++)
+                {
+                    int band = Math.Max(2, (int)Math.Round((2 + roll.Next(7)) * s));
+                    int top = (int)panel.Top + roll.Next(Math.Max(1, (int)panel.Height - band));
+                    int shift = (roll.Next(2) == 0 ? -1 : 1) * Math.Max(1, (int)Math.Round((2 + roll.Next(5)) * s));
+                    Rectangle strip = new Rectangle(0, top, image.Width, band);
+                    graphics.SetClip(strip);
+                    graphics.CompositingMode = CompositingMode.SourceCopy;
+                    graphics.FillRectangle(clear, strip);
+                    graphics.DrawImage(clean, new Rectangle(shift, 0, image.Width, image.Height));
+                    graphics.CompositingMode = CompositingMode.SourceOver;
+                    graphics.SetClip(panel);
+                    graphics.IntersectClip(strip);
+                    using (Brush tint = new SolidBrush(Color.FromArgb(56, i % 2 == 0 ? Pink : Cyan))) graphics.FillRectangle(tint, strip);
+                    graphics.ResetClip();
+                }
+        }
+
+        // Capri's own plate (Look.Plate in app/Talk.cs): a box with its left corners cut, and a tail out of the top or
+        // bottom edge toward (tipX, tipY).
+        internal static GraphicsPath Plate(RectangleF box, float cut, float tipX, float tipY, float tail)
+        {
+            List<PointF> points = new List<PointF>();
+            float near = Math.Max(box.Left + cut + 2, tipX - tail * 0.8f);
+            float far = Math.Min(box.Right - 2, tipX + tail * 0.2f);
+            points.Add(new PointF(box.Left + cut, box.Top));
+            if (tipY < box.Top) { points.Add(new PointF(near, box.Top)); points.Add(new PointF(tipX, tipY)); points.Add(new PointF(far, box.Top)); }
+            points.Add(new PointF(box.Right, box.Top));
+            points.Add(new PointF(box.Right, box.Bottom));
+            if (tipY > box.Bottom) { points.Add(new PointF(far, box.Bottom)); points.Add(new PointF(tipX, tipY)); points.Add(new PointF(near, box.Bottom)); }
+            points.Add(new PointF(box.Left + cut, box.Bottom));
+            points.Add(new PointF(box.Left, box.Bottom - cut));
+            points.Add(new PointF(box.Left, box.Top + cut));
+            GraphicsPath path = new GraphicsPath();
+            path.AddPolygon(points.ToArray());
+            return path;
+        }
+
+        // Her glitch (SpeechBox.Glitch in app/Talk.cs): bands slid sideways, two slices tinted cyan and red, sometimes a
+        // blank frame. Used when the lyrics appear, leave, or jump.
+        internal static Bitmap Glitch(Bitmap clean, float amount, float s, Random random)
+        {
+            Bitmap broken = new Bitmap(clean.Width, clean.Height, PixelFormat.Format32bppArgb);
+            if (random.NextDouble() < 0.25 * amount) return broken;
+            using (Graphics graphics = Graphics.FromImage(broken))
+            {
+                int y = 0;
+                while (y < clean.Height)
+                {
+                    int band = Math.Max(1, Math.Min(clean.Height - y, (int)((3 + random.Next(10)) * s)));
+                    int shift = (int)((random.NextDouble() * 2 - 1) * 10 * s * amount);
+                    graphics.DrawImage(clean, new Rectangle(shift, y, clean.Width, band), new Rectangle(0, y, clean.Width, band), GraphicsUnit.Pixel);
+                    y += band;
+                }
+                for (int i = 0; i < 2; i++)
+                {
+                    int band = Math.Max(1, (int)((2 + random.Next(6)) * s));
+                    int row = random.Next(Math.Max(1, clean.Height - band));
+                    int shift = (int)((random.NextDouble() * 2 - 1) * 14 * s * amount);
+                    bool cyan = i == 0;
+                    using (ImageAttributes tint = new ImageAttributes())
+                    {
+                        tint.SetColorMatrix(new ColorMatrix(new[]
+                        {
+                            new float[] { cyan ? 0 : 1, 0, 0, 0, 0 },
+                            new float[] { 0, cyan ? 1 : 0, 0, 0, 0 },
+                            new float[] { 0, 0, cyan ? 1 : 0, 0, 0 },
+                            new float[] { 0, 0, 0, 0.6f * amount, 0 },
+                            new float[] { 0, 0, 0, 0, 1 }
+                        }));
+                        graphics.DrawImage(clean, new Rectangle(shift, row, clean.Width, band), 0, row, clean.Width, band, GraphicsUnit.Pixel, tint);
+                    }
+                }
+            }
+            return broken;
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------- Windows
+
+    internal interface ILyricsSurface
+    {
+        // Takes the image; the surface disposes it when it's replaced.
+        void Present(Bitmap image, Point at, byte alpha);
+        // Just under this window in z-order, so the window drawn over the seam is the player, not the lyrics.
+        void Under(IntPtr window);
+        void Hide();
+        void Close();
+        bool IsShowing { get; }
+    }
+
+    internal interface IDesktop
+    {
+        // Her window's DPI over 96, the scale her own bubble uses.
+        float Scale();
+        // A fullscreen app in front, on the monitor holding this point.
+        bool FullscreenAt(Point point);
+        // Capri's own music player while it's on screen, or null.
+        TrackerInfo Tracker();
+        // The working area of the monitor holding most of this rectangle.
+        Rectangle AreaOf(Rectangle rectangle);
+        // Windows' "Animation effects" is off: no music reactions then.
+        bool ReducedMotion();
+    }
+
+    // Capri's music player as seen from outside: where its plate is on screen (without its glow), its scale, and its window.
+    internal sealed class TrackerInfo
+    {
+        // Its size at 100%, from MiniPlayer in capri-desktop's app/Player.cs: a 336 x 116 plate in a 12 px glow.
+        internal const int Wide = 336, Tall = 116, Glow = 12;
+        internal const string Title = "Capri mini player";
+        internal Rectangle Plate;
+        internal float Scale = 1;
+        internal IntPtr Handle;
+
+        // From its window's bounds: the plate is the window less its glow, and its width says its scale.
+        internal static TrackerInfo FromWindow(Rectangle window, IntPtr handle)
+        {
+            float scale = window.Width / (float)(Wide + 2 * Glow);
+            if (scale < 0.5f || scale > 4) return null;
+            int glow = (int)Math.Round(Glow * scale);
+            Rectangle plate = new Rectangle(window.Left + glow, window.Top + glow, window.Width - glow * 2, window.Height - glow * 2);
+            if (plate.Width <= 0 || plate.Height <= 0 || Math.Abs(plate.Height - Tall * scale) > 3 * scale) return null;
+            return new TrackerInfo { Plate = plate, Scale = scale, Handle = handle };
+        }
+    }
+
+    // The window the lyrics are drawn in, made the way Capri makes her bubble's (Overlay in app/Talk.cs): borderless,
+    // never in the taskbar, never activated, always on top, layered with per-pixel alpha, and transparent to the mouse.
+    internal sealed class LyricsWindow : Form, ILyricsSurface
+    {
+        [StructLayout(LayoutKind.Sequential)] private struct Spot { public int X, Y; }
+        [StructLayout(LayoutKind.Sequential)] private struct Extent { public int Width, Height; }
+        [StructLayout(LayoutKind.Sequential, Pack = 1)] private struct Blend { public byte Op, Flags, Alpha, Format; }
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool UpdateLayeredWindow(IntPtr window, IntPtr target, ref Spot at, ref Extent size, IntPtr source, ref Spot from, int key, ref Blend blend, int flags);
+        [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr window);
+        [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr window, IntPtr dc);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr dc);
+        [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr dc, IntPtr thing);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr thing);
+        [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr dc);
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+
+        private Bitmap shown;
+
+        internal LyricsWindow()
+        {
+            Text = "Capri+ Lyrics";
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams value = base.CreateParams;
+                // WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_EX_TRANSPARENT: Capri's bubble flags.
+                value.ExStyle |= 0x00080000 | 0x00000080 | 0x08000000 | 0x00000008 | 0x00000020;
+                return value;
+            }
+        }
+
+        public bool IsShowing { get { return Visible; } }
+
+        // SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE. Placed after a topmost window it stays topmost; after one that isn't
+        // (her player with Always on top off), it isn't either, so it sits among other windows just like the player.
+        public void Under(IntPtr window)
+        {
+            if (window == IntPtr.Zero || !IsHandleCreated) return;
+            SetWindowPos(Handle, window, 0, 0, 0, 0, 0x0002 | 0x0001 | 0x0010);
+        }
+
+        public void Present(Bitmap image, Point at, byte alpha)
+        {
+            Rectangle target = new Rectangle(at, image.Size);
+            if (Bounds != target) Bounds = target;
+            if (!Visible) Show();
+            IntPtr screen = GetDC(IntPtr.Zero), memory = CreateCompatibleDC(screen), bitmap = IntPtr.Zero, old = IntPtr.Zero;
+            try
+            {
+                bitmap = image.GetHbitmap(Color.FromArgb(0));
+                old = SelectObject(memory, bitmap);
+                Spot to = new Spot { X = at.X, Y = at.Y }, from = new Spot();
+                Extent size = new Extent { Width = image.Width, Height = image.Height };
+                Blend blend = new Blend { Op = 0, Flags = 0, Alpha = alpha, Format = 1 };
+                UpdateLayeredWindow(Handle, screen, ref to, ref size, memory, ref from, 0, ref blend, 2);
+            }
+            finally
+            {
+                ReleaseDC(IntPtr.Zero, screen);
+                if (bitmap != IntPtr.Zero) { SelectObject(memory, old); DeleteObject(bitmap); }
+                DeleteDC(memory);
+            }
+            Bitmap previous = shown;
+            shown = image;
+            if (previous != null && previous != image) previous.Dispose();
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            // WM_NCHITTEST: HTTRANSPARENT everywhere, so clicks always go to whatever is underneath.
+            if (message.Msg == 0x0084) { message.Result = new IntPtr(-1); return; }
+            base.WndProc(ref message);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && shown != null) { shown.Dispose(); shown = null; }
+            base.Dispose(disposing);
+        }
+    }
+
+    internal sealed class WindowsDesktop : IDesktop
+    {
+        [StructLayout(LayoutKind.Sequential)] private struct Box { public int Left, Top, Right, Bottom; }
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr window, out Box box);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr window, StringBuilder name, int size);
+        [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+        [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+        [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
+
+        private readonly ICapriHost host;
+        private readonly uint self = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+        private bool noDpiCall;
+
+        internal WindowsDesktop(ICapriHost capri)
+        {
+            host = capri;
+        }
+
+        public float Scale()
+        {
+            if (!noDpiCall)
+            {
+                try
+                {
+                    uint dpi = GetDpiForWindow(host.Ui.Window.Handle);
+                    if (dpi > 0) return Math.Max(1f, dpi / 96f);
+                }
+                catch (EntryPointNotFoundException) { noDpiCall = true; }
+            }
+            using (Graphics screen = Graphics.FromHwnd(IntPtr.Zero)) return Math.Max(1f, screen.DpiX / 96f);
+        }
+
+        // Her player is a window in this same process; it's found by its title among the open forms and only its bounds are
+        // read. Nothing about it is changed. If a Capri update renames it, this finds nothing and the lyrics hang under her.
+        public TrackerInfo Tracker()
+        {
+            foreach (Form form in Application.OpenForms)
+                if (form.Visible && form.Text == TrackerInfo.Title && !form.IsDisposed) return TrackerInfo.FromWindow(form.Bounds, form.Handle);
+            return null;
+        }
+
+        public Rectangle AreaOf(Rectangle rectangle) { return Screen.FromRectangle(rectangle).WorkingArea; }
+
+        [DllImport("user32.dll")] private static extern bool SystemParametersInfo(uint action, uint number, ref bool value, uint flags);
+
+        // SPI_GETCLIENTAREAANIMATION: Settings > Accessibility > Visual effects > Animation effects.
+        public bool ReducedMotion()
+        {
+            bool animate = true;
+            try { if (!SystemParametersInfo(0x1042, 0, ref animate, 0)) return false; }
+            catch (EntryPointNotFoundException) { return false; }
+            return !animate;
+        }
+
+        public bool FullscreenAt(Point point)
+        {
+            IntPtr window = GetForegroundWindow();
+            if (window == IntPtr.Zero) return false;
+            uint process;
+            GetWindowThreadProcessId(window, out process);
+            if (process == self) return false;
+            Box box;
+            if (!GetWindowRect(window, out box)) return false;
+            Rectangle monitor = Screen.FromPoint(point).Bounds;
+            if (Screen.FromHandle(window).Bounds != monitor) return false;
+            StringBuilder name = new StringBuilder(64);
+            GetClassName(window, name, name.Capacity);
+            return FullscreenRule.Covers(Rectangle.FromLTRB(box.Left, box.Top, box.Right, box.Bottom), monitor, name.ToString(), IsIconic(window));
+        }
+    }
+
+    // ---- capriplus-shared: spoken (begin) ----
+    // Words as people say them: normalizing a sentence for matching, numbers ("forty five", "40%"), durations ("a minute
+    // and a half", "1:30", "30 seconds") and times shown back ("1:05"). This block is shared by Capri+ modules:
+    // tools/shared/spoken.cs is the original, and tools/build.py checks every copy matches it.
+    internal static class Spoken
+    {
+        private static readonly string[] Units = { "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen" };
+        private static readonly string[] Tens = { "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety" };
+        private static readonly Regex Clock = new Regex(@"^(?:(\d{1,2}):)?(\d{1,3}):(\d{2})$", RegexOptions.CultureInvariant);
+        private static readonly Regex Glued = new Regex(@"^(\d+(?:\.\d+)?)(h|hr|hrs|m|min|mins|s|sec|secs)$", RegexOptions.CultureInvariant);
+        private const double LongestDuration = 6 * 3600;
+
+        // Lowercase words for matching: letters, digits, %, +, # and ' kept, ":" and "." kept between digits (1:30, 1.5),
+        // "&" read as "and", everything else a single space.
+        internal static string Normalize(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            string lower = text.ToLowerInvariant();
+            StringBuilder kept = new StringBuilder(lower.Length);
+            for (int i = 0; i < lower.Length; i++)
+            {
+                char c = lower[i] == (char)0x2019 || lower[i] == (char)0x2018 ? '\'' : lower[i];
+                bool betweenDigits = i > 0 && i + 1 < lower.Length && char.IsDigit(lower[i - 1]) && char.IsDigit(lower[i + 1]);
+                if (char.IsLetterOrDigit(c) || c == '%' || c == '+' || c == '#' || c == '\'' || ((c == ':' || c == '.') && betweenDigits)) kept.Append(c);
+                else if (c == '&') kept.Append(" and ");
+                else kept.Append(' ');
+            }
+            return Regex.Replace(kept.ToString(), @"\s+", " ").Trim();
+        }
+
+        // "40", "40%", "forty", "forty five percent", "a hundred": a whole number from 0 to 100000, or null.
+        internal static int? Number(string text)
+        {
+            string words = Regex.Replace((text ?? "").ToLowerInvariant().Replace("%", " ").Replace("per cent", " ").Replace("percent", " "), @"\s+", " ").Trim();
+            if (words.Length == 0) return null;
+            int value;
+            if (int.TryParse(words, NumberStyles.None, CultureInfo.InvariantCulture, out value)) return value <= 100000 ? (int?)value : null;
+            int total = 0;
+            bool any = false;
+            foreach (string word in words.Split(' '))
+            {
+                if (word == "and" || word == "a") continue;
+                int unit = Array.IndexOf(Units, word);
+                if (unit >= 0) { total += unit; any = true; continue; }
+                int ten = Array.IndexOf(Tens, word);
+                if (ten >= 2) { total += ten * 10; any = true; continue; }
+                if (word == "hundred") { total = (total == 0 ? 1 : total) * 100; any = true; continue; }
+                return null;
+            }
+            return any ? (int?)total : null;
+        }
+
+        // Seconds in "30 seconds", "a minute", "1 minute 30", "a minute and a half", "half an hour", "1.5 minutes", "90s",
+        // "1:30" or "the 2 minute mark", up to 6 hours; null for anything else. A bare number with no unit is null, so "go to
+        // 2" is never read as two seconds.
+        internal static double? Duration(string text)
+        {
+            string said = Normalize(text);
+            if (said.Length == 0) return null;
+            Match clock = Clock.Match(said);
+            if (clock.Success)
+            {
+                int hours = clock.Groups[1].Success ? int.Parse(clock.Groups[1].Value, CultureInfo.InvariantCulture) : 0;
+                int minutes = int.Parse(clock.Groups[2].Value, CultureInfo.InvariantCulture), seconds = int.Parse(clock.Groups[3].Value, CultureInfo.InvariantCulture);
+                if (seconds >= 60 || (clock.Groups[1].Success && minutes >= 60)) return null;
+                double clockTotal = hours * 3600 + minutes * 60 + seconds;
+                return clockTotal <= LongestDuration ? (double?)clockTotal : null;
+            }
+            List<string> words = new List<string>();
+            foreach (string word in said.Split(' '))
+            {
+                Match glued = Glued.Match(word);
+                if (glued.Success) { words.Add(glued.Groups[1].Value); words.Add(glued.Groups[2].Value); }
+                else words.Add(word);
+            }
+            List<string> number = new List<string>();
+            double total = 0, lastUnit = 0;
+            // "half a minute" halves what follows; "one and a half minutes" adds a half to the number before it.
+            bool any = false, halfOf = false, plusHalf = false;
+            for (int i = 0; i < words.Count; i++)
+            {
+                string word = words[i];
+                if (word == "and" || word == "the" || word == "mark" || word == "of") continue;
+                if ((word == "a" || word == "an") && i + 1 < words.Count && words[i + 1] == "half") continue;
+                if (word == "half")
+                {
+                    if (number.Count > 0) plusHalf = true;
+                    else if (lastUnit > 0 && !halfOf) total += lastUnit / 2;
+                    else halfOf = true;
+                    continue;
+                }
+                double unit = UnitSeconds(word);
+                if (unit > 0)
+                {
+                    double? amount = Count(number, halfOf, plusHalf);
+                    if (!amount.HasValue) return null;
+                    total += amount.Value * unit;
+                    lastUnit = unit;
+                    any = true;
+                    number.Clear();
+                    halfOf = plusHalf = false;
+                    continue;
+                }
+                number.Add(word);
+            }
+            if (number.Count > 0 || halfOf || plusHalf)
+            {
+                // "1 minute 30": a trailing number counts in the next smaller unit; with no unit at all it isn't a duration.
+                if (lastUnit == 0) return null;
+                double? amount = Count(number, halfOf, plusHalf);
+                if (!amount.HasValue) return null;
+                total += amount.Value * (lastUnit >= 3600 ? 60 : 1);
+            }
+            return any && total <= LongestDuration ? (double?)total : null;
+        }
+
+        private static double? Count(List<string> number, bool halfOf, bool plusHalf)
+        {
+            double value;
+            string words = string.Join(" ", number.ToArray());
+            if (number.Count == 0 || words == "a" || words == "an") value = 1;
+            else if (Regex.IsMatch(words, @"^\d+(?:\.\d+)?$")) value = double.Parse(words, NumberStyles.Float, CultureInfo.InvariantCulture);
+            else
+            {
+                int? counted = Number(words);
+                if (!counted.HasValue) return null;
+                value = counted.Value;
+            }
+            if (plusHalf) value += 0.5;
+            return halfOf ? value / 2 : value;
+        }
+
+        private static double UnitSeconds(string word)
+        {
+            switch (word)
+            {
+                case "s": case "sec": case "secs": case "second": case "seconds": return 1;
+                case "m": case "min": case "mins": case "minute": case "minutes": return 60;
+                case "h": case "hr": case "hrs": case "hour": case "hours": return 3600;
+                default: return 0;
+            }
+        }
+
+        // 65 -> "1:05", 3725 -> "1:02:05".
+        internal static string Time(double seconds)
+        {
+            long whole = (long)Math.Floor(Math.Max(0, seconds) + 0.0001);
+            long hours = whole / 3600, minutes = whole / 60 % 60, rest = whole % 60;
+            return hours > 0
+                ? hours.ToString(CultureInfo.InvariantCulture) + ":" + minutes.ToString("00", CultureInfo.InvariantCulture) + ":" + rest.ToString("00", CultureInfo.InvariantCulture)
+                : minutes.ToString(CultureInfo.InvariantCulture) + ":" + rest.ToString("00", CultureInfo.InvariantCulture);
+        }
+
+        // 30 -> "30 seconds", 60 -> "1 minute", 90 -> "1 minute 30 seconds".
+        internal static string Amount(double seconds)
+        {
+            long whole = (long)Math.Round(Math.Max(0, seconds));
+            long minutes = whole / 60, rest = whole % 60;
+            string text = "";
+            if (minutes > 0) text = minutes + (minutes == 1 ? " minute" : " minutes");
+            if (rest > 0 || minutes == 0) text += (text.Length > 0 ? " " : "") + rest + (rest == 1 ? " second" : " seconds");
+            return text;
+        }
+    }
+    // ---- capriplus-shared: spoken (end) ----
+
+    // ---- capriplus-shared: json (begin) ----
+    // A small JSON reader and writer, because Capri gives mods no JSON library. Objects read as Dictionary<string, object>,
+    // arrays as List<object>, numbers as double. This block is shared by Capri+ modules: tools/shared/json.cs is the
+    // original, and tools/build.py checks every copy matches it.
+    internal static class Json
+    {
+        internal const int MaxDepth = 20;
+
+        internal static object Parse(string text)
+        {
+            if (text == null) throw new FormatException("no JSON");
+            int at = 0;
+            object value = ReadValue(text, ref at, 0);
+            SkipSpace(text, ref at);
+            if (at != text.Length) throw new FormatException("unexpected text at " + at);
+            return value;
+        }
+
+        internal static string Write(object value)
+        {
+            StringBuilder text = new StringBuilder();
+            WriteValue(text, value, 0);
+            return text.ToString();
+        }
+
+        private static void SkipSpace(string s, ref int at)
+        {
+            while (at < s.Length && (s[at] == ' ' || s[at] == '\t' || s[at] == '\n' || s[at] == '\r')) at++;
+        }
+
+        private static object ReadValue(string s, ref int at, int depth)
+        {
+            if (depth > MaxDepth) throw new FormatException("nested too deeply");
+            SkipSpace(s, ref at);
+            if (at >= s.Length) throw new FormatException("ended early");
+            char c = s[at];
+            if (c == '{') return ReadObject(s, ref at, depth);
+            if (c == '[') return ReadArray(s, ref at, depth);
+            if (c == '"') return ReadString(s, ref at);
+            if (Word(s, ref at, "true")) return true;
+            if (Word(s, ref at, "false")) return false;
+            if (Word(s, ref at, "null")) return null;
+            if (c == '-' || (c >= '0' && c <= '9')) return ReadNumber(s, ref at);
+            throw new FormatException("unexpected character at " + at);
+        }
+
+        private static bool Word(string s, ref int at, string word)
+        {
+            if (at + word.Length > s.Length || string.CompareOrdinal(s, at, word, 0, word.Length) != 0) return false;
+            at += word.Length;
+            return true;
+        }
+
+        private static Dictionary<string, object> ReadObject(string s, ref int at, int depth)
+        {
+            Dictionary<string, object> map = new Dictionary<string, object>(StringComparer.Ordinal);
+            at++;
+            SkipSpace(s, ref at);
+            if (at < s.Length && s[at] == '}') { at++; return map; }
+            while (true)
+            {
+                SkipSpace(s, ref at);
+                if (at >= s.Length || s[at] != '"') throw new FormatException("expected a name at " + at);
+                string key = ReadString(s, ref at);
+                SkipSpace(s, ref at);
+                if (at >= s.Length || s[at] != ':') throw new FormatException("expected : at " + at);
+                at++;
+                map[key] = ReadValue(s, ref at, depth + 1);
+                SkipSpace(s, ref at);
+                if (at < s.Length && s[at] == ',') { at++; continue; }
+                if (at < s.Length && s[at] == '}') { at++; return map; }
+                throw new FormatException("expected , or } at " + at);
+            }
+        }
+
+        private static List<object> ReadArray(string s, ref int at, int depth)
+        {
+            List<object> list = new List<object>();
+            at++;
+            SkipSpace(s, ref at);
+            if (at < s.Length && s[at] == ']') { at++; return list; }
+            while (true)
+            {
+                list.Add(ReadValue(s, ref at, depth + 1));
+                SkipSpace(s, ref at);
+                if (at < s.Length && s[at] == ',') { at++; continue; }
+                if (at < s.Length && s[at] == ']') { at++; return list; }
+                throw new FormatException("expected , or ] at " + at);
+            }
+        }
+
+        private static string ReadString(string s, ref int at)
+        {
+            StringBuilder text = new StringBuilder();
+            at++;
+            while (at < s.Length)
+            {
+                char c = s[at++];
+                if (c == '"') return text.ToString();
+                if (c < ' ') throw new FormatException("control character in a string at " + (at - 1));
+                if (c != '\\') { text.Append(c); continue; }
+                if (at >= s.Length) break;
+                char escape = s[at++];
+                switch (escape)
+                {
+                    case '"': text.Append('"'); break;
+                    case '\\': text.Append('\\'); break;
+                    case '/': text.Append('/'); break;
+                    case 'b': text.Append('\b'); break;
+                    case 'f': text.Append('\f'); break;
+                    case 'n': text.Append('\n'); break;
+                    case 'r': text.Append('\r'); break;
+                    case 't': text.Append('\t'); break;
+                    case 'u':
+                        int code;
+                        if (at + 4 > s.Length || !int.TryParse(s.Substring(at, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out code)) throw new FormatException("bad \\u escape at " + at);
+                        text.Append((char)code);
+                        at += 4;
+                        break;
+                    default: throw new FormatException("bad escape at " + (at - 1));
+                }
+            }
+            throw new FormatException("unterminated string");
+        }
+
+        private static double ReadNumber(string s, ref int at)
+        {
+            int start = at;
+            if (s[at] == '-') at++;
+            while (at < s.Length && "0123456789.eE+-".IndexOf(s[at]) >= 0) at++;
+            double value;
+            if (!double.TryParse(s.Substring(start, at - start), NumberStyles.Float, CultureInfo.InvariantCulture, out value)) throw new FormatException("bad number at " + start);
+            return value;
+        }
+
+        private static void WriteValue(StringBuilder text, object value, int depth)
+        {
+            if (depth > MaxDepth) throw new ArgumentException("nested too deeply for JSON");
+            if (value == null) { text.Append("null"); return; }
+            string words = value as string;
+            if (words != null) { WriteString(text, words); return; }
+            if (value is bool) { text.Append((bool)value ? "true" : "false"); return; }
+            if (value is int || value is long || value is double || value is float || value is decimal || value is short || value is byte)
+            {
+                double number = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                text.Append(double.IsNaN(number) || double.IsInfinity(number) ? "null" : number.ToString("R", CultureInfo.InvariantCulture));
+                return;
+            }
+            IDictionary map = value as IDictionary;
+            if (map != null)
+            {
+                text.Append('{');
+                bool first = true;
+                foreach (DictionaryEntry entry in map)
+                {
+                    if (!first) text.Append(',');
+                    first = false;
+                    WriteString(text, Convert.ToString(entry.Key, CultureInfo.InvariantCulture));
+                    text.Append(':');
+                    WriteValue(text, entry.Value, depth + 1);
+                }
+                text.Append('}');
+                return;
+            }
+            IEnumerable list = value as IEnumerable;
+            if (list != null)
+            {
+                text.Append('[');
+                bool first = true;
+                foreach (object item in list)
+                {
+                    if (!first) text.Append(',');
+                    first = false;
+                    WriteValue(text, item, depth + 1);
+                }
+                text.Append(']');
+                return;
+            }
+            WriteString(text, Convert.ToString(value, CultureInfo.InvariantCulture));
+        }
+
+        private static void WriteString(StringBuilder text, string value)
+        {
+            text.Append('"');
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '"': text.Append("\\\""); break;
+                    case '\\': text.Append("\\\\"); break;
+                    case '\n': text.Append("\\n"); break;
+                    case '\r': text.Append("\\r"); break;
+                    case '\t': text.Append("\\t"); break;
+                    default:
+                        if (c < ' ' || c == (char)0x2028 || c == (char)0x2029) text.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        else text.Append(c);
+                        break;
+                }
+            }
+            text.Append('"');
+        }
+    }
+
+    // Reading values out of parsed JSON without casts everywhere, and building objects to write.
+    internal static class J
+    {
+        internal static Dictionary<string, object> Of(params object[] pairs)
+        {
+            Dictionary<string, object> map = new Dictionary<string, object>(StringComparer.Ordinal);
+            for (int i = 0; i + 1 < pairs.Length; i += 2) map[(string)pairs[i]] = pairs[i + 1];
+            return map;
+        }
+
+        internal static string Str(Dictionary<string, object> map, string key, string fallback)
+        {
+            object value;
+            if (map == null || !map.TryGetValue(key, out value) || value == null) return fallback;
+            if (value is string) return (string)value;
+            if (value is bool) return (bool)value ? "true" : "false";
+            if (value is double) return ((double)value).ToString("R", CultureInfo.InvariantCulture);
+            return fallback;
+        }
+
+        internal static double Num(Dictionary<string, object> map, string key, double fallback)
+        {
+            object value;
+            if (map == null || !map.TryGetValue(key, out value) || value == null) return fallback;
+            if (value is double) return (double)value;
+            double parsed;
+            string text = value as string;
+            return text != null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) ? parsed : fallback;
+        }
+
+        internal static bool Flag(Dictionary<string, object> map, string key, bool fallback)
+        {
+            object value;
+            if (map == null || !map.TryGetValue(key, out value) || !(value is bool)) return fallback;
+            return (bool)value;
+        }
+
+        internal static List<object> List(Dictionary<string, object> map, string key)
+        {
+            object value;
+            return map != null && map.TryGetValue(key, out value) ? value as List<object> : null;
+        }
+
+        internal static Dictionary<string, object> Map(Dictionary<string, object> map, string key)
+        {
+            object value;
+            return map != null && map.TryGetValue(key, out value) ? value as Dictionary<string, object> : null;
+        }
+    }
+    // ---- capriplus-shared: json (end) ----
+}
