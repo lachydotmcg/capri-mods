@@ -38,5 +38,5 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 ## What it sends
 
 - A page only goes to Capri's brain when you ask her about it. Private tabs are never read.
-- Extra languages and games download from [tob7as/Browser-addons](https://github.com/tob7as/Browser-addons) on GitHub when you pick them, so the mod stays small.
+- Extra languages and games download from [tob7as/Browser-addons](https://github.com/tob7as/Browser-addons) on GitHub when you pick them, so the mod stays small. Once a day it quietly checks there for updates to what you already have.
 - No telemetry and no API keys inside.
