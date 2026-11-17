@@ -650,6 +650,14 @@
       "about": "Capri in a white plugsuit inspired by Rei Ayanami: pale blue hair, two white interface clips on her head, a red chest core, shoulder pylons with orange tops, navy limbs, green plates, black leg bands and red eyes."
     },
     {
+      "folder": "response-overhaul",
+      "file": "response-overhaul.capri-code",
+      "name": "Response Overhaul",
+      "kind": "code",
+      "author": "Mirit0",
+      "about": "Capri writes her own pet, throw, dodge, greeting and chess lines with her brain instead of repeating the built-in ones, voices them with Fish Audio and never says the same one twice."
+    },
+    {
       "folder": "sakura",
       "file": "sakura.capri-skin",
       "name": "Sakura",
