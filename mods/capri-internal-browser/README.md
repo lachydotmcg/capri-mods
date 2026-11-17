@@ -21,7 +21,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "bookmark this" | Adds the page to your bookmarks (Speed Dial). Also in the tab's right-click menu, or Ctrl+D |
 | "what's new in Capri Browser?" | Tells you the latest update notes, then asks if you want her to remember them |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
-| "message Sam on Discord hi" / "open my Discord and tell Sam hi" / "go to my Minecraft server on Discord" | Opens your Discord, finds the friend or server, and sends the message |
+| "message Sam on Discord hi" / "reply to Sam on Discord ok" / "open my Discord and tell Sam hi" / "go to my Minecraft server on Discord" | Opens your Discord, finds the friend or server, and sends the message |
 | "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Capri note |
 | "research this" / "look into ..." / "do some research on ..." | Looks it up, then saves what she found in a new note |
 | "pause" / "skip 30 seconds" / "louder" | Controls the video |
