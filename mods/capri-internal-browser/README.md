@@ -21,8 +21,9 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "bookmark this" | Adds the page to your bookmarks (Speed Dial). Also in the tab's right-click menu, or Ctrl+D |
 | "what's new in Capri Browser?" | Tells you the update notes, then asks if you want her to remember them |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
-| "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Capri note |
+| "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Browser note (nothing said: the page you're on) |
 | "research this" / "look into ..." / "do some research on ..." | Looks it up, then saves what she found in a new note |
+| "screenshot this and add it to my notes" | Puts a screenshot of the page in a new Browser note |
 | "pause" / "skip 30 seconds" / "louder" | Controls the video |
 | "pop the video out" | Puts the video in a small floating window |
 | "summarise this page" | Tells you what the page is about in a few lines |
@@ -45,7 +46,7 @@ She uses the Discord tab you already have open, and picks the closest name in yo
 ## Also in it
 
 - Ad blocking, plus warnings for scam sites and risky downloads
-- Notes with screenshots, links and pictures
+- Browser notes with screenshots, links and pictures
 - History by topic and a weekly wrap-up
 - Games: Wiki Race (with co-op codes), Guess the Site, Typing Race and Survival, Quiz, and more from Browser addons
 - Achievements and browsing stats
