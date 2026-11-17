@@ -18,6 +18,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "play the newest MrBeast video" | Plays the newest upload |
 | "find me a Roblox game to play" | Searches Roblox, Steam, itch.io or the web, scrolls and opens the best one |
 | "let's play snake" / "play wiki race" / "quiz me" | Starts that game (downloads it first if needed) |
+| "bookmark this" | Adds the page to your bookmarks (Speed Dial). Also in the tab's right-click menu, or Ctrl+D |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
 | "pause" / "skip 30 seconds" / "louder" | Controls the video |
 | "pop the video out" | Puts the video in a small floating window |
