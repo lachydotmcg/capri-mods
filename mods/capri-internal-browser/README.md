@@ -13,7 +13,9 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | --- | --- |
 | "open Capri Browser" | Opens the browser |
 | "open YouTube" | Opens the site in a new tab |
-| "find me a funny video" | Searches, picks a good one and plays it |
+| "find me a funny video" | Searches, picks a good one and plays it (or the first episode of a show) |
+| "play the newest MrBeast video" | Plays the newest upload |
+| "find me a Roblox game to play" | Searches Roblox, Steam, itch.io or the web, scrolls and opens the best one |
 | "pause" / "skip 30 seconds" / "louder" | Controls the video |
 | "pop the video out" | Puts the video in a small floating window |
 | "summarise this page" | Tells you what the page is about in a few lines |
