@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 0.7
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** (the mod is about 260 KB, over the 256 KB code mod limit before 0.9.4) and the Microsoft Edge WebView2 engine (built into Windows 11)
+- Needs: the Microsoft Edge WebView2 engine (built into Windows 11). The mod is under 256 KB, so it works on Capri versions before 0.9.4 too.
 - Windows only
 
 ## Say this
@@ -66,7 +66,7 @@ The mod itself (not the pages you visit) contacts:
 
 | Host | Why |
 | --- | --- |
-| raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | Games, game lists, languages, the settings and Speed Dial looks, video-site and search-engine lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
+| raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | Games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
 | en.wikipedia.org (or your language's Wikipedia), www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
 | www.google.com/s2/favicons, github.githubassets.com, and each Speed Dial site | Little site icons for Speed Dial and the sidebar |
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
