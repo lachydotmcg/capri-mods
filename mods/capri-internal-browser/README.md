@@ -21,6 +21,8 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "bookmark this" | Adds the page to your bookmarks (Speed Dial). Also in the tab's right-click menu, or Ctrl+D |
 | "what's new in Capri Browser?" | Tells you the latest update notes, then asks if you want her to remember them |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
+| "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Capri note |
+| "research this" / "look into ..." / "do some research on ..." | Looks it up, then saves what she found in a new note |
 | "pause" / "skip 30 seconds" / "louder" | Controls the video |
 | "pop the video out" | Puts the video in a small floating window |
 | "summarise this page" | Tells you what the page is about in a few lines |
