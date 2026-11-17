@@ -19,6 +19,8 @@ In Capri 0.8.3 or newer, open Capri Mainframe and press Mods in the CAPRI band. 
 3. Add a picture called `preview.png`, around 16:9, if you have one. That picture is what people see in Capri's mods window. Mods without one get a default picture.
 4. Open a pull request.
 
+Code mods can be up to 1 MB in Capri 0.9.4 or newer (256 KB before). If yours downloads extra files, like games or translations, write each file's SHA-256 in the mod and refuse any file that doesn't match. Then changing those files means a new mod version, and it's read like any other.
+
 ## Submit without git
 No git needed: fill in the [Submit a mod](https://github.com/lachydotmcg/capri-mods/issues/new?template=submit-mod.yml) form and drag your mod file in, zipped first. A pull request gets opened for you, with your GitHub username as the author, and it's read like any other mod before it goes up. To change something, edit your issue.
 
