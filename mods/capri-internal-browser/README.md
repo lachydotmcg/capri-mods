@@ -60,7 +60,7 @@ She uses the Discord tab you already have open, and picks the closest name in yo
 
 ## What it sends, and where
 
-Every turn, her brain gets a short note about the browser: the **title and address of the tab in front** (a private tab is just "a private tab", with no title or address), and the **sites you use most**. Page text only goes to her brain when you ask her about a page. Private tabs are never read.
+Every turn, her brain gets a short note about the browser: the **title and address of the tab in front** (when a private tab is in front she gets nothing about it), and the **sites you use most**. Page text only goes to her brain when you ask her about a page. Private tabs are never read, and they are left out of the tab list she sees.
 
 The mod itself (not the pages you visit) contacts:
 
