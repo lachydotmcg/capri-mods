@@ -6323,7 +6323,7 @@ public class CapriInternalBrowser : ICapriMod
             { "boot", "Capri Browser's start-up animation when it opens." },
             { "sleep", "Tabs you haven't used for 20 minutes are put to sleep to save memory. They wake up when you open them." },
             { "autopip", "Switch away from a playing video and it pops out into a small window that stays on top." },
-            { "holo", "Capri's hologram, the Holocall mod's call screen, shows in the corner of the browser while she talks. It makes no sound." }
+            { "Capri's hologram when she talks", "Capri's call screen from Holocall, a mod by Issei, shows in the corner of the browser while she talks. Get Holocall from the Capri app's mod browser. Its sounds don't play here." }
         };
 
         // What a setting's hover box says: its own line if it has one, otherwise the words under its name.
@@ -6461,6 +6461,8 @@ public class CapriInternalBrowser : ICapriMod
                 .Append(Row("Browser sounds", "Little sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
                 .Append(Row("Typing sounds", "A soft click for each key in the address bar and on web pages. Needs browser sounds on.", Switch("x-typesounds", Flag("typesounds", false))))
                 .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
+                .Append(Row("Capri's hologram when she talks", HolocallThere ? "Uses Holocall by Issei: her call screen shows in the corner of the browser while she talks, without its sounds." : "Download Holocall by Issei for this feature on the Capri app's mod browser.",
+                    HolocallThere ? Switch("x-holo", Flag("holo", false)) : "<span class='v'>Needs Holocall</span>"))
                 .Append(Row("Sidebar setup", "Choose which icons the sidebar shows, and add sites like ChatGPT, WhatsApp or Twitch. You can also right-click the sidebar.", Btn("sidesetup", "Open", false)))
                 .Append("</div>");
             string jump = settingsJump ?? "";
@@ -8942,8 +8944,7 @@ public class CapriInternalBrowser : ICapriMod
             { "timed", "3-minute limit on wiki races", "0", "capri" },
             { "boot", "Start-up animation", "1", "capri" },
             { "sleep", "Put unused tabs to sleep", "1", "tabs" },
-            { "autopip", "Pop videos out when switching tabs", "0", "video" },
-            { "holo", "Show Capri's hologram when she talks (Holocall style)", "0", "capri" }
+            { "autopip", "Pop videos out when switching tabs", "0", "video" }
         };
 
 
@@ -9395,27 +9396,43 @@ public class CapriInternalBrowser : ICapriMod
         private bool holoTalking;
 
 
-        // ---- Capri's hologram when she talks: the Holocall mod's call screen, floating over the browser's corner, silent ----
-        private HoloLook holoLook;
+        // ---- Capri's hologram when she talks (Settings > Mods) ----
+        // It borrows the call screen from Issei's Holocall mod, which they install from the Capri app's mod browser: her
+        // face, its animation and the reading of her voice all come from their copy of Holocall, so it only works while
+        // Holocall is installed and on. None of Holocall's sounds play, and her voice is left as her settings have it.
+        private object holoLook, holoTap;
+        private MethodInfo holoDraw, holoMouth, holoLine;
+        private int holoWide, holoHigh;
         private HoloScreen holoScreen;
-        private HoloTap holoTap;
         private System.Windows.Forms.Timer holoBeat;
         private readonly Stopwatch holoClock = Stopwatch.StartNew();
         private double holoShown = -1, holoLeaving = -1, holoUntil, holoLevel, holoLast, holoStarted, holoIdle;
-        private bool holoVoice, holoFailed;
+        private bool holoVoice;
         private string holoText;
         private double HoloNow { get { return holoClock.Elapsed.TotalSeconds; } }
+
+        // One of Holocall's own parts, from Holocall itself as Capri loaded it; null when it isn't installed and on.
+        internal static Type HolocallPart(string name)
+        {
+            foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try { if (a.GetType("Holocall", false) != null) return a.GetType(name, false); }
+                catch (Exception) { }
+            }
+            return null;
+        }
+
+        internal static bool HolocallThere { get { return HolocallPart("Look") != null; } }
 
         internal void Holo(string line, bool talking)
         {
             if (line == null)
             {
-                OldHolo(null, false);
                 // Her voice finished: the call screen goes once she's been quiet a moment.
                 if (holoVoice) { holoVoice = false; holoUntil = HoloNow + .35; }
                 return;
             }
-            if (!HoloReady()) { OldHolo(line, talking); return; }
+            if (!HoloReady()) return;
             double now = HoloNow;
             holoText = line;
             holoVoice = talking;
@@ -9428,34 +9445,52 @@ public class CapriInternalBrowser : ICapriMod
         {
             if (holoLook != null) return true;
             Form owner = FindForm();
-            if (holoFailed || owner == null) return false;
+            Type look = HolocallPart("Look");
+            if (owner == null || look == null) return false;
             try
             {
                 Bitmap face = mod.HoloFace();
-                if (face == null) { holoFailed = true; return false; }
+                ConstructorInfo make = look.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Bitmap), typeof(float) }, null);
+                holoDraw = look.GetMethod("Draw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (face == null || make == null || holoDraw == null) return false;
                 float k = Math.Max(.5f, Math.Min(1.2f, Screen.FromControl(this).Bounds.Height / 1080f * .62f));
-                holoLook = new HoloLook(face, k);
-                holoTap = HoloTap.Find(mod.HostObject);
-                holoScreen = new HoloScreen(new Size(holoLook.Width, holoLook.Height));
+                holoLook = make.Invoke(new object[] { face, k });
+                holoWide = (int)look.GetField("Width", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(holoLook);
+                holoHigh = (int)look.GetField("Height", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(holoLook);
+                Type tap = HolocallPart("Tap");
+                MethodInfo find = tap == null || mod.HostObject == null ? null : tap.GetMethod("Find", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (find != null)
+                {
+                    holoTap = find.Invoke(null, new object[] { mod.HostObject, null });
+                    holoMouth = tap.GetMethod("Talking", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    holoLine = tap.GetMethod("Line", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                }
+                holoScreen = new HoloScreen(new Size(holoWide, holoHigh));
                 holoScreen.Begin(owner);
                 holoBeat = new System.Windows.Forms.Timer { Interval = 15 };
-                holoBeat.Tick += delegate { HoloTick(); };
-                Disposed += delegate { holoBeat.Dispose(); holoScreen.Dispose(); holoLook.Dispose(); };
+                holoBeat.Tick += delegate { try { HoloTick(); } catch (Exception) { holoBeat.Stop(); } };
+                Disposed += delegate { holoBeat.Dispose(); holoScreen.Dispose(); IDisposable d = holoLook as IDisposable; if (d != null) d.Dispose(); };
                 return true;
             }
-            catch (Exception) { holoFailed = true; return false; }
+            catch (Exception) { holoLook = null; return false; }
         }
 
-        private Point HoloSpot() { return holder.PointToScreen(new Point(holder.Width - holoLook.Width - 10, holder.Height - holoLook.Height - 10)); }
+        private Point HoloSpot() { return holder.PointToScreen(new Point(holder.Width - holoWide - 10, holder.Height - holoHigh - 10)); }
 
         private void HoloTick()
         {
             double now = HoloNow, dt = Math.Min(.1, now - holoLast);
             holoLast = now;
             double open = 0;
-            bool talking = holoTap != null && holoTap.Talking(out open);
+            bool talking = false;
+            if (holoTap != null && holoMouth != null)
+            {
+                object[] asked = { 0.0 };
+                talking = (bool)holoMouth.Invoke(holoTap, asked);
+                open = (double)asked[0];
+            }
             // Without Capri to read (tests), her mouth just moves while her voice plays.
-            if (holoTap == null && holoVoice) { talking = true; open = .2 + .8 * Math.Abs(Math.Sin(now * 9.5) * Math.Sin(now * 3.1)); }
+            else if (holoVoice) { talking = true; open = .2 + .8 * Math.Abs(Math.Sin(now * 9.5) * Math.Sin(now * 3.1)); }
             if (talking) holoUntil = Math.Max(holoUntil, now + .35);
             double want = talking ? open : 0;
             holoLevel += (want - holoLevel) * Math.Min(1, dt * (want > holoLevel ? 30 : 12));
@@ -9473,24 +9508,9 @@ public class CapriInternalBrowser : ICapriMod
             if (!(talking || arriving > 0 || leaving > 0 || holoLevel > .01) && now < holoIdle) return;
             holoIdle = now + .033;
             string status = leaving > 0 ? "CALL ENDED" : now - holoStarted < 1.2 ? "CONNECTING" : "CONNECTED";
-            string said = holoTap == null ? null : holoTap.Line();
-            holoLook.Draw(holoScreen.Canvas, now, holoLevel, talking, said ?? holoText, Math.Max(arriving, leaving), leaving > 0, status, now - holoStarted);
+            string said = holoTap == null || holoLine == null ? null : holoLine.Invoke(holoTap, null) as string;
+            holoDraw.Invoke(holoLook, new object[] { holoScreen.Canvas, now, holoLevel, talking, said ?? holoText, Math.Max(arriving, leaving), leaving > 0, status, now - holoStarted });
             holoScreen.Flip(HoloSpot());
-        }
-
-        // The plain hologram, for when her face art can't be had.
-        private void OldHolo(string line, bool talking)
-        {
-            if (line == null) { if (holoTalking && holo != null && !holo.IsDisposed) holo.Dispose(); holoTalking = false; return; }
-            if (holo != null && !holo.IsDisposed) holo.Dispose();
-            holoTalking = talking;
-            Form form = FindForm();
-            Image face = null;
-            try { if (form != null && form.Icon != null) using (Icon big = new Icon(form.Icon, 96, 96)) face = big.ToBitmap(); } catch (Exception) { }
-            holo = new HoloFrame(face, talking ? 120000 : Math.Max(2500, Math.Min(8000, line.Length * 70))) { Anchor = AnchorStyles.Bottom | AnchorStyles.Right };
-            holo.Location = new Point(Math.Max(0, holder.Width - 144), Math.Max(0, holder.Height - 160));
-            holder.Controls.Add(holo);
-            holo.BringToFront();
         }
 
         internal void Post(Action run)
@@ -10011,52 +10031,6 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // ---- The Summarise button ----
-
-    internal sealed class HoloFrame : Control
-    {
-        private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 60 };
-        private readonly Image face;
-        private readonly DateTime until;
-        private readonly Random dice = new Random();
-        private int frame;
-
-        public HoloFrame(Image face, int ms)
-        {
-            this.face = face;
-            until = DateTime.UtcNow.AddMilliseconds(ms);
-            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
-            Size = new Size(124, 140);
-            Cursor = Cursors.Hand;
-            tick.Tick += delegate { frame++; if (DateTime.UtcNow > until) Dispose(); else Invalidate(); };
-            tick.Start();
-            Click += delegate { Dispose(); };
-        }
-
-        protected override void Dispose(bool disposing) { if (disposing) { tick.Dispose(); if (face != null) face.Dispose(); } base.Dispose(disposing); }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            Graphics g = e.Graphics;
-            g.Clear(Color.FromArgb(6, 18, 22));
-            float a = dice.Next(10) == 0 ? .3f : .75f + (float)dice.NextDouble() * .2f;
-            int shift = dice.Next(12) == 0 ? dice.Next(-5, 6) : 0;
-            if (face != null)
-                using (ImageAttributes tint = new ImageAttributes())
-                {
-                    float[] cyan = { .2f, .55f, .62f, 0, 0 };
-                    tint.SetColorMatrix(new ColorMatrix(new[] { cyan, cyan, cyan, new float[] { 0, 0, 0, a, 0 }, new float[] { 0, .08f, .1f, 0, 1 } }));
-                    g.DrawImage(face, new Rectangle(14 + shift, 10, 96, 96), 0, 0, face.Width, face.Height, GraphicsUnit.Pixel, tint);
-                }
-            using (Pen line = new Pen(Color.FromArgb(90, 6, 18, 22))) for (int y = frame % 3; y < Height; y += 3) g.DrawLine(line, 0, y, Width, y);
-            using (SolidBrush ink = new SolidBrush(Color.FromArgb(94, 240, 246)))
-            {
-                for (int i = 0; i < 9; i++) { int h = 2 + dice.Next(9); g.FillRectangle(ink, 26 + i * 8, 128 - h, 5, h); }
-                using (System.Drawing.Font small = new System.Drawing.Font("Bahnschrift", 8f, FontStyle.Bold)) using (StringFormat mid = new StringFormat { Alignment = StringAlignment.Center })
-                    g.DrawString("CAPRI", small, ink, new RectangleF(0, 104, Width, 14), mid);
-            }
-            using (Pen edge = new Pen(Color.FromArgb(94, 240, 246))) g.DrawRectangle(edge, 0, 0, Width - 1, Height - 1);
-        }
-    }
 
     // Start-up: Capri's name glitching in over scanlines, a load bar, then SYSTEM ONLINE. A click skips it.
     internal sealed class BootScreen : Control
@@ -11454,73 +11428,6 @@ public class CapriInternalBrowser : ICapriMod
     }
 }
 
-// When she's talking and how open her mouth is, read from Capri herself (the Holocall mod's way). Read only: nothing of hers is changed.
-internal sealed class HoloTap
-{
-    private const BindingFlags Any = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static;
-    private object her, speaker, player;
-    private FieldInfo speech, speechStart, mouths, clock, voiceUntil;
-    private PropertyInfo speakerBusy, playerBusy;
-    private MethodInfo speakerShape, playerShape;
-
-    internal static HoloTap Find(object host)
-    {
-        if (host == null) return null;
-        HoloTap t = new HoloTap();
-        try
-        {
-            FieldInfo capri = host.GetType().GetField("capri", Any);
-            t.her = capri == null ? null : capri.GetValue(host);
-            if (t.her == null) return null;
-            Type h = t.her.GetType();
-            t.speech = h.GetField("speech", Any); t.speechStart = h.GetField("speechStart", Any); t.mouths = h.GetField("mouths", Any);
-            t.clock = h.GetField("clock", Any); t.voiceUntil = h.GetField("voiceUntil", Any);
-            FieldInfo sp = h.GetField("speaker", Any), vo = h.GetField("voice", Any);
-            t.speaker = sp == null ? null : sp.GetValue(t.her);
-            object voice = vo == null ? null : vo.GetValue(t.her);
-            FieldInfo pl = voice == null ? null : voice.GetType().GetField("player", Any);
-            t.player = pl == null ? null : pl.GetValue(voice);
-            if (t.speaker != null) { t.speakerBusy = t.speaker.GetType().GetProperty("Busy", Any); t.speakerShape = t.speaker.GetType().GetMethod("Shape", Any, null, Type.EmptyTypes, null); }
-            if (t.player != null) { t.playerBusy = t.player.GetType().GetProperty("Busy", Any); t.playerShape = t.player.GetType().GetMethod("Shape", Any, null, Type.EmptyTypes, null); }
-        }
-        catch (Exception) { return null; }
-        return t;
-    }
-
-    // Whether she's talking now, and how open her mouth is, 0 (closed) to 1.
-    internal bool Talking(out double open)
-    {
-        open = 0;
-        bool talking = false;
-        int shape = -1;
-        try
-        {
-            if (speakerBusy != null && (bool)speakerBusy.GetValue(speaker, null)) talking = true;
-            if (playerBusy != null && (bool)playerBusy.GetValue(player, null)) talking = true;
-            Stopwatch c = clock == null ? null : clock.GetValue(her) as Stopwatch;
-            double now = c == null ? 0 : c.Elapsed.TotalSeconds;
-            if (c != null && voiceUntil != null && now < (double)voiceUntil.GetValue(her)) talking = true;
-            int[] m = mouths == null ? null : mouths.GetValue(her) as int[];
-            if (m != null && speech != null && speech.GetValue(her) != null && c != null)
-            {
-                int step = (int)((now - (double)speechStart.GetValue(her)) * 12);
-                if (step >= 0 && step < m.Length) shape = Math.Max(shape, m[step]);
-            }
-            if (speakerShape != null) shape = Math.Max(shape, (int)speakerShape.Invoke(speaker, null));
-            if (playerShape != null) shape = Math.Max(shape, (int)playerShape.Invoke(player, null));
-        }
-        catch (Exception) { }
-        open = (shape + 1) / 5.0;
-        return talking || shape >= 0;
-    }
-
-    internal string Line()
-    {
-        try { return speech == null || her == null ? null : speech.GetValue(her) as string; }
-        catch (Exception) { return null; }
-    }
-}
-
 // A see-through window that floats over the browser's corner (not over other apps), drawn with per-pixel alpha so her glow shows over the page. Clicks pass through.
 internal sealed class HoloScreen : Form
 {
@@ -11596,647 +11503,5 @@ internal sealed class HoloScreen : Form
         if (memDc != IntPtr.Zero) { SelectObject(memDc, old); DeleteObject(dib); DeleteDC(memDc); memDc = IntPtr.Zero; }
         if (screenDc != IntPtr.Zero) { ReleaseDC(IntPtr.Zero, screenDc); screenDc = IntPtr.Zero; }
         base.Dispose(disposing);
-    }
-}
-
-// ---- Capri's hologram: the face and animation from the Holocall mod by Issei, reused with thanks. ----
-// Only the picture comes over: no line static, no chirps, and her voice is left exactly as her settings have it.
-internal sealed class HoloLook : IDisposable
-{
-    internal static readonly Color Red = Color.FromArgb(255, 64, 80), RedDim = Color.FromArgb(150, 30, 44), Cyan = Color.FromArgb(90, 240, 255);
-    internal const int Mouths = 6;   // how many openings of her mouth are drawn, shut to wide
-    // her eyes' looks
-    internal const int Ahead = 0, Left = 1, Right = 2, Up = 3, Half = 4, Shut = 5, Wide = 6, Squint = 7, Looks = 8;
-    internal readonly int Width, Height;
-    private readonly float k;
-    private readonly Rectangle faceAt;
-    private readonly int big;          // her portrait is a little bigger than the square, so her head can move in it
-    private readonly float margin;
-    private readonly Bitmap[] faces;
-    private readonly Bitmap[] eyes;
-    private readonly Rectangle eyeAt;
-    private readonly Bitmap comp, turned, scan, frame;
-    private readonly int[][] facePx, eyePx;   // the same portraits and eye patches as plain pixels, to put her face together fast
-    private readonly int[] compPx, turnedPx;
-    private readonly PointF mouth;     // the middle of her mouth in the portrait
-    private readonly float drop;       // how far her jaw drops at its widest, in portrait pixels
-    private readonly Font small;
-    private readonly SolidBrush cyan, red, redDim, cyanTint, pinkTint, cut, white, cyanBit, pinkBit;
-    private readonly Random rnd = new Random();
-    private readonly int[] shove = new int[64];
-    private readonly int[] blocks = new int[256];
-    private int lastSecond = -1;
-    private string lastStatus;
-    private Bitmap timer;
-    internal double NextJitter;
-
-    // her expression as it is now
-    private static readonly Regex Laugh = new Regex(@"\b(?:ha(?:ha)+h?|he(?:he)+|lol|lmao|rofl)\b", RegexOptions.IgnoreCase);
-    private double lastNow, nextBlink = 1.8, blinkAt = -1, nextGlance = 1.2, moodUntil, tilt, tiltWant, bob;
-    private int gaze = Ahead, mood = Ahead;
-    private string lastLine;
-    internal int EyeLook;   // the look her eyes have this frame, for the proofs
-    internal int ForceEye = -1;   // the proof pictures set this to draw one look
-
-    internal HoloLook(Bitmap art, float scale)
-    {
-        k = scale;
-        Width = S(300); Height = S(372);
-        int fs = S(256);
-        faceAt = new Rectangle(S(22), S(74), fs, fs);
-        big = (int)Math.Round(fs * CropSize / 230f);
-        margin = (big - fs) / 2f;
-        small = MakeFont(10 * k, false);
-        cyan = new SolidBrush(Cyan); red = new SolidBrush(Red); redDim = new SolidBrush(RedDim);
-        cyanTint = new SolidBrush(Color.FromArgb(105, Cyan)); pinkTint = new SolidBrush(Color.FromArgb(120, 255, 40, 130));
-        cut = new SolidBrush(Color.FromArgb(215, 6, 2, 8)); white = new SolidBrush(Color.FromArgb(235, 225, 255, 255));
-        cyanBit = new SolidBrush(Color.FromArgb(230, 120, 250, 255)); pinkBit = new SolidBrush(Color.FromArgb(220, 255, 70, 160));
-        float s = big / CropSize;
-        mouth = new PointF((190 - CropX) * s, (228 - CropY) * s);
-        drop = MaxOpen * s;
-        faces = Portraits(art, big, out eyes, out eyeAt);
-        facePx = new int[Mouths][]; eyePx = new int[Looks][];
-        for (int i = 0; i < Mouths; i++) facePx[i] = Pixels(faces[i]);
-        for (int i = 0; i < Looks; i++) eyePx[i] = Pixels(eyes[i]);
-        comp = new Bitmap(big, big, PixelFormat.Format32bppPArgb);
-        compPx = new int[big * big];
-        turned = new Bitmap(fs, fs, PixelFormat.Format32bppPArgb);
-        turnedPx = new int[fs * fs];
-        scan = Scanlines(fs);
-        using (Bitmap chrome = Chrome()) frame = Framed(chrome);
-    }
-
-    private int S(double v) { return (int)Math.Round(v * k); }
-
-    private static Font MakeFont(float px, bool bold)
-    {
-        foreach (string name in bold ? new[] { "Bahnschrift SemiBold", "Bahnschrift", "Segoe UI Semibold" } : new[] { "Bahnschrift", "Segoe UI" })
-        {
-            Font f = new Font(name, px, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
-            if (f.Name == name) return f;
-            f.Dispose();
-        }
-        return new Font(FontFamily.GenericSansSerif, px, bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
-    }
-
-    // Places on her 400 x 400 portrait. The crop around her face (the square shows its middle 230), her jaw below the
-    // middle of her teeth, which drops to open her mouth (her teeth are one zigzag, so splitting it along the middle
-    // gives a top row and a bottom row), and her eyes: middle, iris size, and how far the socket reaches.
-    private const float CropX = 64.5f, CropY = 88.5f, CropSize = 253, MaxOpen = 9;
-    private static readonly float[] Jaw =
-    {
-        158, 235.2f, 219, 218.3f,                        // along the middle of her teeth
-        216, 221.5f, 211, 226.5f, 208.5f, 231, 207, 236, 206, 245, 206, 253,   // down the right of her jaw, clear of her hair
-        186, 253, 160, 241,                              // under her chin and back up
-    };
-    //                                    x       y     iris  across  down
-    private static readonly float[][] EyeSpots = { new float[] { 170, 207.5f, 6.5f, 7.5f, 8 }, new float[] { 211.5f, 197.5f, 8.5f, 10.5f, 12 } };
-
-    // Her portrait at every opening of her mouth, and her eyes in every look, toned: a red/cyan split and a red wash.
-    private static Bitmap[] Portraits(Bitmap art, int size, out Bitmap[] eyes, out Rectangle eyeAt)
-    {
-        float u = art.Width / 400f;
-        Bitmap plain = new Bitmap(size, size, PixelFormat.Format32bppPArgb);
-        using (Graphics g = Graphics.FromImage(plain))
-        {
-            g.Clear(Color.FromArgb(255, 24, 6, 12));
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(art, new Rectangle(0, 0, size, size), new RectangleF(CropX * u, CropY * u, CropSize * u, CropSize * u), GraphicsUnit.Pixel);
-        }
-        int[] src = Pixels(plain);
-        plain.Dispose();
-        float s = size / CropSize;
-
-        // her mouth
-        PointF[] jaw = new PointF[Jaw.Length / 2];
-        for (int i = 0; i < jaw.Length; i++) jaw[i] = new PointF((Jaw[i * 2] - CropX) * s, (Jaw[i * 2 + 1] - CropY) * s);
-        bool[] inJaw = Mask(jaw, size);
-        int top = size, bottom = 0;
-        for (int i = 0; i < inJaw.Length; i++) if (inJaw[i]) { top = Math.Min(top, i / size); bottom = Math.Max(bottom, i / size); }
-        Bitmap[] all = new Bitmap[Mouths];
-        for (int o = 0; o < Mouths; o++)
-        {
-            int d = (int)Math.Round(o * MaxOpen * s / (Mouths - 1));
-            int[] px = (int[])src.Clone();
-            if (d > 0)
-                for (int y = top; y <= Math.Min(size - 1, bottom + d); y++)
-                    for (int x = 0; x < size; x++)
-                    {
-                        int i = y * size + x;
-                        // her hair stays in front of her jaw
-                        if (((src[i] >> 16) & 255) > 150 && ((src[i] >> 8) & 255) < 100) continue;
-                        if (y - d >= 0 && inJaw[i - d * size]) px[i] = src[i - d * size];
-                        else if (inJaw[i])
-                        {
-                            // inside her mouth: near black, a little red deeper in
-                            int depth = 0;
-                            while (depth < d && y - depth - 1 >= 0 && inJaw[i - (depth + 1) * size]) depth++;
-                            int r = 26 + 34 * depth / Math.Max(1, d);
-                            px[i] = (255 << 24) | (r << 16) | (3 << 8) | 14;
-                        }
-                    }
-            all[o] = Toned(px, size);
-        }
-
-        // her eyes: each look is drawn on a whole portrait and toned the same way, then cut out as a patch
-        int ex0 = size, ey0 = size, ex1 = 0, ey1 = 0;
-        Socket[] spots = new Socket[EyeSpots.Length];
-        for (int e = 0; e < spots.Length; e++)
-        {
-            spots[e] = new Socket(src, size, EyeSpots[e], s);
-            ex0 = Math.Min(ex0, spots[e].X0); ey0 = Math.Min(ey0, spots[e].Y0); ex1 = Math.Max(ex1, spots[e].X1); ey1 = Math.Max(ey1, spots[e].Y1);
-        }
-        int pad = Math.Max(2, (int)(2 * s));
-        eyeAt = Rectangle.FromLTRB(Math.Max(0, ex0 - pad), Math.Max(0, ey0 - pad), Math.Min(size, ex1 + pad + 1), Math.Min(size, ey1 + pad + 1));
-        eyes = new Bitmap[Looks];
-        for (int look = 0; look < Looks; look++)
-        {
-            int[] px = (int[])src.Clone();
-            foreach (Socket spot in spots) spot.Draw(px, size, look);
-            using (Bitmap whole = Toned(px, size)) eyes[look] = whole.Clone(eyeAt, PixelFormat.Format32bppPArgb);
-        }
-        return all;
-    }
-
-    // One of her eyes: its socket (the dark inside of its green ring), its iris (the blue and the white glint), and the
-    // green of her mask round it, for her lids.
-    private sealed class Socket
-    {
-        internal int X0, Y0, X1, Y1;
-        private readonly float cx, cy, r;
-        private readonly bool[] socket, iris;
-        private readonly int[] src;
-        private readonly int dark, lid, line, top, bottom;
-        private readonly float s;
-
-        internal Socket(int[] px, int size, float[] spot, float scale)
-        {
-            src = px; s = scale;
-            cx = (spot[0] - CropX) * s; cy = (spot[1] - CropY) * s; r = spot[2] * s;
-            float rx = spot[3] * s, ry = spot[4] * s;
-            socket = new bool[px.Length]; iris = new bool[px.Length];
-            X0 = (int)(cx - rx); X1 = (int)(cx + rx); Y0 = (int)(cy - ry); Y1 = (int)(cy + ry);
-            // the socket: everything reachable from the middle of the eye that isn't her green mask or her red hair,
-            // kept inside an oval so a gap in the ring can't let it out
-            Stack<int> todo = new Stack<int>();
-            todo.Push((int)cy * size + (int)cx);
-            long gr = 0, gg = 0, gb = 0; int greens = 0;
-            while (todo.Count > 0)
-            {
-                int i = todo.Pop();
-                if (socket[i]) continue;
-                int x = i % size, y = i / size;
-                double ox = (x - cx) / rx, oy = (y - cy) / ry;
-                if (ox * ox + oy * oy > 1) continue;
-                int p = px[i], pr = (p >> 16) & 255, pg = (p >> 8) & 255, pb = p & 255;
-                if (pg > 110 && pg > pr + 40 && pg > pb + 20) continue;   // her green mask
-                if (pr > 150 && pg < 100) continue;                        // her hair
-                socket[i] = true;
-                if (pb > 90 && pb > pr + 10 || pr > 170 && pg > 170 && pb > 170) iris[i] = true;
-                if (x > 0) todo.Push(i - 1);
-                if (x < size - 1) todo.Push(i + 1);
-                if (y > 0) todo.Push(i - size);
-                if (y < size - 1) todo.Push(i + size);
-            }
-            int t = size, b = 0;
-            long dr = 0, dg = 0, db = 0; int darks = 0;
-            for (int y = Y0; y <= Y1; y++)
-                for (int x = X0; x <= X1; x++)
-                {
-                    if (x < 0 || y < 0 || x >= size || y >= size) continue;
-                    int i = y * size + x, p = px[i], pr = (p >> 16) & 255, pg = (p >> 8) & 255, pb = p & 255;
-                    if (socket[i])
-                    {
-                        t = Math.Min(t, y); b = Math.Max(b, y);
-                        if (!iris[i] && Math.Max(pr, Math.Max(pg, pb)) < 60) { dr += pr; dg += pg; db += pb; darks++; }
-                    }
-                    else if (pg > 150 && pg > pr + 60) { gr += pr; gg += pg; gb += pb; greens++; }
-                }
-            top = t; bottom = b;
-            dark = darks == 0 ? Rgb(12, 9, 14) : Rgb((int)(dr / darks), (int)(dg / darks), (int)(db / darks));
-            lid = greens == 0 ? Rgb(40, 220, 110) : Rgb((int)(gr / greens), (int)(gg / greens), (int)(gb / greens));
-            line = Rgb(10, 8, 12);
-        }
-
-        private static int Rgb(int r, int g, int b) { return (255 << 24) | (r << 16) | (g << 8) | b; }
-
-        // Draw this eye in a look onto px.
-        internal void Draw(int[] px, int size, int look)
-        {
-            float dx = 0, dy = 0, grow = 1;
-            if (look == Left) dx = -0.45f * r;
-            else if (look == Right) dx = 0.45f * r;
-            else if (look == Up) dy = -0.38f * r;
-            else if (look == Wide) grow = 1.18f;
-            float h = bottom - top;
-            // how far her lids come in, as parts of the socket's height: the upper one from the top, the lower from the bottom
-            float upper = look == Half ? 0.5f : look == Squint ? 0.2f : 0, lower = look == Squint ? 0.42f : 0;
-            float lidTop = top + upper * h, lidBottom = bottom + 1 - lower * h;
-            float lw = Math.Max(1, 1.5f * s);
-            for (int y = Y0; y <= Y1; y++)
-                for (int x = X0; x <= X1; x++)
-                {
-                    if (x < 0 || y < 0 || x >= size || y >= size) continue;
-                    int i = y * size + x;
-                    if (!socket[i]) continue;
-                    if (look == Shut)
-                    {
-                        // a shut eye: her mask over it, and a dark line where it closed
-                        px[i] = Math.Abs(y - (cy + 0.15f * h)) < lw ? line : lid;
-                        continue;
-                    }
-                    if (upper > 0 && y < lidTop) { px[i] = y >= lidTop - lw ? line : lid; continue; }
-                    if (lower > 0 && y >= lidBottom) { px[i] = y < lidBottom + lw ? line : lid; continue; }
-                    // the iris, moved and grown inside the socket
-                    float sx = cx + (x - cx - dx) / grow, sy = cy + (y - cy - dy) / grow;
-                    int qx = (int)Math.Round(sx), qy = (int)Math.Round(sy);
-                    int q = qy * size + qx;
-                    px[i] = qx >= 0 && qy >= 0 && qx < size && qy < size && iris[q] ? src[q] : dark;
-                }
-        }
-    }
-
-    private static bool[] Mask(PointF[] shape, int size)
-    {
-        bool[] inside = new bool[size * size];
-        using (Bitmap m = new Bitmap(size, size, PixelFormat.Format32bppPArgb))
-        {
-            using (Graphics g = Graphics.FromImage(m)) g.FillPolygon(Brushes.White, shape);
-            int[] mp = Pixels(m);
-            for (int i = 0; i < mp.Length; i++) inside[i] = (mp[i] & 0xff) > 128;
-        }
-        return inside;
-    }
-
-    private static int[] Pixels(Bitmap b)
-    {
-        Rectangle r = new Rectangle(0, 0, b.Width, b.Height);
-        BitmapData d = b.LockBits(r, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
-        int[] px = new int[b.Width * b.Height];
-        Marshal.Copy(d.Scan0, px, 0, px.Length);
-        b.UnlockBits(d);
-        return px;
-    }
-
-    private static Bitmap Made(int[] px, int w, int h)
-    {
-        Bitmap b = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
-        BitmapData d = b.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
-        Marshal.Copy(px, 0, d.Scan0, px.Length);
-        b.UnlockBits(d);
-        return b;
-    }
-
-    // A red/cyan split and a red wash. The scanlines go on top separately, so they stay level when her head tilts.
-    private static Bitmap Toned(int[] src, int size)
-    {
-        int[] dst = new int[src.Length];
-        int split = Math.Max(1, size / 128);
-        for (int y = 0; y < size; y++)
-            for (int x = 0; x < size; x++)
-            {
-                int r = (src[y * size + Math.Max(0, x - split)] >> 16) & 255;   // red from the left, blue from the right
-                int gr = (src[y * size + x] >> 8) & 255;
-                int bl = src[y * size + Math.Min(size - 1, x + split)] & 255;
-                r = r + (255 - r) * 28 / 255; gr = gr * 227 / 255; bl = bl + (70 - bl) * 28 / 255;
-                dst[y * size + x] = (255 << 24) | (Clamp(r) << 16) | (Clamp(gr) << 8) | Clamp(bl);
-            }
-        return Made(dst, size, size);
-    }
-
-    private static Bitmap Scanlines(int size)
-    {
-        int[] px = new int[size * size];
-        for (int y = 0; y < size; y += 3)
-            for (int x = 0; x < size; x++) px[y * size + x] = 70 << 24;   // black at 70 of 255, premultiplied
-        return Made(px, size, size);
-    }
-
-    private static int Clamp(int v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
-
-    // The frame, corner brackets, header and the dark panel behind her face.
-    private Bitmap Chrome()
-    {
-        Bitmap c = new Bitmap(Width, Height, PixelFormat.Format32bppPArgb);
-        using (Graphics g = Graphics.FromImage(c))
-        using (Font bigFont = MakeFont(24 * k, true))
-        using (Pen line = new Pen(Red, Math.Max(1.5f, 2 * k)))
-        using (SolidBrush panel = new SolidBrush(Color.FromArgb(205, 14, 8, 12)))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            Rectangle f = faceAt;
-            int p = S(6);
-            Rectangle box = new Rectangle(f.X - p, f.Y - p, f.Width + 2 * p, f.Height + 2 * p);
-            g.FillRectangle(panel, box);
-            g.DrawRectangle(line, box);
-            int L = S(18), o = S(12);
-            Point[][] corners =
-            {
-                new[] { new Point(f.Left - o + L, f.Top - o), new Point(f.Left - o, f.Top - o), new Point(f.Left - o, f.Top - o + L) },
-                new[] { new Point(f.Right + o - L, f.Top - o), new Point(f.Right + o, f.Top - o), new Point(f.Right + o, f.Top - o + L) },
-                new[] { new Point(f.Left - o + L, f.Bottom + o), new Point(f.Left - o, f.Bottom + o), new Point(f.Left - o, f.Bottom + o - L) },
-                new[] { new Point(f.Right + o - L, f.Bottom + o), new Point(f.Right + o, f.Bottom + o), new Point(f.Right + o, f.Bottom + o - L) },
-            };
-            foreach (Point[] cn in corners) g.DrawLines(line, cn);
-            g.FillPolygon(red, new[] { new PointF(box.Right - S(66), box.Top), new PointF(box.Right, box.Top), new PointF(box.Right, box.Top + S(5)), new PointF(box.Right - S(61), box.Top + S(5)) });
-            int hx = S(22), hy = S(18);
-            g.FillRectangle(red, hx, hy, S(4), S(34));
-            for (int i = 0; i < 3; i++) g.FillRectangle(red, hx + S(9), hy + S(8 + i * 9), S(10 - i * 2), S(4));
-            g.DrawString("HOLOCALL  //  LINK 7F-CPR", small, red, hx + S(24), hy - S(2));
-            g.DrawString("CAPRI", bigFont, cyan, hx + S(23), hy + S(8));
-        }
-        return c;
-    }
-
-    // The frame over a soft red glow, made once by blurring a small copy of it and scaling that up.
-    private Bitmap Framed(Bitmap c)
-    {
-        int w = Math.Max(1, Width / 6), h = Math.Max(1, Height / 6);
-        int[] px;
-        using (Bitmap little = new Bitmap(w, h, PixelFormat.Format32bppPArgb))
-        {
-            using (Graphics g = Graphics.FromImage(little)) { g.InterpolationMode = InterpolationMode.HighQualityBilinear; g.DrawImage(c, 0, 0, w, h); }
-            px = Pixels(little);
-        }
-        double[] a = new double[w * h], t = new double[w * h];
-        for (int i = 0; i < a.Length; i++) a[i] = ((px[i] >> 24) & 255) / 255.0;
-        for (int pass = 0; pass < 3; pass++)
-        {
-            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { double s = 0; int n = 0; for (int j = -1; j <= 1; j++) { int xx = x + j; if (xx >= 0 && xx < w) { s += a[y * w + xx]; n++; } } t[y * w + x] = s / n; }
-            for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) { double s = 0; int n = 0; for (int j = -1; j <= 1; j++) { int yy = y + j; if (yy >= 0 && yy < h) { s += t[yy * w + x]; n++; } } a[y * w + x] = s / n; }
-        }
-        for (int i = 0; i < a.Length; i++)
-        {
-            int al = (int)(Math.Min(1, a[i] * 0.5) * 255);
-            px[i] = (al << 24) | (al << 16) | ((40 * al / 255) << 8) | (70 * al / 255);
-        }
-        Bitmap all = new Bitmap(Width, Height, PixelFormat.Format32bppPArgb);
-        using (Bitmap glow = Made(px, w, h))
-        using (Graphics g = Graphics.FromImage(all))
-        {
-            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
-            g.DrawImage(glow, new Rectangle(0, 0, Width, Height));
-            g.DrawImage(c, 0, 0, Width, Height);
-        }
-        return all;
-    }
-
-    private int B(int i) { return blocks[(i & 0x7fffffff) % blocks.Length]; }
-    private int Sh(int i) { return shove[(i & 0x7fffffff) % shove.Length]; }
-
-    // Her expression for this frame: which look her eyes have, and where her head is (dx, dy, turned by angle degrees).
-    // She blinks every few seconds, glances around while she listens and mostly looks at you while she talks. What she's
-    // saying sets her mood: wide eyes for "!", a head tilt and a look up for "?", a squint when she laughs. Her head
-    // breathes, bobs up with her voice and rocks a little as she talks.
-    private void Expression(double now, double level, bool talking, string said, out float dx, out float dy, out float angle)
-    {
-        double dt = Math.Max(0, Math.Min(0.1, now - lastNow));
-        lastNow = now;
-        if (blinkAt < 0 && now >= nextBlink)
-        {
-            blinkAt = now;
-            nextBlink = now + (rnd.NextDouble() < 0.15 ? 0.32 : 2.2 + rnd.NextDouble() * 3.8);   // now and then a double blink
-        }
-        double blink = blinkAt < 0 ? -1 : now - blinkAt;
-        if (blink > 0.17) { blinkAt = -1; blink = -1; }
-
-        if (said != lastLine)
-        {
-            lastLine = said;
-            if (!string.IsNullOrEmpty(said))
-            {
-                mood = Laugh.IsMatch(said) ? Squint : said.IndexOf('!') >= 0 ? Wide : said.IndexOf('?') >= 0 ? Up : Ahead;
-                tiltWant = mood == Up ? (rnd.Next(2) == 0 ? -4.5 : 4.5) : 0;
-                moodUntil = now + 0.8;
-            }
-        }
-        if (talking) moodUntil = Math.Max(moodUntil, now + 0.8);
-        if (now > moodUntil) { mood = Ahead; tiltWant = 0; }
-
-        if (now >= nextGlance)
-        {
-            double r = rnd.NextDouble();
-            gaze = talking ? (r < 0.75 ? Ahead : r < 0.875 ? Left : Right) : (r < 0.4 ? Ahead : r < 0.65 ? Left : r < 0.9 ? Right : Up);
-            nextGlance = now + (gaze == Ahead ? 1.4 + rnd.NextDouble() * 2.6 : 0.5 + rnd.NextDouble() * 1.1);
-        }
-        EyeLook = blink >= 0 ? (blink < 0.045 || blink > 0.12 ? Half : Shut)
-            : mood == Squint ? Squint : mood == Wide && level > 0.2 ? Wide : mood == Up ? Up : gaze;
-
-        if (ForceEye >= 0) EyeLook = ForceEye;
-        tilt += (tiltWant - tilt) * Math.Min(1, dt * 6);
-        bob += (level - bob) * Math.Min(1, dt * 14);
-        dx = (float)(Math.Sin(now * 0.7) * 1.5 * k);
-        dy = (float)((Math.Sin(now * 1.7) * 1.2 - bob * 5) * k);
-        angle = (float)(tilt + Math.Sin(now * 0.53) * 0.8 + (talking ? Math.Sin(now * 5.3) * 1.6 * bob : 0));
-    }
-
-    // One frame. level: how open her mouth is, 0 to 1; talking: she's speaking; said: what she's saying, if known.
-    // glitch: 0 to 1, how torn up she is while arriving or leaving; fading: leaving, so she also wipes out.
-    internal void Draw(Graphics g, double now, double level, bool talking, string said, double glitch, bool fading, string status, double seconds)
-    {
-        g.Clear(Color.Transparent);
-        g.CompositingMode = CompositingMode.SourceOver;
-        g.CompositingQuality = CompositingQuality.HighSpeed;
-        g.InterpolationMode = InterpolationMode.NearestNeighbor;
-        g.PixelOffsetMode = PixelOffsetMode.Half;
-        // the jitter changes about 30 times a second; faster than that it's just noise
-        if (now >= NextJitter)
-        {
-            NextJitter = now + 0.033;
-            for (int i = 0; i < shove.Length; i++) shove[i] = rnd.Next(-1000, 1001);
-            for (int i = 0; i < blocks.Length; i++) blocks[i] = rnd.Next(0, 1000);
-        }
-        float hx, hy, angle;
-        Expression(now, level, talking, said, out hx, out hy, out angle);
-        int open = Math.Max(0, Math.Min(Mouths - 1, (int)Math.Round(level * (Mouths - 1))));
-        // put her face together
-        Array.Copy(facePx[open], compPx, compPx.Length);
-        if (EyeLook != Ahead)
-            for (int y = 0; y < eyeAt.Height; y++) Array.Copy(eyePx[EyeLook], y * eyeAt.Width, compPx, (eyeAt.Y + y) * big + eyeAt.X, eyeAt.Width);
-        Store(comp, compPx);
-
-        bool flicker = glitch > 0 && blocks[0] < (int)(glitch * 450);
-        if (!flicker) g.DrawImage(frame, 0, 0, Width, Height);
-        Rectangle f = faceAt;
-        int size = f.Width;
-        // where her portrait's middle lands, and how it's turned
-        float mx = f.X + size / 2f + hx, my = f.Y + size / 2f + hy;
-        if (glitch <= 0)
-        {
-            // turned and moved here, a lot faster than GDI+ draws a turned picture
-            Turn(hx, hy, angle, size);
-            Store(turned, turnedPx);
-            g.DrawImage(turned, f.X, f.Y, size, size);
-        }
-        else
-        {
-            // torn into slices, shoved sideways, some missing
-            int y = 0, n = 0, ox = (int)(margin - hx), oy = (int)(margin - hy);
-            while (y < size)
-            {
-                int h = Math.Min(size - y, Math.Max(2, S(3 + B(n * 3 + 1) % 13)));
-                if (B(n * 7 + 2) / 1000.0 > glitch * 0.55)
-                {
-                    int dx = B(n * 5 + 3) > glitch * 800 ? 0 : (int)(Sh(n) * S(40) / 1000 * glitch);
-                    int x0 = Math.Max(0, -dx), x1 = Math.Min(size, size - dx);
-                    if (x1 > x0) g.DrawImage(comp, new Rectangle(f.X + x0 + dx, f.Y + y, x1 - x0, h), new Rectangle(x0 + ox, y + oy, x1 - x0, h), GraphicsUnit.Pixel);
-                }
-                y += h; n++;
-            }
-        }
-        g.DrawImage(scan, f.X, f.Y, size, size);
-        if (glitch < 0.9)
-        {
-            // her mouth on screen, after her head's move and turn
-            double a = angle * Math.PI / 180;
-            float px = mouth.X - big / 2f, py = mouth.Y + drop * open / (Mouths - 1) / 2 - big / 2f;
-            float sx = mx + (float)(px * Math.Cos(a) - py * Math.Sin(a)), sy = my + (float)(px * Math.Sin(a) + py * Math.Cos(a));
-            Interference(g, f, level, (int)sx, (int)sy, (int)(margin - hx), (int)(margin - hy));
-        }
-        // voice bars and status under her face
-        int by = f.Bottom + S(18);
-        for (int i = 0; i < 22; i++)
-        {
-            double wob = 0.35 + 0.65 * Math.Abs(Math.Sin(i * 0.7 + now * 9)) * (0.6 + 0.4 * B(i * 19) / 1000.0);
-            int h = Math.Max(S(1), (int)(level * wob * S(16)));
-            g.FillRectangle(level > 0.05 ? cyan : redDim, f.X + S(i * 6), by + S(8) - h / 2, S(3), h);
-        }
-        int second = (int)seconds;
-        if (second != lastSecond || status != lastStatus || timer == null)
-        {
-            lastSecond = second; lastStatus = status;
-            if (timer != null) timer.Dispose();
-            string text = status + "  " + (second / 60).ToString("00") + ":" + (second % 60).ToString("00");
-            timer = new Bitmap(S(140), S(16), PixelFormat.Format32bppPArgb);
-            using (Graphics t = Graphics.FromImage(timer))
-            {
-                t.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-                SizeF sz = t.MeasureString(text, small);
-                t.DrawString(text, small, red, timer.Width - sz.Width, 0);
-            }
-        }
-        if (!flicker) g.DrawImage(timer, f.Right - timer.Width + S(4), by, timer.Width, timer.Height);
-        if (fading && glitch > 0)
-        {
-            // leaving: rows knocked out, more of them as it goes
-            g.CompositingMode = CompositingMode.SourceCopy;
-            using (SolidBrush clear = new SolidBrush(Color.Transparent))
-            {
-                int rows = Height / Math.Max(1, S(4));
-                for (int i = 0; i < rows; i++)
-                    if (B(i * 23 + 7) < glitch * 1000) g.FillRectangle(clear, 0, i * S(4), Width, S(4));
-            }
-            g.CompositingMode = CompositingMode.SourceOver;
-        }
-    }
-
-    private static void Store(Bitmap b, int[] px)
-    {
-        BitmapData d = b.LockBits(new Rectangle(0, 0, b.Width, b.Height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
-        Marshal.Copy(px, 0, d.Scan0, px.Length);
-        b.UnlockBits(d);
-    }
-
-    // Her portrait into the square, moved by (hx, hy) and turned by angle degrees, smoothly (bilinear, in fixed point).
-    private void Turn(float hx, float hy, float angle, int size)
-    {
-        double a = angle * Math.PI / 180;
-        int cos = (int)(Math.Cos(a) * 65536), sin = (int)(Math.Sin(a) * 65536);
-        float half = size / 2f, mid = big / 2f;
-        int last = big - 2;
-        for (int y = 0; y < size; y++)
-        {
-            float ry = y + 0.5f - half - hy;
-            // where this row starts in her portrait, and how far each step along it moves
-            float rx0 = 0.5f - half - hx;
-            int u = (int)(rx0 * cos + ry * sin + (mid - 0.5f) * 65536);
-            int v = (int)(-rx0 * sin + ry * cos + (mid - 0.5f) * 65536);
-            int row = y * size;
-            for (int x = 0; x < size; x++, u += cos, v -= sin)
-            {
-                int sx = u >> 16, sy = v >> 16;
-                if (sx < 0) sx = 0; else if (sx > last) sx = last;
-                if (sy < 0) sy = 0; else if (sy > last) sy = last;
-                int fx = (u >> 8) & 255, fy = (v >> 8) & 255;
-                int i = sy * big + sx;
-                uint p00 = (uint)compPx[i], p10 = (uint)compPx[i + 1], p01 = (uint)compPx[i + big], p11 = (uint)compPx[i + big + 1];
-                uint wx = (uint)fx, ix = 256 - wx, wy = (uint)fy, iy = 256 - wy;
-                // red and blue together, then green, each blended across then down (unsigned, so nothing overflows)
-                uint rb0 = ((p00 & 0xff00ff) * ix + (p10 & 0xff00ff) * wx) >> 8 & 0xff00ff;
-                uint rb1 = ((p01 & 0xff00ff) * ix + (p11 & 0xff00ff) * wx) >> 8 & 0xff00ff;
-                uint g0 = ((p00 & 0xff00) * ix + (p10 & 0xff00) * wx) >> 8 & 0xff00;
-                uint g1 = ((p01 & 0xff00) * ix + (p11 & 0xff00) * wx) >> 8 & 0xff00;
-                uint rb = (rb0 * iy + rb1 * wy) >> 8 & 0xff00ff;
-                uint gg = (g0 * iy + g1 * wy) >> 8 & 0xff00;
-                turnedPx[row + x] = unchecked((int)(0xff000000 | rb | gg));
-            }
-        }
-    }
-
-    // The interference over her mouth: kept to her mouth, ragged at the ends, with gaps so her mouth shows through.
-    // Slices of her are shoved sideways and tinted, some split into pink and cyan, some cut dark, with bright pixel bits
-    // around them and now and then a long thin streak. All of it grows and jumps with her voice. (ox, oy: where the
-    // square's corner is in her portrait.)
-    private void Interference(Graphics g, Rectangle f, double level, int cx, int cy, int ox, int oy)
-    {
-        int size = f.Width;
-        int half = (int)(size * (0.13 + 0.08 * level));
-        int band = Math.Max(S(4), (int)(size * (0.04 + 0.07 * level)));
-        int y = cy - band / 2, n = 0;
-        while (y < cy + band / 2)
-        {
-            int h = Math.Min(cy + band / 2 - y, Math.Max(1, S(1 + B(n * 11 + 5) % 4)));
-            int roll = B(n * 31 + 9);
-            if (roll < 300 - (int)(150 * level)) { y += h; n++; continue; }   // a gap: her mouth shows here
-            int x0 = cx - half * (600 + B(n * 13 + 1) % 600) / 1000, x1 = cx + half * (600 + B(n * 17 + 2) % 600) / 1000;
-            x0 = Math.Max(f.X, x0); x1 = Math.Min(f.Right, x1);
-            int w = x1 - x0;
-            if (w <= 0 || y < f.Y || y + h > f.Bottom) { y += h; n++; continue; }
-            int dx = Sh(n + 17) * S(3 + 16 * level) / 1000;
-            int sx = Math.Max(0, Math.Min(big - w, x0 - f.X - dx + ox)), sy = Math.Max(0, Math.Min(big - h, y - f.Y + oy));
-            if (roll < 420)
-                g.FillRectangle(cut, x0, y, w, h);                       // cut out dark
-            else
-            {
-                g.DrawImage(comp, new Rectangle(x0, y, w, h), new Rectangle(sx, sy, w, h), GraphicsUnit.Pixel);
-                if (roll < 760) g.FillRectangle(cyanTint, x0, y, w, h);
-                else
-                {
-                    // split: pink one way, cyan the other
-                    int sp = S(2 + 4 * level);
-                    g.FillRectangle(pinkTint, x0 - sp, y, w, h);
-                    g.FillRectangle(cyanTint, x0 + sp, y, w, h);
-                }
-            }
-            // bright bits, scattered a little past the ends
-            int bits = 1 + (int)(5 * level);
-            for (int i = 0; i < bits; i++)
-            {
-                int bx = x0 - S(10) + B(n * 19 + i * 7) * (w + S(20)) / 1000;
-                int bw = S(2 + B(n * 23 + i * 3) % 7);
-                int pick = B(n * 29 + i);
-                g.FillRectangle(pick < 450 ? white : pick < 800 ? cyanBit : pinkBit, Math.Max(f.X, bx), y, bw, h);
-            }
-            // now and then a long thin streak out past the band
-            if (B(n * 37 + 11) < 60 + 120 * level)
-            {
-                int reach = S(30 + B(n * 41) % 50);
-                bool left = B(n * 43) < 500;
-                g.FillRectangle(B(n * 47) < 500 ? cyanBit : white, left ? Math.Max(f.X, x0 - reach) : x1, y, Math.Min(reach, left ? x0 - f.X : f.Right - x1), Math.Max(1, h / 2));
-            }
-            y += h; n++;
-        }
-    }
-
-    public void Dispose()
-    {
-        foreach (Bitmap b in faces) b.Dispose();
-        foreach (Bitmap b in eyes) b.Dispose();
-        comp.Dispose(); turned.Dispose(); scan.Dispose();
-        frame.Dispose(); small.Dispose();
-        cyan.Dispose(); red.Dispose(); redDim.Dispose(); cyanTint.Dispose(); pinkTint.Dispose(); cut.Dispose(); white.Dispose(); cyanBit.Dispose(); pinkBit.Dispose();
-        if (timer != null) timer.Dispose();
     }
 }
