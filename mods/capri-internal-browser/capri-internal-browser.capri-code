@@ -3406,7 +3406,7 @@ public class CapriInternalBrowser : ICapriMod
             Slide(false);
         }
 
-        internal void OpenTab(Page page, string url, bool select) { OpenTab(page, url, select, false); }
+        internal void OpenTab(Page page, string url, bool select) { OpenTab(page, url, select, false); Blip("open"); }
 
         internal void OpenTab(Page page, string url, bool select, bool secret)
         {
@@ -3438,6 +3438,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             if (t == null) return;
             Tab was = tab;
+            if (was != null && was != t && tabs.Contains(was)) Blip("switch");
             if (was != null && was != t && !was.Private && !was.OnReader && was.Address != null)
             {
                 was.LeftAt = DateTime.Now;
@@ -3478,6 +3479,7 @@ public class CapriInternalBrowser : ICapriMod
             if (at < 0) return;
             if (!t.Private && !t.OnReader && t.Address != null) { closed.Remove(t.Address); closed.Add(t.Address); closedNames[t.Address] = t.Title; if (closed.Count > 25) closed.RemoveAt(0); }
             tabs.RemoveAt(at);
+            Blip("close");
             ShrinkChip(t.Chip);
             holder.Controls.Remove(t.Viewer.Control);
             t.Viewer.Control.Dispose();
@@ -3517,6 +3519,7 @@ public class CapriInternalBrowser : ICapriMod
             Button b = new Button { Text = text, Width = width, Dock = dock, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, TabStop = false };
             b.FlatAppearance.BorderSize = 0;
             new ToolTip().SetToolTip(b, tip);
+            b.Click += delegate { Blip("click"); };
             buttons.Add(b);
             return b;
         }
@@ -3539,6 +3542,7 @@ public class CapriInternalBrowser : ICapriMod
                 if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; Visit(); }
                 else if (e.KeyCode == Keys.Escape && (adding || asking)) { e.SuppressKeyPress = true; adding = asking = false; Select(tab); }
             };
+            address.KeyPress += delegate { Blip("key"); };
             address.AutoCompleteMode = AutoCompleteMode.Suggest;
             address.AutoCompleteSource = AutoCompleteSource.CustomSource;
             address.GotFocus += delegate { Suggestions(); BeginInvoke((Action)delegate { address.SelectAll(); }); };
@@ -4023,9 +4027,9 @@ public class CapriInternalBrowser : ICapriMod
 
         private void SettingsSections(out string[] ids, out string[] titles, out string[] icons)
         {
-            ids = new[] { "look", "capri", "video", "privacy", "search", "tabs", "files", "lang", "discord", "keys", "can", "updates" };
-            titles = new[] { "Appearance", "Capri features", T(15), "Privacy & security", T(34), T(45), T(43), T(22), "Discord", T(23), "What Capri can do", "Updates" };
-            icons = new[] { "", "", "", "", "", "", "", "", "", "", "", "" };
+            ids = new[] { "look", "capri", "video", "privacy", "search", "tabs", "files", "lang", "discord", "keys", "can", "updates", "mods" };
+            titles = new[] { "Appearance", "Capri features", T(15), "Privacy & security", T(34), T(45), T(43), T(22), "Discord", T(23), "What Capri can do", "Updates", "Mods" };
+            icons = new[] { "", "", "", "", "", "", "", "", "", "", "", "", "" };
         }
 
         // The menu on the left, in groups. On a site's page its links go back to the main page.
@@ -4034,7 +4038,7 @@ public class CapriInternalBrowser : ICapriMod
             StringBuilder nav = new StringBuilder("<nav class='nav'><h1>" + Esc(T(7).ToUpperInvariant()) + "</h1>");
             for (int i = 0; i < ids.Length; i++)
             {
-                if (i == 3 || i == 7 || i == 11) nav.Append("<hr class='gp'>");
+                if (i == 3 || i == 7 || i == 11 || i == 12) nav.Append("<hr class='gp'>");
                 string go = lit >= 0 ? "S('site','#" + ids[i] + "');return false" : "Go(event,'" + ids[i] + "')";
                 nav.Append("<a href='#").Append(ids[i]).Append("'").Append(i == lit ? " class='on'" : "").Append(" onclick=\"").Append(go).Append("\"><i class='ic'>")
                     .Append(icons[i]).Append("</i>").Append(Esc(titles[i])).Append("</a>");
@@ -4109,6 +4113,8 @@ public class CapriInternalBrowser : ICapriMod
         // Site settings' own keys on the settings page. True when it was one of them.
         private bool SetSiteFromPage(string key, string value)
         {
+            if (key == "soundvol") { int v; if (int.TryParse(value, out v)) Keep("soundvol", Math.Max(5, Math.Min(100, v)).ToString()); Blip("click"); return true; }
+            if (key == "sidesetup") { Later(delegate { ShowSide(sideSetup, sideSetup.Width); }); return true; }
             if (key == "site")
             {
                 settingsY = 0;
@@ -4325,6 +4331,7 @@ public class CapriInternalBrowser : ICapriMod
                         cleanTimer.Stop();
                         freedBytes = before > 0 && cacheBytes >= 0 ? Math.Max(0, before - cacheBytes) : -1;
                         CleanLayout();
+                        Blip("done");
                         mod.Tell(freedBytes > 1048576 ? Line("cleandone", "All clean, choom. That freed up " + Bytes(freedBytes) + ".") : Line("cleandone", "All clean, choom. Fresh as new."));
                     };
                     settle.Start();
@@ -4606,7 +4613,7 @@ public class CapriInternalBrowser : ICapriMod
                     if (!string.IsNullOrEmpty(now)) got.File = now;
                 }
                 catch (Exception) { }
-                if (got.State != "going") { if (got.State == "done") try { got.Total = new FileInfo(got.File).Length; } catch (Exception) { } SaveGots(); }
+                if (got.State != "going") { if (got.State == "done") Blip("done"); if (got.State == "done") try { got.Total = new FileInfo(got.File).Length; } catch (Exception) { } SaveGots(); }
                 if (downloadsButton != null) downloadsButton.Invalidate();
                 if (downloadsShown != null && (got.State != "going" || (DateTime.Now - downloadsDrawn).TotalMilliseconds > 400)) { downloadsDrawn = DateTime.Now; downloadsShown(); }
             };
@@ -4756,6 +4763,748 @@ public class CapriInternalBrowser : ICapriMod
             FadeIn(drop);
             Point at = downloadsButton.PointToScreen(new Point(downloadsButton.Width, downloadsButton.Height + 4));
             drop.Show(new Point(Math.Max(0, at.X - wide), at.Y));
+        }
+
+
+        // ---- Right-click on Speed Dial: a small menu like a gaming browser's ----
+        private Button puzzleButton;
+
+        private void DialMenu()
+        {
+            ContextMenuStrip m = NewMenu();
+            Item(m.Items, "Change wallpaper", "", true, delegate { ImportWallpaper(); });
+            Item(m.Items, "Remove wallpaper", "", mod.Wallpaper() != null, delegate { mod.RemoveWallpaper(); ShowWallState(null); RefreshHomes(); });
+            m.Items.Add(new ToolStripSeparator());
+            Item(m.Items, "Add to Speed Dial", "", true, delegate { adding = true; address.Text = ""; Cue(); address.Focus(); });
+            m.Items.Add(new ToolStripSeparator());
+            Item(m.Items, "Noted", "", true, delegate { ShowNoted(); });
+            Item(m.Items, "Bookmarks", "Ctrl+Shift+B", true, delegate { ShowSide(marks, marks.Width); });
+            Item(m.Items, T(49), "", true, delegate { ShowHistory(); });
+            Item(m.Items, "Extensions", "", puzzleButton != null, delegate { ExtensionsPanel(puzzleButton); });
+            Item(m.Items, "Passwords", "", true, delegate { ShowSide(pwPanel, pwPanel.Width); });
+            Item(m.Items, "Capri Cleaner", "", true, delegate { ShowCleaner(); });
+            Item(m.Items, "Sidebar setup", "", true, delegate { ShowSide(sideSetup, sideSetup.Width); });
+            Item(m.Items, T(7), "", true, delegate { SettingsShown = true; });
+            m.Show(Cursor.Position);
+        }
+
+        // ---- Browser sounds (Settings > Mods): little blips for tabs, panels, menus, buttons and typing ----
+        private readonly DateTime born = DateTime.Now;
+        private DateTime lastBlip = DateTime.MinValue;
+        private static readonly Dictionary<string, float[]> blips = new Dictionary<string, float[]>();
+        private static readonly Random blipDice = new Random();
+        private static int blipsPlaying;
+        private const int BlipRate = 22050;
+
+        // One tone: a soft digital note that slides from one pitch to another and dies away, with a little noise for clicks.
+        private static void Tone(float[] into, double start, double length, double from, double to, double loud, double noise)
+        {
+            int first = (int)(start * BlipRate), count = (int)(length * BlipRate);
+            double phase = 0;
+            for (int i = 0; i < count && first + i < into.Length; i++)
+            {
+                double t = i / (double)count, f = from + (to - from) * t;
+                phase += 2 * Math.PI * f / BlipRate;
+                double wave = Math.Sin(phase) * .8 + Math.Sign(Math.Sin(phase)) * .12 + Math.Sin(phase * 2) * .15;
+                double env = Math.Min(1, i / (BlipRate * .003)) * Math.Exp(-t * 5.5);
+                double hiss;
+                lock (blipDice) hiss = blipDice.NextDouble() * 2 - 1;
+                into[first + i] += (float)(loud * env * (wave * (1 - noise) + hiss * noise));
+            }
+        }
+
+        private static float[] Blip(string kind, int variant)
+        {
+            string key = kind + variant;
+            lock (blips)
+            {
+                float[] made;
+                if (blips.TryGetValue(key, out made)) return made;
+                made = new float[(int)(BlipRate * (kind == "done" ? .36 : kind == "panel" ? .17 : .13))];
+                switch (kind)
+                {
+                    case "open": Tone(made, 0, .05, 880, 900, .5, 0); Tone(made, .045, .075, 1320, 1340, .45, 0); break;
+                    case "close": Tone(made, 0, .05, 1180, 1160, .45, 0); Tone(made, .04, .075, 740, 720, .42, 0); break;
+                    case "switch": Tone(made, 0, .035, 1600, 1480, .3, .05); break;
+                    case "click": Tone(made, 0, .03, 2100, 1400, .3, .25); break;
+                    case "menu": Tone(made, 0, .045, 1250, 1300, .22, .05); break;
+                    case "panel": Tone(made, 0, .15, 380, 980, .26, .35); break;
+                    case "done": Tone(made, 0, .13, 988, 988, .4, 0); Tone(made, .11, .24, 1319, 1319, .4, 0); break;
+                    default: Tone(made, 0, .024, 2300 + variant * 350, 1700 + variant * 200, .28, .65); break;
+                }
+                blips[key] = made;
+                return made;
+            }
+        }
+
+        private void Blip(string kind)
+        {
+            if (!Flag("sounds", false) || (DateTime.Now - born).TotalSeconds < 3) return;
+            if (kind == "key") { if (!Flag("typesounds", false)) return; }
+            else { if ((DateTime.Now - lastBlip).TotalMilliseconds < 70) return; lastBlip = DateTime.Now; }
+            int volume;
+            if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
+            int variant;
+            lock (blipDice) variant = kind == "key" ? blipDice.Next(3) : 0;
+            float[] wave = Blip(kind, variant);
+            short[] pcm = new short[wave.Length];
+            float scale = 32767f * Math.Max(0, Math.Min(100, volume)) / 100f;
+            for (int i = 0; i < wave.Length; i++) pcm[i] = (short)Math.Max(-32767, Math.Min(32767, wave[i] * scale));
+            PlayPcm(pcm);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WaveFormat { public short Tag, Channels; public int Rate, BytesPerSecond; public short Align, Bits, Extra; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct WaveHeader { public IntPtr Data; public int Length, Recorded; public IntPtr User; public int Flags, Loops; public IntPtr Next, Reserved; }
+        [DllImport("winmm.dll")] private static extern int waveOutOpen(out IntPtr device, int id, ref WaveFormat format, IntPtr callback, IntPtr instance, int flags);
+        [DllImport("winmm.dll")] private static extern int waveOutPrepareHeader(IntPtr device, IntPtr header, int size);
+        [DllImport("winmm.dll")] private static extern int waveOutWrite(IntPtr device, IntPtr header, int size);
+        [DllImport("winmm.dll")] private static extern int waveOutUnprepareHeader(IntPtr device, IntPtr header, int size);
+        [DllImport("winmm.dll")] private static extern int waveOutReset(IntPtr device);
+        [DllImport("winmm.dll")] private static extern int waveOutClose(IntPtr device);
+
+        // Each sound gets its own short-lived output, so they can overlap and never cut off Capri's own sounds.
+        private static void PlayPcm(short[] pcm)
+        {
+            if (Interlocked.Increment(ref blipsPlaying) > 6) { Interlocked.Decrement(ref blipsPlaying); return; }
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                IntPtr device = IntPtr.Zero, data = IntPtr.Zero, header = IntPtr.Zero;
+                int size = Marshal.SizeOf(typeof(WaveHeader));
+                try
+                {
+                    WaveFormat format = new WaveFormat { Tag = 1, Channels = 1, Rate = BlipRate, BytesPerSecond = BlipRate * 2, Align = 2, Bits = 16 };
+                    if (waveOutOpen(out device, -1, ref format, IntPtr.Zero, IntPtr.Zero, 0) != 0) { device = IntPtr.Zero; return; }
+                    data = Marshal.AllocHGlobal(pcm.Length * 2);
+                    Marshal.Copy(pcm, 0, data, pcm.Length);
+                    header = Marshal.AllocHGlobal(size);
+                    Marshal.StructureToPtr(new WaveHeader { Data = data, Length = pcm.Length * 2 }, header, false);
+                    if (waveOutPrepareHeader(device, header, size) == 0 && waveOutWrite(device, header, size) == 0)
+                        Thread.Sleep(pcm.Length * 1000 / BlipRate + 120);
+                }
+                catch (Exception) { }
+                finally
+                {
+                    try
+                    {
+                        if (device != IntPtr.Zero) { waveOutReset(device); if (header != IntPtr.Zero) waveOutUnprepareHeader(device, header, size); waveOutClose(device); }
+                        if (header != IntPtr.Zero) Marshal.FreeHGlobal(header);
+                        if (data != IntPtr.Zero) Marshal.FreeHGlobal(data);
+                    }
+                    catch (Exception) { }
+                    Interlocked.Decrement(ref blipsPlaying);
+                }
+            });
+        }
+
+        // ---- Sidebar setup: which icons the sidebar shows, and web sites they can add, like a gaming browser's ----
+        // Key, name, icon, group, shown by default, and the site it opens (for the added ones).
+        private static readonly string[,] SideItems =
+        {
+            { "capri", "Capri website", "", "CAPRI", "1", "" },
+            { "discord", "Discord", "", "CAPRI", "1", "" },
+            { "github", "Capri on GitHub", "", "CAPRI", "1", "" },
+            { "marks", "Bookmarks", "", "BROWSER FEATURES", "1", "" },
+            { "noted", "Noted", "", "BROWSER FEATURES", "1", "" },
+            { "cleaner", "Capri Cleaner", "", "BROWSER FEATURES", "1", "" },
+            { "history", "History", "", "BROWSER FEATURES", "1", "" },
+            { "games", "Games", "", "FUN", "1", "" },
+            { "jobs", "Custom jobs", "", "FUN", "1", "" },
+            { "passwords", "Passwords", "", "BROWSER FEATURES", "1", "" },
+            { "chatgpt", "ChatGPT", "", "AI SERVICES", "0", "https://chatgpt.com/" },
+            { "gemini", "Gemini", "", "AI SERVICES", "0", "https://gemini.google.com/" },
+            { "claude", "Claude", "", "AI SERVICES", "0", "https://claude.ai/" },
+            { "whatsapp", "WhatsApp", "", "MESSENGERS", "0", "https://web.whatsapp.com/" },
+            { "messenger", "Facebook Messenger", "", "MESSENGERS", "0", "https://www.messenger.com/" },
+            { "telegram", "Telegram", "", "MESSENGERS", "0", "https://web.telegram.org/" },
+            { "x", "X", "", "SOCIAL MEDIA", "0", "https://x.com/" },
+            { "instagram", "Instagram", "", "SOCIAL MEDIA", "0", "https://www.instagram.com/" },
+            { "twitch", "Twitch", "", "SOCIAL MEDIA", "0", "https://www.twitch.tv/" },
+            { "youtube", "YouTube", "", "SOCIAL MEDIA", "0", "https://www.youtube.com/" },
+            { "reddit", "Reddit", "", "SOCIAL MEDIA", "0", "https://www.reddit.com/" }
+        };
+        private static readonly string[] SideGroups = { "CAPRI", "BROWSER FEATURES", "FUN", "AI SERVICES", "MESSENGERS", "SOCIAL MEDIA" };
+        private readonly Dictionary<string, Button> sideByKey = new Dictionary<string, Button>();
+        private readonly Panel sideSetup = new Panel();
+        private Panel setupScroll, setupBody;
+        private readonly List<KeyValuePair<Rectangle, string>> setupRows = new List<KeyValuePair<Rectangle, string>>();
+        private readonly List<KeyValuePair<Rectangle, string>> setupCards = new List<KeyValuePair<Rectangle, string>>();
+        private string setupHover;
+
+        private static int SideRow(string key) { for (int i = 0; i < SideItems.GetLength(0); i++) if (SideItems[i, 0] == key) return i; return -1; }
+        private bool SideShown(string key) { string v = Kept("side-" + key); int row = SideRow(key); return v.Length == 0 ? row >= 0 && SideItems[row, 4] == "1" : v == "1"; }
+        private void ApplySide()
+        {
+            // A hidden button still needs its window, so its site logo can arrive while it is switched off.
+            foreach (KeyValuePair<string, Button> one in sideByKey) { if (!one.Value.IsHandleCreated) { IntPtr made = one.Value.Handle; } one.Value.Visible = SideShown(one.Key); }
+            side.Invalidate(true);
+        }
+
+        // Called while the sidebar is built: names its buttons, adds Passwords and the sites they can switch on.
+        private void SideExtras(int start)
+        {
+            string[] built = { "capri", "discord", "github", "marks", "noted", "cleaner", "history", "games", "jobs" };
+            for (int i = 0; i < built.Length && start + i < sideButtons.Count; i++) sideByKey[built[i]] = sideButtons[start + i];
+            Button pw = SideButton("", "Passwords", null);
+            pw.Click += delegate { ToggleSide(pwPanel, pwPanel.Width); };
+            sideByKey["passwords"] = pw;
+            for (int i = 0; i < SideItems.GetLength(0); i++)
+            {
+                string url = SideItems[i, 5];
+                if (url.Length == 0) continue;
+                Button b = SideButton(SideItems[i, 2], SideItems[i, 1], "https://www.google.com/s2/favicons?sz=64&domain=" + new Uri(url).Host);
+                b.Click += delegate { OpenTab(null, url, true); };
+                sideByKey[SideItems[i, 0]] = b;
+            }
+            foreach (KeyValuePair<string, Button> one in sideByKey)
+            {
+                Button b = one.Value;
+                b.Click += delegate { Blip("click"); };
+                if (one.Key != "discord") b.MouseUp += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Right) ToggleSide(sideSetup, sideSetup.Width); };
+            }
+            side.MouseUp += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Right) ToggleSide(sideSetup, sideSetup.Width); };
+        }
+
+        private void BuildSideSetup()
+        {
+            int saved;
+            sideSetup.Width = int.TryParse(Kept("sidesetupwidth"), out saved) ? Math.Max(280, Math.Min(520, saved)) : 320;
+            sideSetup.Visible = false;
+            Buffered(sideSetup);
+            Label title;
+            Panel head = SideHead(sideSetup, "", "Sidebar setup", out title);
+            setupScroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
+            setupBody = new Panel { Left = 0, Top = 0 };
+            Buffered(setupBody);
+            Buffered(setupScroll);
+            DarkScroll(setupScroll);
+            setupScroll.Controls.Add(setupBody);
+            setupScroll.Resize += delegate { SetupLayout(); };
+            setupBody.Paint += delegate(object sender, PaintEventArgs e) { DrawSetup(e.Graphics); };
+            setupBody.MouseMove += delegate(object sender, MouseEventArgs e)
+            {
+                string over = null;
+                foreach (KeyValuePair<Rectangle, string> row in setupRows) if (row.Key.Contains(e.Location)) over = row.Value;
+                setupBody.Cursor = over != null ? Cursors.Hand : Cursors.Default;
+                if (over != setupHover) { setupHover = over; setupBody.Invalidate(); }
+            };
+            setupBody.MouseLeave += delegate { setupHover = null; setupBody.Invalidate(); };
+            setupBody.MouseClick += delegate(object sender, MouseEventArgs e)
+            {
+                foreach (KeyValuePair<Rectangle, string> row in setupRows)
+                    if (row.Key.Contains(e.Location)) { Keep("side-" + row.Value, SideShown(row.Value) ? "0" : "1"); ApplySide(); Blip("click"); setupBody.Invalidate(); return; }
+            };
+            Action tint = delegate
+            {
+                Look look = mod.look;
+                sideSetup.BackColor = head.BackColor = setupScroll.BackColor = setupBody.BackColor = look.Shade(1);
+                title.ForeColor = look.Shade(2);
+                foreach (Control part in head.Controls) if (part != title) part.ForeColor = "red".Equals(part.Tag) ? look.Shade(5) : look.Shade(3);
+                setupBody.Invalidate();
+            };
+            tint();
+            sideSetup.VisibleChanged += delegate { if (sideSetup.Visible) { tint(); SetupLayout(); } };
+            sideSetup.Controls.Add(setupScroll);
+            sideSetup.Controls.Add(head);
+        }
+
+        private void SetupLayout()
+        {
+            if (setupBody == null) return;
+            int w = setupScroll.ClientSize.Width, pad = 14, y = 6;
+            setupRows.Clear();
+            setupCards.Clear();
+            foreach (string group in SideGroups)
+            {
+                y += 34;
+                int top = y;
+                y += 8;
+                for (int i = 0; i < SideItems.GetLength(0); i++)
+                {
+                    if (SideItems[i, 3] != group) continue;
+                    setupRows.Add(new KeyValuePair<Rectangle, string>(new Rectangle(pad + 8, y, w - 2 * pad - 16, 40), SideItems[i, 0]));
+                    y += 40;
+                }
+                y += 8;
+                setupCards.Add(new KeyValuePair<Rectangle, string>(new Rectangle(pad, top, w - 2 * pad, y - top), group));
+                y += 6;
+            }
+            setupBody.Width = w;
+            setupBody.Height = y + 16;
+            setupBody.Invalidate();
+        }
+
+        private void DrawSetup(Graphics g)
+        {
+            Look look = mod.look;
+            Color back = look.Shade(1), deep = look.Shade(0), ink = look.Shade(2), faint = look.Shade(3), red = look.Shade(5), edge = look.Shade(6);
+            Color card = Mix(back, deep, .45f), soft = Mix(edge, faint, .35f);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            using (System.Drawing.Font heading = new System.Drawing.Font(UiBold, 9f))
+            using (System.Drawing.Font words = new System.Drawing.Font(Ui, 10.5f))
+            using (System.Drawing.Font glyph = new System.Drawing.Font("Segoe MDL2 Assets", 12f))
+            using (StringFormat mid = new StringFormat { LineAlignment = StringAlignment.Center, Trimming = StringTrimming.EllipsisCharacter, FormatFlags = StringFormatFlags.NoWrap })
+            {
+                foreach (KeyValuePair<Rectangle, string> c in setupCards)
+                {
+                    Rectangle r = c.Key;
+                    using (SolidBrush b = new SolidBrush(Mix(faint, look.Shade(4), .3f))) g.DrawString(c.Value, heading, b, new RectangleF(r.X + 2, r.Y - 28, r.Width, 22), mid);
+                    using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
+                    {
+                        p.AddPolygon(new[] { new Point(r.X, r.Y), new Point(r.Right, r.Y), new Point(r.Right, r.Bottom - 12), new Point(r.Right - 12, r.Bottom), new Point(r.X, r.Bottom) });
+                        using (SolidBrush fill = new SolidBrush(card)) g.FillPath(fill, p);
+                        using (Pen line = new Pen(edge)) g.DrawPath(line, p);
+                    }
+                }
+                foreach (KeyValuePair<Rectangle, string> row in setupRows)
+                {
+                    Rectangle r = row.Key;
+                    int i = SideRow(row.Value);
+                    bool on = SideShown(row.Value), over = setupHover == row.Value;
+                    if (over) using (SolidBrush hover = new SolidBrush(Mix(card, ink, .06f))) g.FillRectangle(hover, r);
+                    Button b;
+                    Image logo = sideByKey.TryGetValue(row.Value, out b) ? b.Image : null;
+                    if (logo != null) g.DrawImage(logo, r.X + 8, r.Y + (r.Height - 20) / 2, 20, 20);
+                    else using (SolidBrush icon = new SolidBrush(on ? red : faint)) g.DrawString(SideItems[i, 2], glyph, icon, new RectangleF(r.X + 6, r.Y, 26, r.Height), mid);
+                    using (SolidBrush text = new SolidBrush(on ? ink : faint)) g.DrawString(SideItems[i, 1], words, text, new RectangleF(r.X + 40, r.Y, r.Width - 100, r.Height), mid);
+                    Rectangle pill = new Rectangle(r.Right - 46, r.Y + 10, 36, 20);
+                    using (SolidBrush fill = new SolidBrush(on ? Mix(red, deep, .35f) : deep)) g.FillRectangle(fill, pill);
+                    using (Pen line = new Pen(on ? red : soft)) g.DrawRectangle(line, pill);
+                    Rectangle knob = on ? new Rectangle(pill.Right - 16, pill.Y + 3, 13, 14) : new Rectangle(pill.X + 3, pill.Y + 3, 13, 14);
+                    using (SolidBrush k = new SolidBrush(on ? Color.White : Mix(faint, look.Shade(4), .25f))) g.FillRectangle(k, knob);
+                }
+            }
+        }
+
+        // ---- Passwords: their own list, kept encrypted by Windows, in the sidebar ----
+        private sealed class Login { public string Site = "", User = "", Pass = ""; public DateTime When = DateTime.Now; }
+        private readonly Panel pwPanel = new Panel();
+        private List<Login> logins;
+        private FlowLayoutPanel pwList;
+        private TextBox pwFind;
+        private bool pwAlertsOnly, pwWhy;
+        private Label pwAll, pwAlerts;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct Blob { public int Size; public IntPtr Data; }
+        [DllImport("crypt32.dll", CharSet = CharSet.Unicode)] private static extern bool CryptProtectData(ref Blob data, string about, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, ref Blob result);
+        [DllImport("crypt32.dll", CharSet = CharSet.Unicode)] private static extern bool CryptUnprotectData(ref Blob data, IntPtr about, IntPtr entropy, IntPtr reserved, IntPtr prompt, int flags, ref Blob result);
+        [DllImport("kernel32.dll")] private static extern IntPtr LocalFree(IntPtr memory);
+
+        // Windows' own encryption for the current user (what Edge and Chrome use too): only this Windows account can open it.
+        private static byte[] Locked(byte[] plain, bool locking)
+        {
+            Blob input = new Blob { Size = plain.Length, Data = Marshal.AllocHGlobal(Math.Max(1, plain.Length)) }, output = new Blob();
+            try
+            {
+                Marshal.Copy(plain, 0, input.Data, plain.Length);
+                bool ok = locking ? CryptProtectData(ref input, "Capri Browser passwords", IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 1, ref output)
+                    : CryptUnprotectData(ref input, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, IntPtr.Zero, 1, ref output);
+                if (!ok) return null;
+                byte[] done = new byte[output.Size];
+                Marshal.Copy(output.Data, done, 0, output.Size);
+                return done;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(input.Data);
+                if (output.Data != IntPtr.Zero) LocalFree(output.Data);
+            }
+        }
+
+        private string VaultFile { get { return Path.Combine(mod.Folder, "passwords.dat"); } }
+
+        private List<Login> Logins()
+        {
+            if (logins != null) return logins;
+            logins = new List<Login>();
+            try
+            {
+                if (!File.Exists(VaultFile)) return logins;
+                string hex = File.ReadAllText(VaultFile).Trim();
+                byte[] sealedBytes = new byte[hex.Length / 2];
+                for (int i = 0; i < sealedBytes.Length; i++) sealedBytes[i] = Convert.ToByte(hex.Substring(i * 2, 2), 16);
+                byte[] plain = Locked(sealedBytes, false);
+                if (plain == null) return logins;
+                foreach (string line in Encoding.UTF8.GetString(plain).Split('\n'))
+                {
+                    string[] p = line.Split('\t');
+                    long ticks;
+                    if (p.Length < 4) continue;
+                    logins.Add(new Login { Site = p[0], User = p[1], Pass = p[2], When = long.TryParse(p[3], out ticks) ? new DateTime(ticks) : DateTime.Now });
+                }
+                Array.Clear(plain, 0, plain.Length);
+            }
+            catch (Exception) { }
+            return logins;
+        }
+
+        private static string NoTabs(string s) { return Regex.Replace(s ?? "", @"[\t\r\n]", " ").Trim(); }
+
+        private void SaveLogins()
+        {
+            StringBuilder all = new StringBuilder();
+            foreach (Login l in Logins()) all.Append(NoTabs(l.Site)).Append('\t').Append(NoTabs(l.User)).Append('\t').Append(NoTabs(l.Pass)).Append('\t').Append(l.When.Ticks).Append('\n');
+            byte[] plain = Encoding.UTF8.GetBytes(all.ToString());
+            byte[] sealedBytes = Locked(plain, true);
+            Array.Clear(plain, 0, plain.Length);
+            if (sealedBytes == null) { mod.Tell("Windows wouldn't lock the passwords file, so nothing was saved, choom."); return; }
+            try { Directory.CreateDirectory(Path.GetDirectoryName(VaultFile)); File.WriteAllText(VaultFile, BitConverter.ToString(sealedBytes).Replace("-", "")); }
+            catch (Exception error) { mod.Tell("I couldn't save the passwords: " + error.Message); }
+        }
+
+        // Weak (short) or used on more than one site.
+        private bool Risky(Login l)
+        {
+            if (l.Pass.Length < 8) return true;
+            foreach (Login other in Logins()) if (other != l && other.Pass == l.Pass && other.Site != l.Site) return true;
+            return false;
+        }
+
+        // Copied: wiped from the clipboard after 30 seconds, unless something else was copied since.
+        private void CopySecret(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            try { Clipboard.SetText(text); } catch (Exception) { return; }
+            System.Windows.Forms.Timer wipe = new System.Windows.Forms.Timer { Interval = 30000 };
+            wipe.Tick += delegate { wipe.Stop(); wipe.Dispose(); try { if (Clipboard.ContainsText() && Clipboard.GetText() == text) Clipboard.Clear(); } catch (Exception) { } };
+            wipe.Start();
+        }
+
+        private const string WhySafe = "Why it's safe\n\n"
+            + "• Locked with Windows' own encryption, the same kind Edge and Chrome use. Only your Windows account on this PC can open it: copied anywhere else, the file is just noise.\n"
+            + "• Kept only on this PC. Nothing is uploaded, synced or sent anywhere.\n"
+            + "• Capri can't see them. Her voice commands, custom jobs and page reading never touch this list, and she never types passwords.\n"
+            + "• Passwords stay hidden until you press the eye, and a copied one is wiped from the clipboard after 30 seconds.\n"
+            + "• Signing in on sites still works as before: Edge's engine fills in what it saved for you.";
+
+        private void BuildPasswords()
+        {
+            int saved;
+            pwPanel.Width = int.TryParse(Kept("passwordswidth"), out saved) ? Math.Max(300, Math.Min(600, saved)) : 360;
+            pwPanel.Visible = false;
+            Buffered(pwPanel);
+            Label title;
+            Panel head = SideHead(pwPanel, "", "Passwords", out title);
+            pwFind = new TextBox();
+            Panel findRow = Ring(pwFind, "Search passwords");
+            pwFind.TextChanged += delegate { FillLogins(); };
+            FlowLayoutPanel tools = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(14, 2, 10, 4), WrapContents = false };
+            Func<string, Label> tab = delegate(string words)
+            {
+                Label l = new Label { Text = words, AutoSize = true, Margin = new Padding(0, 4, 14, 0), Cursor = Cursors.Hand, Font = new System.Drawing.Font(Ui, 10f) };
+                tools.Controls.Add(l);
+                return l;
+            };
+            pwAll = tab("");
+            pwAlerts = tab("");
+            pwAll.Click += delegate { pwAlertsOnly = false; FillLogins(); };
+            pwAlerts.Click += delegate { pwAlertsOnly = true; FillLogins(); };
+            Label add = tab("+ Add");
+            add.Click += delegate { EditLogin(null); };
+            Label more = tab("⋯");
+            more.Click += delegate
+            {
+                ContextMenuStrip m = NewMenu();
+                Item(m.Items, "Add a password", "", true, delegate { EditLogin(null); });
+                Item(m.Items, "Import from a CSV file", "", true, delegate { ImportLogins(); });
+                Item(m.Items, "Why it's safe", "", true, delegate { pwWhy = true; FillLogins(); });
+                m.Show(more, new Point(0, more.Height));
+            };
+            pwList = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(12, 4, 0, 8) };
+            Buffered(pwList);
+            DarkScroll(pwList);
+            pwList.Resize += delegate { foreach (Control c in pwList.Controls) c.Width = Math.Max(200, pwList.ClientSize.Width - 26 - SystemInformation.VerticalScrollBarWidth); };
+            Label why = new Label { Text = "Why it's safe", Dock = DockStyle.Bottom, Height = 30, TextAlign = ContentAlignment.MiddleCenter, Cursor = Cursors.Hand, Font = new System.Drawing.Font(Ui, 9.5f, FontStyle.Underline) };
+            why.Click += delegate { pwWhy = !pwWhy; FillLogins(); };
+            Action tint = delegate
+            {
+                Look look = mod.look;
+                pwPanel.BackColor = head.BackColor = findRow.BackColor = tools.BackColor = pwList.BackColor = why.BackColor = look.Shade(1);
+                title.ForeColor = look.Shade(2);
+                foreach (Control part in head.Controls) if (part != title) part.ForeColor = "red".Equals(part.Tag) ? look.Shade(5) : look.Shade(3);
+                pwFind.BackColor = look.Shade(0);
+                pwFind.ForeColor = look.Shade(2);
+                foreach (Control c in tools.Controls) c.ForeColor = look.Shade(3);
+                why.ForeColor = look.Shade(5);
+                ((Control)findRow.Controls[0]).Invalidate();
+            };
+            tint();
+            pwPanel.VisibleChanged += delegate { if (pwPanel.Visible) { tint(); FillLogins(); } };
+            pwPanel.Controls.Add(pwList);
+            pwPanel.Controls.Add(why);
+            pwPanel.Controls.Add(tools);
+            pwPanel.Controls.Add(findRow);
+            pwPanel.Controls.Add(head);
+        }
+
+        private void FillLogins()
+        {
+            if (pwList == null) return;
+            Look look = mod.look;
+            Color back = look.Shade(1), card = Mix(look.Shade(1), look.Shade(0), .45f), ink = look.Shade(2), faint = look.Shade(3), red = look.Shade(5), edge = look.Shade(6);
+            List<Login> all = Logins();
+            int risky = 0;
+            foreach (Login l in all) if (Risky(l)) risky++;
+            pwAll.Text = (pwAlertsOnly ? "○" : "◉") + " All (" + all.Count + ")";
+            pwAlerts.Text = (pwAlertsOnly ? "◉" : "○") + " Alerts (" + risky + ")";
+            pwAll.ForeColor = pwAlertsOnly ? faint : ink;
+            pwAlerts.ForeColor = pwAlertsOnly ? red : faint;
+            pwList.SuspendLayout();
+            List<Control> old = new List<Control>();
+            foreach (Control c in pwList.Controls) old.Add(c);
+            pwList.Controls.Clear();
+            Later(delegate { foreach (Control c in old) c.Dispose(); });
+            int wide = Math.Max(200, pwList.ClientSize.Width - 26 - SystemInformation.VerticalScrollBarWidth);
+            Func<string, int, Panel, Label> small = delegate(string words, int y, Panel into)
+            {
+                Label l = new Label { Text = words, Left = 14, Top = y, AutoSize = true, ForeColor = faint, BackColor = Color.Transparent, Font = new System.Drawing.Font(UiBold, 7.5f) };
+                into.Controls.Add(l);
+                return l;
+            };
+            Func<string, string, Panel, Label> icon = delegate(string glyph, string tip, Panel into)
+            {
+                Label l = new Label { Text = glyph, Width = 30, Height = 30, TextAlign = ContentAlignment.MiddleCenter, ForeColor = faint, BackColor = Color.Transparent, Font = new System.Drawing.Font("Segoe MDL2 Assets", 10.5f), Cursor = Cursors.Hand, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+                new ToolTip().SetToolTip(l, tip);
+                l.MouseEnter += delegate { l.ForeColor = red; };
+                l.MouseLeave += delegate { l.ForeColor = faint; };
+                into.Controls.Add(l);
+                return l;
+            };
+            if (pwWhy)
+            {
+                Label box = new Label { Text = WhySafe, Width = wide, ForeColor = ink, BackColor = card, Font = new System.Drawing.Font(Ui, 9.5f), Padding = new Padding(14, 12, 14, 12), Margin = new Padding(0, 0, 0, 10), UseMnemonic = false };
+                box.Height = TextRenderer.MeasureText(WhySafe, box.Font, new Size(wide - 28, 0), TextFormatFlags.WordBreak).Height + 30;
+                box.Click += delegate { pwWhy = false; FillLogins(); };
+                pwList.Controls.Add(box);
+            }
+            string q = pwFind.Text.Trim().ToLowerInvariant();
+            int shown = 0;
+            foreach (Login one in all)
+            {
+                Login l = one;
+                if (pwAlertsOnly && !Risky(l)) continue;
+                if (q.Length > 0 && l.Site.ToLowerInvariant().IndexOf(q) < 0 && l.User.ToLowerInvariant().IndexOf(q) < 0) continue;
+                shown++;
+                Panel c = new Panel { Width = wide, Height = 196, BackColor = card, Margin = new Padding(0, 0, 0, 12) };
+                small("WEB SITE", 12, c);
+                LinkLabel site = new LinkLabel { Text = l.Site, Left = 14, Top = 26, Width = wide - 28, Height = 22, LinkColor = ink, ActiveLinkColor = red, BackColor = Color.Transparent, Font = new System.Drawing.Font(Ui, 10.5f), AutoEllipsis = true, UseMnemonic = false };
+                site.LinkClicked += delegate { OpenTab(null, l.Site.Contains("://") ? l.Site : "https://" + l.Site, true); };
+                c.Controls.Add(site);
+                small("USERNAME", 58, c);
+                c.Controls.Add(new Label { Text = l.User, Left = 14, Top = 72, Width = wide - 70, Height = 22, ForeColor = ink, BackColor = Color.Transparent, Font = new System.Drawing.Font(Ui, 10.5f), AutoEllipsis = true, UseMnemonic = false });
+                Label copyUser = icon("", "Copy username", c);
+                copyUser.Location = new Point(wide - 44, 66);
+                copyUser.Click += delegate { CopySecret(l.User); mod.Tell("Username copied, choom."); };
+                small("PASSWORD", 104, c);
+                Label dots = new Label { Text = new string('●', Math.Min(12, Math.Max(8, l.Pass.Length))), Left = 14, Top = 118, Width = wide - 100, Height = 22, ForeColor = ink, BackColor = Color.Transparent, Font = new System.Drawing.Font(Ui, 10.5f), AutoEllipsis = true, UseMnemonic = false };
+                c.Controls.Add(dots);
+                Label copyPass = icon("", "Copy password (cleared from the clipboard after 30 seconds)", c);
+                copyPass.Location = new Point(wide - 78, 112);
+                copyPass.Click += delegate { CopySecret(l.Pass); mod.Tell("Password copied. It's wiped from the clipboard in 30 seconds, choom."); };
+                Label eye = icon("", "Show password", c);
+                eye.Location = new Point(wide - 44, 112);
+                bool shownNow = false;
+                eye.Click += delegate { shownNow = !shownNow; dots.Text = shownNow ? l.Pass : new string('●', Math.Min(12, Math.Max(8, l.Pass.Length))); eye.Text = shownNow ? "" : ""; };
+                if (Risky(l)) c.Controls.Add(new Label { Text = l.Pass.Length < 8 ? "⚠ Short password" : "⚠ Used on another site too", Left = 14, Top = 160, Width = wide - 110, Height = 22, ForeColor = red, BackColor = Color.Transparent, Font = new System.Drawing.Font(Ui, 9f), UseMnemonic = false });
+                Button edit = new Button { Text = "Edit", Left = wide - 84, Top = 152, Width = 70, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = card, ForeColor = ink, Font = new System.Drawing.Font(UiBold, 10f), Cursor = Cursors.Hand, TabStop = false, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+                edit.FlatAppearance.BorderColor = red;
+                edit.FlatAppearance.MouseOverBackColor = Mix(card, red, .25f);
+                edit.Click += delegate { EditLogin(l); };
+                c.Controls.Add(edit);
+                c.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(edge)) e.Graphics.DrawRectangle(line, 0, 0, c.Width - 1, c.Height - 1); };
+                pwList.Controls.Add(c);
+            }
+            if (shown == 0)
+                pwList.Controls.Add(new Label
+                {
+                    Text = all.Count == 0 ? "No passwords yet. Press + Add, or import a CSV file exported from another browser (⋯ menu)." : pwAlertsOnly ? "No alerts. Every password is long enough and only used once." : "Nothing matches that.",
+                    Width = wide, Height = 60, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 10f), UseMnemonic = false
+                });
+            pwList.ResumeLayout();
+        }
+
+        // Add or change one: a small window in her colours with the site, username and password.
+        private void EditLogin(Login l)
+        {
+            Look look = mod.look;
+            bool fresh = l == null;
+            using (Form f = new Form { Text = fresh ? "Add a password" : "Edit password", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false, ShowInTaskbar = false, StartPosition = FormStartPosition.CenterParent, ClientSize = new Size(380, 262), BackColor = look.Shade(1), ForeColor = look.Shade(2), Font = new System.Drawing.Font(Ui, 10f) })
+            {
+                Func<string, int, TextBox> field = delegate(string name, int y)
+                {
+                    f.Controls.Add(new Label { Text = name, Left = 18, Top = y, AutoSize = true, ForeColor = look.Shade(3), Font = new System.Drawing.Font(UiBold, 8f) });
+                    TextBox t = new TextBox { Left = 18, Top = y + 18, Width = 344, BackColor = look.Shade(0), ForeColor = look.Shade(2), BorderStyle = BorderStyle.FixedSingle };
+                    f.Controls.Add(t);
+                    return t;
+                };
+                TextBox site = field("WEB SITE", 14), user = field("USERNAME", 70), pass = field("PASSWORD", 126);
+                pass.UseSystemPasswordChar = true;
+                CheckBox show = new CheckBox { Text = "Show password", Left = 18, Top = 176, AutoSize = true, ForeColor = look.Shade(3) };
+                show.CheckedChanged += delegate { pass.UseSystemPasswordChar = !show.Checked; };
+                f.Controls.Add(show);
+                if (!fresh) { site.Text = l.Site; user.Text = l.User; pass.Text = l.Pass; }
+                else if (tab != null && !tab.OnReader && HostOf(tab.Address) != null) site.Text = HostOf(tab.Address);
+                Func<string, int, DialogResult, Button> button = delegate(string words, int left, DialogResult result)
+                {
+                    Button b = new Button { Text = words, Left = left, Top = 214, Width = 84, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = look.Shade(0), ForeColor = look.Shade(2), DialogResult = result };
+                    b.FlatAppearance.BorderColor = look.Shade(6);
+                    f.Controls.Add(b);
+                    return b;
+                };
+                Button save = button("Save", 278, DialogResult.OK);
+                save.FlatAppearance.BorderColor = look.Shade(5);
+                f.AcceptButton = save;
+                f.CancelButton = button("Cancel", 188, DialogResult.Cancel);
+                Button delete = fresh ? null : button("Delete", 18, DialogResult.Abort);
+                DialogResult said = f.ShowDialog(FindForm());
+                if (said == DialogResult.Abort && delete != null)
+                {
+                    if (MessageBox.Show(FindForm(), "Delete the saved password for " + l.Site + "?", "Passwords", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                    Logins().Remove(l);
+                }
+                else if (said == DialogResult.OK)
+                {
+                    string s = Regex.Replace(site.Text.Trim(), @"^https?://", "", RegexOptions.IgnoreCase).TrimEnd('/');
+                    if (s.Length == 0 || pass.Text.Length == 0) { mod.Tell("A password needs a web site and the password itself, choom."); return; }
+                    if (fresh) { l = new Login(); Logins().Insert(0, l); }
+                    l.Site = s;
+                    l.User = user.Text.Trim();
+                    l.Pass = pass.Text;
+                    l.When = DateTime.Now;
+                }
+                else return;
+                SaveLogins();
+                FillLogins();
+            }
+        }
+
+        // A CSV file exported from Chrome, Edge, Opera or Firefox: url (or origin), username and password columns.
+        private void ImportLogins()
+        {
+            string file;
+            using (OpenFileDialog pick = new OpenFileDialog { Title = "Import passwords", Filter = "Passwords CSV file|*.csv" })
+            {
+                if (pick.ShowDialog(FindForm()) != DialogResult.OK) return;
+                file = pick.FileName;
+            }
+            int added = 0;
+            try
+            {
+                List<string[]> rows = Csv(File.ReadAllText(file));
+                if (rows.Count < 2) { mod.Tell("That file doesn't have any passwords in it, choom."); return; }
+                string[] head = rows[0];
+                int url = -1, user = -1, pass = -1;
+                for (int i = 0; i < head.Length; i++)
+                {
+                    string h = head[i].Trim().ToLowerInvariant();
+                    if ((h == "url" || h == "origin" || h == "website" || h == "login_uri") && url < 0) url = i;
+                    else if ((h == "username" || h == "login_username" || h == "user") && user < 0) user = i;
+                    else if ((h == "password" || h == "login_password") && pass < 0) pass = i;
+                }
+                if (url < 0 || pass < 0) { mod.Tell("I couldn't find the web site and password columns in that file, choom."); return; }
+                for (int r = 1; r < rows.Count; r++)
+                {
+                    string[] row = rows[r];
+                    if (row.Length <= Math.Max(url, pass) || row[pass].Length == 0) continue;
+                    string s = HostOf(row[url]) ?? row[url].Trim();
+                    string u = user >= 0 && row.Length > user ? row[user] : "";
+                    if (Logins().Exists(delegate(Login x) { return x.Site == s && x.User == u; })) continue;
+                    Logins().Add(new Login { Site = s, User = u, Pass = row[pass] });
+                    added++;
+                }
+            }
+            catch (Exception error) { mod.Tell("I couldn't read that file: " + error.Message); return; }
+            SaveLogins();
+            FillLogins();
+            mod.Tell("Imported " + added + (added == 1 ? " password" : " passwords") + ", choom. That CSV file isn't encrypted, so delete it once you're happy.");
+        }
+
+        private static List<string[]> Csv(string text)
+        {
+            List<string[]> rows = new List<string[]>();
+            List<string> row = new List<string>();
+            StringBuilder cell = new StringBuilder();
+            bool quoted = false;
+            for (int i = 0; i < text.Length; i++)
+            {
+                char ch = text[i];
+                if (quoted) { if (ch == '"') { if (i + 1 < text.Length && text[i + 1] == '"') { cell.Append('"'); i++; } else quoted = false; } else cell.Append(ch); continue; }
+                if (ch == '"') quoted = true;
+                else if (ch == ',') { row.Add(cell.ToString()); cell.Length = 0; }
+                else if (ch == '\n' || ch == '\r') { if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n') i++; row.Add(cell.ToString()); cell.Length = 0; if (row.Count > 1 || row[0].Length > 0) rows.Add(row.ToArray()); row = new List<string>(); }
+                else cell.Append(ch);
+            }
+            row.Add(cell.ToString());
+            if (row.Count > 1 || row[0].Length > 0) rows.Add(row.ToArray());
+            return rows;
+        }
+
+
+        // ---- Capri's brain first (Settings > Mods, on unless they switch it off) ----
+        // Capri's own process gets the PC first, and Edge's engine processes behind this browser wait their turn.
+        private System.Windows.Forms.Timer brainTimer;
+        private bool brainWasFirst;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct ProcessEntry
+        {
+            public int Size, Usage, Id; public IntPtr Heap; public int Module, Threads, Parent, Priority, Flags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string File;
+        }
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr CreateToolhelp32Snapshot(int flags, int id);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool Process32FirstW(IntPtr snap, ref ProcessEntry entry);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] private static extern bool Process32NextW(IntPtr snap, ref ProcessEntry entry);
+        [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+
+        // The engine's main process and everything it started (pages, GPU, audio), and nothing from other apps.
+        private static List<int> EngineFamily(int root)
+        {
+            List<int> family = new List<int>();
+            if (root <= 0) return family;
+            family.Add(root);
+            Dictionary<int, int> parents = new Dictionary<int, int>();
+            IntPtr snap = CreateToolhelp32Snapshot(2, 0);
+            if (snap == IntPtr.Zero || snap == new IntPtr(-1)) return family;
+            try
+            {
+                ProcessEntry e = new ProcessEntry { Size = Marshal.SizeOf(typeof(ProcessEntry)) };
+                for (bool more = Process32FirstW(snap, ref e); more; more = Process32NextW(snap, ref e)) parents[e.Id] = e.Parent;
+            }
+            finally { CloseHandle(snap); }
+            for (bool grew = true; grew; )
+            {
+                grew = false;
+                foreach (KeyValuePair<int, int> p in parents) if (!family.Contains(p.Key) && family.Contains(p.Value)) { family.Add(p.Key); grew = true; }
+            }
+            return family;
+        }
+
+        private void StartBrainFirst()
+        {
+            brainTimer = new System.Windows.Forms.Timer { Interval = 8000 };
+            brainTimer.Tick += delegate { BrainFirst(); };
+            brainTimer.Start();
+            Disposed += delegate { brainTimer.Dispose(); };
+        }
+
+        private void BrainFirst()
+        {
+            bool on = Flag("brainfirst", true);
+            if (!on && !brainWasFirst) return;
+            List<int> roots = new List<int>();
+            foreach (Tab t in tabs) { int id = t.Viewer.EngineId; if (id > 0 && !roots.Contains(id)) roots.Add(id); }
+            System.Threading.ThreadPool.QueueUserWorkItem(delegate
+            {
+                try { System.Diagnostics.Process.GetCurrentProcess().PriorityClass = on ? System.Diagnostics.ProcessPriorityClass.AboveNormal : System.Diagnostics.ProcessPriorityClass.Normal; } catch (Exception) { }
+                foreach (int root in roots)
+                    foreach (int id in EngineFamily(root))
+                        try { using (System.Diagnostics.Process p = System.Diagnostics.Process.GetProcessById(id)) p.PriorityClass = on ? System.Diagnostics.ProcessPriorityClass.BelowNormal : System.Diagnostics.ProcessPriorityClass.Normal; }
+                        catch (Exception) { }
+            });
+            brainWasFirst = on;
         }
 
         internal void SetAds(bool on)
@@ -5578,6 +6327,14 @@ public class CapriInternalBrowser : ICapriMod
             html.Append(open(10)).Append("<div class='pre'>").Append(Esc(CanText)).Append("</div></div>");
             string last = Kept("updated");
             html.Append(open(11)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
+            int volume;
+            if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
+            html.Append(open(12)).Append(Row("Put Capri's brain first", "Gives Capri's thinking and functions the PC before the browser. Turning it off may slow down Capri's functions.", Switch("x-brainfirst", Flag("brainfirst", true))))
+                .Append(Row("Browser sounds", "Little sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
+                .Append(Row("Typing sounds", "A soft click for each key in the address bar and on web pages. Needs browser sounds on.", Switch("x-typesounds", Flag("typesounds", false))))
+                .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
+                .Append(Row("Sidebar setup", "Choose which icons the sidebar shows, and add sites like ChatGPT, WhatsApp or Twitch. You can also right-click the sidebar.", Btn("sidesetup", "Open", false)))
+                .Append("</div>");
             string jump = settingsJump ?? "";
             settingsJump = null;
             html.Append("</div></div><script>var O='").Append(Own).Append("';function S(k,v){location.href=O+'set?k='+k+'&v='+encodeURIComponent(v)+'&y='+Math.round(scrollY);}"
@@ -5621,6 +6378,7 @@ public class CapriInternalBrowser : ICapriMod
                 default:
                     if (!key.StartsWith("x-", StringComparison.Ordinal)) return;
                     if (key == "x-darkweb") SetDarkWeb(on); else if (Host != null) Host.Store.Set("opt-" + key.Substring(2), on ? "1" : "0");
+                    if (key == "x-brainfirst") { if (on) brainWasFirst = true; BrainFirst(); }
                     return;
             }
             if (key == "wallpaper" || key == "nowall" || key == "folder" || key == "video" || key == "discord" || key == "search" || key == "track") foreach (Tab open in tabs) if (open.Special == "settings") ShowReader(open);
@@ -6073,7 +6831,7 @@ public class CapriInternalBrowser : ICapriMod
         // Noted and Bookmarks live over the page, in the page's own area. Opening slides one in from the sidebar's edge
         // (only its position moves, so nothing re-lays out while it does); closing slides it back. Pinned, it sits beside
         // the page instead, and stays when they click the page.
-        private bool PinnedSide(Panel p) { return Kept(p == notes ? "pin-noted" : p == cleaner ? "pin-cleaner" : "pin-marks") == "1"; }
+        private bool PinnedSide(Panel p) { return Kept(p == notes ? "pin-noted" : p == cleaner ? "pin-cleaner" : p == pwPanel ? "pin-passwords" : p == sideSetup ? "pin-sidesetup" : "pin-marks") == "1"; }
 
         private void PlaceSide(Panel p)
         {
@@ -6086,7 +6844,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             if (full) return;
             if (p.Visible) { SlideIn(p, width); return; }
-            foreach (Panel other in new[] { notes, marks, cleaner }) if (other != p && other.Visible) SlideIn(other, other.Width);
+            foreach (Panel other in new[] { notes, marks, cleaner, pwPanel, sideSetup }) if (other != p && other.Visible) SlideIn(other, other.Width);
             int my = NextSlide(p);
             p.Dock = DockStyle.None;
             p.Width = width;
@@ -6094,6 +6852,7 @@ public class CapriInternalBrowser : ICapriMod
             p.Left = -width;
             p.Visible = true;
             p.BringToFront();
+            Blip("panel");
             Ease(p, 240, delegate(float e) { if (my == Slides(p)) p.Left = (int)(-width * (1 - e)); }, delegate
             {
                 if (my != Slides(p)) return;
@@ -6122,7 +6881,7 @@ public class CapriInternalBrowser : ICapriMod
         // Clicking the page closes a panel that isn't pinned, like Opera's.
         private void PageClicked()
         {
-            foreach (Panel p in new[] { notes, marks, cleaner }) if (p.Visible && p.Dock != DockStyle.Left && !PinnedSide(p) && Form.ActiveForm == FindForm()) SlideIn(p, p.Width);
+            foreach (Panel p in new[] { notes, marks, cleaner, pwPanel, sideSetup }) if (p.Visible && p.Dock != DockStyle.Left && !PinnedSide(p) && Form.ActiveForm == FindForm()) SlideIn(p, p.Width);
         }
 
         // The top of a side panel: its icon and name, a pin, and close.
@@ -6133,7 +6892,7 @@ public class CapriInternalBrowser : ICapriMod
             title = new Label { Text = name, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(UiBold, 14f), UseMnemonic = false, AutoEllipsis = true };
             Button shut = Flat("\uE711", "Close (Esc)", DockStyle.Right, 40);
             Button pin = Flat("\uE718", "Pin beside the page", DockStyle.Right, 36);
-            string key = p == notes ? "pin-noted" : p == cleaner ? "pin-cleaner" : "pin-marks";
+            string key = p == notes ? "pin-noted" : p == cleaner ? "pin-cleaner" : p == pwPanel ? "pin-passwords" : p == sideSetup ? "pin-sidesetup" : "pin-marks";
             Action showPin = delegate { bool on = Kept(key) == "1"; pin.Text = on ? "\uE841" : "\uE718"; pin.Tag = on ? "red" : null; pin.ForeColor = on ? mod.look.Shade(5) : mod.look.Shade(3); };
             pin.Click += delegate
             {
@@ -6162,7 +6921,7 @@ public class CapriInternalBrowser : ICapriMod
             };
             grip.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button != MouseButtons.Left) return; dragging = true; from = Cursor.Position.X; was = p.Width; grip.Capture = true; grip.Invalidate(); };
             grip.MouseMove += delegate { if (dragging) p.Width = Math.Max(260, Math.Min(Math.Min(720, holder.Width - 200), was + Cursor.Position.X - from)); };
-            grip.MouseUp += delegate { if (!dragging) return; dragging = false; grip.Capture = false; grip.Invalidate(); Keep(p == notes ? "noteswidth" : p == cleaner ? "cleanerwidth" : "markswidth", p.Width.ToString()); };
+            grip.MouseUp += delegate { if (!dragging) return; dragging = false; grip.Capture = false; grip.Invalidate(); Keep(p == notes ? "noteswidth" : p == cleaner ? "cleanerwidth" : p == pwPanel ? "passwordswidth" : p == sideSetup ? "sidesetupwidth" : "markswidth", p.Width.ToString()); };
             p.Controls.Add(grip);
             p.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) SlideIn(p, p.Width); };
             return head;
@@ -7410,6 +8169,7 @@ public class CapriInternalBrowser : ICapriMod
         private Button Puzzle()
         {
             Button b = Tool("\uEA86", 36, "Extensions", DockStyle.Right);
+            puzzleButton = b;
             b.Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f);
             b.Click += delegate { if (!JustShut) ExtensionsPanel(b); };
             return b;
@@ -7876,6 +8636,7 @@ public class CapriInternalBrowser : ICapriMod
                 SideBack(side, e.Graphics);
                 using (Pen line = new Pen(Mix(mod.look.Shade(0), mod.look.Shade(5), .45f))) e.Graphics.DrawLine(line, side.Width - 1, 0, side.Width - 1, side.Height);
             };
+            int sideStart = sideButtons.Count;
             SideButton("\uE80F", "Capri website", "https://capriai.app/favicon.ico").Click += delegate { OpenTab(null, "https://capriai.app/", true); };
             Button discord = SideButton("\uE8BD", "Discord (right-click to switch)", "https://www.google.com/s2/favicons?sz=64&domain=discord.com");
             discord.Click += delegate { Discord(); };
@@ -7898,6 +8659,7 @@ public class CapriInternalBrowser : ICapriMod
             SideButton("\uE81C", T(49), null).Click += delegate { ShowHistory(); };
             SideButton("\uE7FC", "Games", null).Click += delegate { ShowGames(); };
             SideButton("\uE8FD", "Custom jobs", null).Click += delegate { ShowJobs(); };
+            SideExtras(sideStart);
             Button welcome = SideButton(((char)0xE946).ToString(), "Welcome and getting started", null);
             welcome.Dock = DockStyle.Bottom;
             welcome.Click += delegate { ShowWelcome(); };
@@ -7955,18 +8717,24 @@ public class CapriInternalBrowser : ICapriMod
             BuildNoted();
             BuildMarks();
             BuildCleaner();
-            notes.Dock = marks.Dock = cleaner.Dock = DockStyle.None;
-            notes.Visible = marks.Visible = cleaner.Visible = false;
+            BuildPasswords();
+            BuildSideSetup();
+            notes.Dock = marks.Dock = cleaner.Dock = pwPanel.Dock = sideSetup.Dock = DockStyle.None;
+            notes.Visible = marks.Visible = cleaner.Visible = pwPanel.Visible = sideSetup.Visible = false;
+            holder.Controls.Add(pwPanel);
+            holder.Controls.Add(sideSetup);
+            ApplySide();
+            StartBrainFirst();
             holder.Controls.Add(notes);
             holder.Controls.Add(marks);
             holder.Controls.Add(cleaner);
-            holder.Resize += delegate { PlaceSide(notes); PlaceSide(marks); PlaceSide(cleaner); };
+            holder.Resize += delegate { PlaceSide(notes); PlaceSide(marks); PlaceSide(cleaner); PlaceSide(pwPanel); PlaceSide(sideSetup); };
             // A new tab's page goes under an open panel, and beside a pinned one.
             holder.ControlAdded += delegate(object sender, ControlEventArgs e)
             {
-                if (e.Control == notes || e.Control == marks || e.Control == cleaner) return;
+                if (e.Control == notes || e.Control == marks || e.Control == cleaner || e.Control == pwPanel || e.Control == sideSetup) return;
                 e.Control.GotFocus += delegate { PageClicked(); };
-                foreach (Panel p in new[] { notes, marks, cleaner }) if (p.Visible) { if (p.Dock == DockStyle.Left) p.SendToBack(); else p.BringToFront(); }
+                foreach (Panel p in new[] { notes, marks, cleaner, pwPanel, sideSetup }) if (p.Visible) { if (p.Dock == DockStyle.Left) p.SendToBack(); else p.BringToFront(); }
             };
             foreach (Control c in holder.Controls) if (c != notes && c != marks) { Control page = c; page.GotFocus += delegate { PageClicked(); }; }
             Controls.Add(side);
@@ -8127,7 +8895,7 @@ public class CapriInternalBrowser : ICapriMod
                 bool clickedOff = Control.MouseButtons != MouseButtons.None && !m.Bounds.Contains(Cursor.Position);
                 if (clickedOff || Form.ActiveForm != FindForm()) m.Close();
             };
-            m.Opened += delegate { watch.Start(); };
+            m.Opened += delegate { watch.Start(); Blip("menu"); };
             FadeIn(m);
             m.Closed += delegate { watch.Stop(); menuShut = DateTime.Now; Later(delegate { watch.Dispose(); m.Dispose(); }); };
             return m;
@@ -8570,6 +9338,8 @@ public class CapriInternalBrowser : ICapriMod
             v.Busy = delegate(bool busy) { t.Busy = busy; if (t == tab) loading.Visible = busy && !full; };
             v.Blocks = delegate(int count) { t.Blocked = count; if (t == tab) ShowShield(); };
             v.Downloading = delegate(object operation, string file, string from) { Downloading(operation, file, from); };
+            v.PageMenu = delegate { if (!(t == tab && t.OnReader && t.Special == null && t.Address == null && (t.Page == null || t.Page.Results.Count == 0))) return false; Later(DialMenu); return true; };
+            v.Typed = delegate { if (t == tab) Blip("key"); };
             v.Tracks = delegate(int count) { t.Tracked = count; if (t == tab) ShowShield(); };
             v.Shield = delegate(string what)
             {
@@ -9261,9 +10031,15 @@ public class CapriInternalBrowser : ICapriMod
         public virtual void SiteData(string host, Action<string> got) { got(null); }
         public virtual void WipeSite(string host, Action<string> done) { done("that needs Edge's engine"); }
         public virtual void ClearKinds(string kinds, Action<string> done) { done("that needs Edge's engine"); }
+        // EngineId: the process id of Edge's engine behind this page, or 0.
+        public virtual int EngineId { get { return 0; } }
         public virtual void AllCookies(Action<int> got) { got(-1); }
         // Downloading: a download started (Edge's download, the file it goes to, and where from).
         public Action<object, string, string> Downloading;
+        // PageMenu: a right-click on the page itself (not a link, picture or text box); true when Capri Browser showed its own menu.
+        public Func<bool> PageMenu;
+        // Typed: a key was pressed on the page (only for typing sounds).
+        public Action Typed;
         // A key pressed while the page has focus: true when Capri Browser used it.
         public Func<Keys, bool> Key;
         public virtual bool Modern { get { return false; } }
@@ -9439,6 +10215,7 @@ public class CapriInternalBrowser : ICapriMod
                         if (said != null && said.StartsWith("capri-ended|", StringComparison.Ordinal) && Ended != null) Ended(said.Substring(12));
                         else if (said == "capri-click|plain") { plainClick = DateTime.UtcNow; topClick = DateTime.UtcNow; }
                         else if (said == "capri-click|link") { plainClick = DateTime.MinValue; topClick = DateTime.UtcNow; }
+                        else if (said == "capri-key") { if (Typed != null) Typed(); }
                         else if (said != null && said.StartsWith("capri-shield|", StringComparison.Ordinal))
                         {
                             string what = said.Substring(13);
@@ -9453,6 +10230,7 @@ public class CapriInternalBrowser : ICapriMod
                     try
                     {
                         object target = Get(asked, "ContextMenuTarget");
+                        if (PageMenu != null && Convert.ToInt32(Get(target, "Kind")) == 0 && !(bool)Get(target, "HasLinkUri") && !(bool)Get(target, "IsEditable") && PageMenu()) { Set(asked, "Handled", true); return; }
                         string source = Convert.ToInt32(Get(target, "Kind")) == 1 ? Get(target, "SourceUri") as string : null;
                         if (source != null && source.StartsWith("http", StringComparison.Ordinal) && Opening != null)
                         {
@@ -9618,6 +10396,7 @@ public class CapriInternalBrowser : ICapriMod
     if (window.__capriShieldOn || window.top !== window) return;
     var on = true, last = 0, plain = false, swallow = 0, style = null, scamDone = false, looks = 0;
     function tell(m) { try { chrome.webview.postMessage(m); } catch (e) { } }
+    document.addEventListener('keydown', function (e) { if (!e.repeat && e.key && (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter')) tell('capri-key'); }, true);
     window.__capriToast = function (text) {
         if (!document.body) return;
         var t = document.createElement('div');
@@ -9938,6 +10717,8 @@ public class CapriInternalBrowser : ICapriMod
             catch (Exception error) { done(Inner(error).Message); }
         }
 
+
+        public override int EngineId { get { try { return core == null ? 0 : Convert.ToInt32(Get(core, "BrowserProcessId")); } catch (Exception) { return 0; } } }
 
         // Clears kinds of Edge's browsing data by name, like "DiskCache, CacheStorage". Names this engine doesn't know are skipped.
         public override void ClearKinds(string kinds, Action<string> done)
