@@ -87,6 +87,7 @@ public class CapriInternalBrowser : ICapriMod
     internal Action<string> Summarised = null;
 
     internal void Tell(string line) { if (capri != null) capri.Say(line); }
+    internal void Note(string line) { if (capri != null) capri.Log(line); }
 
     // Her face for the hologram, and Capri herself to read her voice from (nothing of hers is changed).
     internal static Func<Bitmap> TestFace;
@@ -290,6 +291,7 @@ public class CapriInternalBrowser : ICapriMod
     {
         string said = Please.Replace(Wake.Replace((words ?? "").Trim(), "").Trim().TrimEnd('.', '!', ' ', ','), "").Trim();
         if (said.Length == 0) return false;
+        haltedUntil = DateTime.MinValue;
         said = Translated(said);
         if (NoteAnswer(said)) return true;
         if (ShotAnswer(said)) return true;
@@ -1016,6 +1018,18 @@ public class CapriInternalBrowser : ICapriMod
         });
     }
 
+    // Esc while she's doing something in the browser: she stops, and takes no more browser steps until they talk to her again.
+    private DateTime haltedUntil;
+    internal bool Driving { get { return DateTime.UtcNow < holdUntil; } }
+    private bool Halted { get { return DateTime.UtcNow < haltedUntil; } }
+    internal void Halt()
+    {
+        haltedUntil = DateTime.UtcNow.AddSeconds(30);
+        holdUntil = DateTime.UtcNow;
+        lock (gate) pend = null;
+        if (capri != null) capri.Say("Okay, stopping, choom.");
+    }
+
     private void Controlling()
     {
         if (!Flag("control", true)) return;
@@ -1054,6 +1068,7 @@ public class CapriInternalBrowser : ICapriMod
 
     internal string BrowserTool(string asked)
     {
+        if (Halted) return "Stopped: they pressed Esc to stop you. Don't take any more browser steps for this; just tell them you've stopped.";
         Controlling();
         string words = Regex.Replace(asked ?? "", @"\s+", " ").Trim();
         Match m = Regex.Match(words, @"^(full ?screen|\w+)\s*(.*)$", Plain | RegexOptions.Singleline);
@@ -2842,7 +2857,7 @@ public class CapriInternalBrowser : ICapriMod
                 Settle(true);
             }
             string[] steps = job.Steps.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            for (int i = from; i < steps.Length && !stopped; i++)
+            for (int i = from; i < steps.Length && !stopped && !Halted; i++)
             {
                 string step = Regex.Replace(steps[i].Trim(), @"^(?:then|and|and\s+then|next|after\s+that)[,\s]+", "", Plain).Trim().TrimEnd('.');
                 string next = i + 1 < steps.Length ? steps[i + 1].Trim() : "";
@@ -3578,6 +3593,7 @@ public class CapriInternalBrowser : ICapriMod
             b.FlatAppearance.BorderSize = 0;
             new ToolTip().SetToolTip(b, tip);
             b.Click += delegate { Blip("click"); };
+            b.MouseEnter += delegate { Blip("hover"); };
             buttons.Add(b);
             return b;
         }
@@ -3603,7 +3619,7 @@ public class CapriInternalBrowser : ICapriMod
             address.KeyPress += delegate { Blip("key"); };
             address.AutoCompleteMode = AutoCompleteMode.Suggest;
             address.AutoCompleteSource = AutoCompleteSource.CustomSource;
-            address.GotFocus += delegate { Suggestions(); BeginInvoke((Action)delegate { address.SelectAll(); }); };
+            address.GotFocus += delegate { Blip("focus"); Suggestions(); BeginInvoke((Action)delegate { address.SelectAll(); }); };
             field.Dock = DockStyle.Fill;
             field.Padding = new Padding(2, 5, 8, 0);
             field.Controls.Add(address);
@@ -4852,59 +4868,136 @@ public class CapriInternalBrowser : ICapriMod
         private static readonly Dictionary<string, float[]> blips = new Dictionary<string, float[]>();
         private static readonly Random blipDice = new Random();
         private static int blipsPlaying;
-        private const int BlipRate = 22050;
+        private const int BlipRate = 32000;
 
-        // One tone: a soft digital note that slides from one pitch to another and dies away, with a little noise for clicks.
-        private static void Tone(float[] into, double start, double length, double from, double to, double loud, double noise)
+        // The sounds are made here, not loaded: deep, soft and short, in the spirit of a gaming browser's UI sounds.
+        // Oscillators that glide between pitches, filtered noise for whooshes and clicks, and a gentle fade on everything.
+        private sealed class Filter
+        {
+            private readonly double b0, b1, b2, a1, a2;
+            private double x1, x2, y1, y2;
+            // kind: 'l' low-pass, 'h' high-pass, 'b' band-pass (RBJ's cookbook filters)
+            internal Filter(char kind, double hz, double q)
+            {
+                double w = 2 * Math.PI * Math.Min(hz, BlipRate * .45) / BlipRate, cos = Math.Cos(w), alpha = Math.Sin(w) / (2 * q), a0 = 1 + alpha;
+                if (kind == 'l') { b0 = (1 - cos) / 2; b1 = 1 - cos; b2 = b0; }
+                else if (kind == 'h') { b0 = (1 + cos) / 2; b1 = -(1 + cos); b2 = b0; }
+                else { b0 = alpha; b1 = 0; b2 = -alpha; }
+                b0 /= a0; b1 /= a0; b2 /= a0; a1 = -2 * cos / a0; a2 = (1 - alpha) / a0;
+            }
+            internal double Run(double x) { double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; return y; }
+        }
+
+        // Fades in over a few milliseconds, then dies away smoothly to nothing by the end.
+        private static double Envelope(int i, int count, double attack)
+        {
+            double t = i / (double)count, rise = Math.Min(1, i / Math.Max(1, attack * BlipRate));
+            return rise * Math.Pow(1 - t, 2.2);
+        }
+
+        // A tone gliding from one pitch to another; shape 0 is a sine, 1 a triangle, anything between a mix.
+        private static void Glide(float[] into, double start, double length, double from, double to, double shape, double loud)
         {
             int first = (int)(start * BlipRate), count = (int)(length * BlipRate);
             double phase = 0;
             for (int i = 0; i < count && first + i < into.Length; i++)
             {
-                double t = i / (double)count, f = from + (to - from) * t;
-                phase += 2 * Math.PI * f / BlipRate;
-                double wave = Math.Sin(phase) * .8 + Math.Sign(Math.Sin(phase)) * .12 + Math.Sin(phase * 2) * .15;
-                double env = Math.Min(1, i / (BlipRate * .003)) * Math.Exp(-t * 5.5);
-                double hiss;
-                lock (blipDice) hiss = blipDice.NextDouble() * 2 - 1;
-                into[first + i] += (float)(loud * env * (wave * (1 - noise) + hiss * noise));
+                double t = i / (double)count;
+                phase += 2 * Math.PI * from * Math.Pow(to / from, t) / BlipRate;
+                double p = phase / (2 * Math.PI) % 1, tri = 1 - 4 * Math.Abs(p - .5);
+                into[first + i] += (float)(loud * Envelope(i, count, .004) * (Math.Sin(phase) * (1 - shape) + tri * shape));
             }
         }
 
-        private static float[] Blip(string kind, int variant)
+        // Noise through a filter: whooshes, ticks and the click of a key.
+        private static void Hiss(float[] into, double start, double length, Filter filter, double loud)
         {
-            string key = kind + variant;
-            lock (blips)
+            int first = (int)(start * BlipRate), count = (int)(length * BlipRate);
+            for (int i = 0; i < count && first + i < into.Length; i++)
             {
-                float[] made;
-                if (blips.TryGetValue(key, out made)) return made;
-                made = new float[(int)(BlipRate * (kind == "done" ? .36 : kind == "panel" ? .17 : .13))];
-                switch (kind)
-                {
-                    case "open": Tone(made, 0, .05, 880, 900, .5, 0); Tone(made, .045, .075, 1320, 1340, .45, 0); break;
-                    case "close": Tone(made, 0, .05, 1180, 1160, .45, 0); Tone(made, .04, .075, 740, 720, .42, 0); break;
-                    case "switch": Tone(made, 0, .035, 1600, 1480, .3, .05); break;
-                    case "click": Tone(made, 0, .03, 2100, 1400, .3, .25); break;
-                    case "menu": Tone(made, 0, .045, 1250, 1300, .22, .05); break;
-                    case "panel": Tone(made, 0, .15, 380, 980, .26, .35); break;
-                    case "done": Tone(made, 0, .13, 988, 988, .4, 0); Tone(made, .11, .24, 1319, 1319, .4, 0); break;
-                    default: Tone(made, 0, .024, 2300 + variant * 350, 1700 + variant * 200, .28, .65); break;
-                }
-                blips[key] = made;
-                return made;
+                double white;
+                lock (blipDice) white = blipDice.NextDouble() * 2 - 1;
+                into[first + i] += (float)(loud * Envelope(i, count, .002) * filter.Run(white));
             }
         }
+
+        private static float[] Soften(float[] wave, double hz) { Filter f = new Filter('l', hz, .707); for (int i = 0; i < wave.Length; i++) wave[i] = (float)f.Run(wave[i]); return wave; }
+
+        // pitch: 1 for the usual sound; a keypress gets a few percent either way so fast typing sounds natural.
+        private static float[] Blip(string kind, double pitch)
+        {
+            float[] w;
+            switch (kind)
+            {
+                case "open":
+                    w = new float[(int)(BlipRate * .16)];
+                    Glide(w, 0, .11, 140, 320, .35, .55);
+                    Hiss(w, 0, .13, new Filter('b', 1600, .8), .2);
+                    return Soften(w, 4200);
+                case "close":
+                    w = new float[(int)(BlipRate * .12)];
+                    Glide(w, 0, .09, 260, 95, .25, .6);
+                    Hiss(w, 0, .035, new Filter('l', 320, .9), .5);
+                    return Soften(w, 2600);
+                case "click":
+                case "switch":
+                    w = new float[(int)(BlipRate * .07)];
+                    double k = kind == "switch" ? .6 : 1;
+                    Glide(w, 0, .045, 180, 60, .1, .55 * k);
+                    Glide(w, 0, .04, 270, 90, .6, .18 * k);
+                    Hiss(w, 0, .012, new Filter('l', 2200, .9), .22 * k);
+                    return Soften(w, 3200);
+                case "hover":
+                    w = new float[(int)(BlipRate * .02)];
+                    Hiss(w, 0, .015, new Filter('h', 4200, .8), .07);
+                    return w;
+                case "menu":
+                    w = new float[(int)(BlipRate * .05)];
+                    Glide(w, 0, .035, 620, 560, 0, .1);
+                    Hiss(w, 0, .02, new Filter('b', 3000, 1.2), .08);
+                    return w;
+                case "key":
+                    w = new float[(int)(BlipRate * .05)];
+                    Glide(w, 0, .035, 150 * pitch, 105 * pitch, .2, .42);
+                    Hiss(w, 0, .009, new Filter('b', 2500 * pitch, 1.3), .55);
+                    return Soften(w, 6000);
+                case "focus":
+                    w = new float[(int)(BlipRate * .15)];
+                    Glide(w, 0, .065, 330, 330, 0, .22);
+                    Glide(w, 0, .065, 660, 660, 0, .05);
+                    Glide(w, .055, .075, 495, 495, 0, .24);
+                    Glide(w, .055, .075, 990, 990, 0, .06);
+                    return Soften(w, 2200);
+                case "panel":
+                    w = new float[(int)(BlipRate * .2)];
+                    Glide(w, 0, .16, 520, 780, 0, .12);
+                    Glide(w, .02, .15, 1040, 1560, 0, .05);
+                    Hiss(w, 0, .16, new Filter('b', 2400, 1.5), .1);
+                    return Soften(w, 3600);
+                default: // "done": a warm two-chord resolve, A2 + E3 then C#3 + G#3
+                    w = new float[(int)(BlipRate * .4)];
+                    Glide(w, 0, .2, 110, 110, .5, .3);
+                    Glide(w, 0, .2, 164.8, 164.8, .5, .24);
+                    Glide(w, .15, .25, 138.6, 138.6, .5, .3);
+                    Glide(w, .15, .25, 207.7, 207.7, .5, .24);
+                    return Soften(w, 1800);
+            }
+        }
+
+        private DateTime lastHover = DateTime.MinValue;
 
         private void Blip(string kind)
         {
-            if (!Flag("sounds", false) || (DateTime.Now - born).TotalSeconds < 3) return;
-            if (kind == "key") { if (!Flag("typesounds", false)) return; }
-            else { if ((DateTime.Now - lastBlip).TotalMilliseconds < 70) return; lastBlip = DateTime.Now; }
+            // Typing sounds have their own switch, so they work with or without the other sounds.
+            bool key = kind == "key";
+            if (!(key ? Flag("typesounds", false) : Flag("sounds", false)) || (DateTime.Now - born).TotalSeconds < 3) return;
+            if (kind == "hover") { if ((DateTime.Now - lastHover).TotalMilliseconds < 90) return; lastHover = DateTime.Now; }
+            else if (!key) { if ((DateTime.Now - lastBlip).TotalMilliseconds < 60) return; lastBlip = DateTime.Now; }
             int volume;
             if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
-            int variant;
-            lock (blipDice) variant = kind == "key" ? blipDice.Next(3) : 0;
-            float[] wave = Blip(kind, variant);
+            float[] wave;
+            if (key) { double pitch; lock (blipDice) pitch = .94 + blipDice.NextDouble() * .12; wave = Blip(kind, pitch); }
+            else lock (blips) if (!blips.TryGetValue(kind, out wave)) blips[kind] = wave = Blip(kind, 1.0);
             short[] pcm = new short[wave.Length];
             float scale = 32767f * Math.Max(0, Math.Min(100, volume)) / 100f;
             for (int i = 0; i < wave.Length; i++) pcm[i] = (short)Math.Max(-32767, Math.Min(32767, wave[i] * scale));
@@ -6345,7 +6438,7 @@ public class CapriInternalBrowser : ICapriMod
             for (int i = 0; i < TipList.GetLength(0); i++) if (TipList[i, 0] == name) return TipList[i, 1];
             for (int i = 0; i < ExtraList.GetLength(0); i++)
                 if (ExtraList[i, 1] == name) for (int j = 0; j < TipList.GetLength(0); j++) if (TipList[j, 0] == ExtraList[i, 0]) return TipList[j, 1];
-            return string.IsNullOrEmpty(about) ? null : about;
+            return null;
         }
 
         private static string TipBox(Look look)
@@ -6361,7 +6454,7 @@ public class CapriInternalBrowser : ICapriMod
                 + "var w=tb.offsetWidth,h=tb.offsetHeight,L=Math.max(8,Math.min(mx+14,innerWidth-w-12)),T=my+20;if(T+h>innerHeight-8)T=my-h-14;"
                 + "tb.style.left=L+'px';tb.style.top=T+'px';}"
                 + "document.addEventListener('mousemove',function(e){mx=e.clientX;my=e.clientY;});"
-                + "document.addEventListener('mouseover',function(e){var r=e.target.closest?e.target.closest('.r[data-tip]'):null;if(r===cur)return;hide();if(!r)return;"
+                + "document.addEventListener('mouseover',function(e){var w=e.target.closest?e.target.closest('.r[data-tip] b,.r[data-tip] i'):null,r=w?w.closest('.r'):null;if(r===cur)return;hide();if(!r)return;"
                 + "cur=r;t=setTimeout(function(){show(r);},380);});"
                 + "addEventListener('scroll',hide,{passive:true});document.addEventListener('mousedown',hide);document.documentElement.addEventListener('mouseleave',hide);})();</script>";
         }
@@ -6459,7 +6552,7 @@ public class CapriInternalBrowser : ICapriMod
             if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
             html.Append(open(12)).Append(Row("Put Capri's brain first", "Gives Capri's thinking and functions the PC before the browser. Turning it off may slow down Capri's functions.", Switch("x-brainfirst", Flag("brainfirst", true))))
                 .Append(Row("Browser sounds", "Little sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
-                .Append(Row("Typing sounds", "A soft click for each key in the address bar and on web pages. Needs browser sounds on.", Switch("x-typesounds", Flag("typesounds", false))))
+                .Append(Row("Typing sounds", "A soft keyboard thock for each key in the address bar and on web pages. Works on its own, with or without browser sounds.", Switch("x-typesounds", Flag("typesounds", false))))
                 .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
                 .Append(Row("Capri's hologram when she talks", HolocallThere ? "Uses Holocall by Issei: her call screen shows in the corner of the browser while she talks, without its sounds." : "Download Holocall by Issei for this feature on the Capri app's mod browser.",
                     HolocallThere ? Switch("x-holo", Flag("holo", false)) : "<span class='v'>Needs Holocall</span>"))
@@ -9084,6 +9177,7 @@ public class CapriInternalBrowser : ICapriMod
             Item(i, T(59), null, true, delegate { OpenTab(null, t.OnReader ? null : t.Address, true, t.Private); });
             Item(i, t.Muted ? T(55) : T(54), "Ctrl+M", t.Viewer.Modern, delegate { Mute(t); });
             Item(i, "Add to bookmarks", "Ctrl+D", !t.OnReader && t.Address != null, delegate { AddToDial(t.Address); });
+            Item(i, "Copy link address", null, !t.OnReader && t.Address != null, delegate { try { Clipboard.SetText(t.Address); } catch (Exception) { } });
             i.Add(new ToolStripSeparator());
             Item(i, T(63), "Ctrl+W", true, delegate { Close(t); });
             Item(i, T(60), null, tabs.Count > 1, delegate { foreach (Tab other in tabs.ToArray()) if (other != t) Close(other); Select(t); });
@@ -9321,6 +9415,7 @@ public class CapriInternalBrowser : ICapriMod
             if (keyData == (Keys.Control | Keys.H)) { ShowHistory(); return true; }
             if (keyData == (Keys.Control | Keys.J)) { tab.Viewer.Downloads(); return true; }
             if (keyData == Keys.F11) { byKey = !full; SetFullScreen(!full); return true; }
+            if (keyData == Keys.Escape && mod.Driving) { mod.Halt(); return true; }
             if (keyData == Keys.Escape && full && byKey) { SetFullScreen(false); return true; }
             if (keyData == (Keys.Control | Keys.D)) { if (!tab.OnReader && tab.Address != null) AddToDial(tab.Address); return true; }
             if (keyData == (Keys.Alt | Keys.Left)) { if (tab.Viewer.CanBack) tab.Viewer.Back(); return true; }
@@ -9392,8 +9487,6 @@ public class CapriInternalBrowser : ICapriMod
             if (VideoInstalled(mod.Folder)) Rebuild(); else GetEdge();
         }
 
-        private Control holo;
-        private bool holoTalking;
 
 
         // ---- Capri's hologram when she talks (Settings > Mods) ----
@@ -9407,17 +9500,26 @@ public class CapriInternalBrowser : ICapriMod
         private System.Windows.Forms.Timer holoBeat;
         private readonly Stopwatch holoClock = Stopwatch.StartNew();
         private double holoShown = -1, holoLeaving = -1, holoUntil, holoLevel, holoLast, holoStarted, holoIdle;
-        private bool holoVoice;
+        private bool holoVoice, holoWarned;
         private string holoText;
         private double HoloNow { get { return holoClock.Elapsed.TotalSeconds; } }
 
         // One of Holocall's own parts, from Holocall itself as Capri loaded it; null when it isn't installed and on.
+        private static readonly Dictionary<string, Type> holocallParts = new Dictionary<string, Type>();
         internal static Type HolocallPart(string name)
         {
+            lock (holocallParts) { Type known; if (holocallParts.TryGetValue(name, out known)) return known; }
             foreach (Assembly a in AppDomain.CurrentDomain.GetAssemblies())
             {
-                try { if (a.GetType("Holocall", false) != null) return a.GetType(name, false); }
-                catch (Exception) { }
+                if (a == typeof(CapriInternalBrowser).Assembly || a.GlobalAssemblyCache) continue;
+                Type[] all;
+                try { all = a.GetTypes(); }
+                catch (ReflectionTypeLoadException partly) { all = partly.Types; }
+                catch (Exception) { continue; }
+                bool holocall = false;
+                Type found = null;
+                foreach (Type t in all) { if (t == null) continue; if (t.Name == "Holocall") holocall = true; if (t.Name == name) found = t; }
+                if (holocall && found != null) { lock (holocallParts) holocallParts[name] = found; return found; }
             }
             return null;
         }
@@ -9432,7 +9534,11 @@ public class CapriInternalBrowser : ICapriMod
                 if (holoVoice) { holoVoice = false; holoUntil = HoloNow + .35; }
                 return;
             }
-            if (!HoloReady()) return;
+            if (!HoloReady())
+            {
+                if (!holoWarned && HolocallPart("Look") == null) { holoWarned = true; mod.Tell("I can't find Holocall running, choom. Turn it on in Capri's mods and my hologram will show up."); }
+                return;
+            }
             double now = HoloNow;
             holoText = line;
             holoVoice = talking;
@@ -9452,7 +9558,7 @@ public class CapriInternalBrowser : ICapriMod
                 Bitmap face = mod.HoloFace();
                 ConstructorInfo make = look.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Bitmap), typeof(float) }, null);
                 holoDraw = look.GetMethod("Draw", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                if (face == null || make == null || holoDraw == null) return false;
+                if (face == null || make == null || holoDraw == null) { mod.Note("hologram: " + (face == null ? "no face art" : "Holocall changed, its call screen can't be borrowed")); holoWarned = true; return false; }
                 float k = Math.Max(.5f, Math.Min(1.2f, Screen.FromControl(this).Bounds.Height / 1080f * .62f));
                 holoLook = make.Invoke(new object[] { face, k });
                 holoWide = (int)look.GetField("Width", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).GetValue(holoLook);
@@ -9472,7 +9578,7 @@ public class CapriInternalBrowser : ICapriMod
                 Disposed += delegate { holoBeat.Dispose(); holoScreen.Dispose(); IDisposable d = holoLook as IDisposable; if (d != null) d.Dispose(); };
                 return true;
             }
-            catch (Exception) { holoLook = null; return false; }
+            catch (Exception error) { holoLook = null; mod.Note("hologram: " + (error.InnerException ?? error).Message); return false; }
         }
 
         private Point HoloSpot() { return holder.PointToScreen(new Point(holder.Width - holoWide - 10, holder.Height - holoHigh - 10)); }
@@ -9574,6 +9680,7 @@ public class CapriInternalBrowser : ICapriMod
             v.Downloading = delegate(object operation, string file, string from) { Downloading(operation, file, from); };
             v.PageMenu = delegate { if (!(t == tab && t.OnReader && t.Special == null && t.Address == null && (t.Page == null || t.Page.Results.Count == 0))) return false; Later(DialMenu); return true; };
             v.Typed = delegate { if (t == tab) Blip("key"); };
+            v.Escaped = delegate { if (mod.Driving) mod.Halt(); };
             v.Tracks = delegate(int count) { t.Tracked = count; if (t == tab) ShowShield(); };
             v.Shield = delegate(string what)
             {
@@ -10228,6 +10335,8 @@ public class CapriInternalBrowser : ICapriMod
         public Func<bool> PageMenu;
         // Typed: a key was pressed on the page (only for typing sounds).
         public Action Typed;
+        // Escaped: Esc was pressed on the page.
+        public Action Escaped;
         // A key pressed while the page has focus: true when Capri Browser used it.
         public Func<Keys, bool> Key;
         public virtual bool Modern { get { return false; } }
@@ -10404,6 +10513,7 @@ public class CapriInternalBrowser : ICapriMod
                         else if (said == "capri-click|plain") { plainClick = DateTime.UtcNow; topClick = DateTime.UtcNow; }
                         else if (said == "capri-click|link") { plainClick = DateTime.MinValue; topClick = DateTime.UtcNow; }
                         else if (said == "capri-key") { if (Typed != null) Typed(); }
+                        else if (said == "capri-esc") { if (Escaped != null) Escaped(); }
                         else if (said != null && said.StartsWith("capri-shield|", StringComparison.Ordinal))
                         {
                             string what = said.Substring(13);
@@ -10584,7 +10694,7 @@ public class CapriInternalBrowser : ICapriMod
     if (window.__capriShieldOn || window.top !== window) return;
     var on = true, last = 0, plain = false, swallow = 0, style = null, scamDone = false, looks = 0;
     function tell(m) { try { chrome.webview.postMessage(m); } catch (e) { } }
-    document.addEventListener('keydown', function (e) { if (!e.repeat && e.key && (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter')) tell('capri-key'); }, true);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tell('capri-esc'); if (!e.repeat && e.key && (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Enter')) tell('capri-key'); }, true);
     window.__capriToast = function (text) {
         if (!document.body) return;
         var t = document.createElement('div');
