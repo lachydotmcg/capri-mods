@@ -6330,6 +6330,7 @@ public class CapriInternalBrowser : ICapriMod
             string need = which == "coop" || which == "join" || which == "go" ? "wiki" : which;
             if (Regex.IsMatch(need, "^(wiki|roulette|guess|quiz|typing|minecraft)$") && Kept("game-" + need).Length == 0) { mod.Tell("Download " + (need == "wiki" ? "Wiki Race" : "that game") + " on the Games page first, choom."); return; }
             if (which == "update") { UpdateAll(); return; }
+            if (which.StartsWith("lb", StringComparison.Ordinal)) { Board(which, all); return; }
             if (which == "get")
             {
                 string id = Regex.Match(all, "[&]id=([a-z0-9-]+)$").Groups[1].Value;
@@ -6397,7 +6398,7 @@ public class CapriInternalBrowser : ICapriMod
                 guessing = null;
                 Retitle(guessTab, guessTab.Title);
                 if (guessTab == tab) address.Text = guessTab.Address ?? "";
-                if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); } else { guessStreak = 0; guessLives--; }
+                if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); Bump("guessbest" + Week(), guessScore, true); } else { guessStreak = 0; guessLives--; }
                 mod.Tell(guessLives < 1 ? "Game over, choom! You got " + guessScore + " right." : right ? (guessStreak > 2 ? guessStreak + " in a row!" : "Got it.") : "Nope. " + guessLives + (guessLives == 1 ? " life" : " lives") + " left.");
                 return;
             }
@@ -6406,6 +6407,7 @@ public class CapriInternalBrowser : ICapriMod
                 int score, best = Stat("survival");
                 int.TryParse(Regex.Match(all, "[&]s=([0-9]+)").Groups[1].Value, out score);
                 Bump("survival", score, true);
+                Bump("survival" + Week(), score, true);
                 mod.Tell(score + (score == 1 ? " word" : " words") + " before they got you." + (score > best ? " New best!" : " Your best is " + best + "."));
                 return;
             }
@@ -6622,8 +6624,114 @@ public class CapriInternalBrowser : ICapriMod
         private void Typed(int wpm, int accuracy)
         {
             int best = Stat("typingbest");
-            if (accuracy >= 90) Bump("typingbest", wpm, true);
+            if (accuracy >= 90) { Bump("typingbest", wpm, true); Bump("typingbest" + Week(), wpm, true); }
             mod.Tell(wpm + " words per minute at " + accuracy + "% accuracy." + (accuracy < 90 ? " Under 90% accuracy doesn't count for your best, choom." : wpm > best ? " New personal best!" : " Your best is " + best + "."));
+        }
+
+        // ---- Weekly leaderboards on Browser addons ----
+        // They pick a name, and "Send my week" opens a GitHub form with only that name and this week's six numbers, which they
+        // send themselves. A check on GitHub refuses rude or taken names, then puts the numbers on LEADERBOARD.md. No keys here.
+        private const string BoardPage = "https://github.com/tob7as/Browser-addons/blob/main/LEADERBOARD.md";
+        private const string BoardNames = "https://raw.githubusercontent.com/tob7as/Browser-addons/main/leaderboard/names.json";
+
+        // Rude bits caught anywhere in a name, and words only caught on their own (so Sussex, grapes and peacocks are fine).
+        // The same lists are in Browser addons' .github/leaderboard.js, which has the final say.
+        private static readonly string[] RudeBits = { "fuck", "fuk", "fack", "fcker", "phuck", "shit", "cunt", "bitch", "nigg", "niga", "nigr", "fag", "retard", "whore", "slut", "pussy", "penis", "vagina", "porn", "nazi", "hitler", "kkk", "twat", "wanker", "jizz", "killyourself", "tranny", "molest", "pedo", "bastard", "asshole", "dildo", "boob", "titty", "horny", "nude", "naked", "admin", "moderator", "official" };
+        private static readonly string[] RudeWords = { "sex", "rape", "cock", "dick", "cum", "anal", "tits", "spic", "chink", "kike", "coon", "paki", "gook", "dyke", "isis", "kys", "rapist", "wank", "ass", "arse", "hoe", "capri", "tobtas", "lachy", "staff", "system", "null", "everyone", "anthropic" };
+
+        // How names are compared: "Cool_Guy" and "cool guy" are the same name.
+        internal static string NameKey(string name) { return Regex.Replace((name ?? "").ToLowerInvariant(), "[ _-]", ""); }
+
+        // Why a name can't be used, or null when it's fine.
+        internal static string BadName(string name)
+        {
+            if (name == null || !Regex.IsMatch(name, @"^[A-Za-z0-9][A-Za-z0-9 _-]{1,14}[A-Za-z0-9]$") || name.Contains("  ")) return "Names are 3 to 16 letters or numbers (spaces, - and _ in the middle are fine), choom.";
+            string spaced = Regex.Replace(Regex.Replace(name, "[_-]", " "), "([a-z])([A-Z])", "$1 $2").ToLowerInvariant(), plain = "";
+            foreach (char ch in spaced)
+            {
+                int k = "01345789@$!|".IndexOf(ch);
+                char c = k >= 0 ? "oieastbgasii"[k] : ch;
+                if ((c >= 'a' && c <= 'z') || c == ' ') plain += c;
+            }
+            string squashed = Regex.Replace(plain.Replace(" ", ""), @"(.)\1+", "$1"), joined = plain.Replace(" ", "");
+            foreach (string bit in RudeBits) if (squashed.Contains(bit) || joined.Contains(bit)) return "That name won't fly on the board, choom. Pick another?";
+            List<string> words = new List<string>(plain.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)) { joined, squashed };
+            foreach (string w in words) foreach (string bad in RudeWords) if (w == bad || Regex.Replace(w, @"(.)\1+", "$1") == bad || w == bad + "s") return "That name won't fly on the board, choom. Pick another?";
+            return null;
+        }
+
+        // This week's numbers for the board: hours watched, videos finished, sites visited, survival, Guess the Site, typing.
+        private string[] BoardWeek()
+        {
+            string w = Week();
+            return new[] { (Stat("watch" + w) / 360 / 10.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture), Stat("videos" + w).ToString(), Stat("pages" + w).ToString(),
+                Stat("survival" + w).ToString(), Stat("guessbest" + w).ToString(), Stat("typingbest" + w).ToString() };
+        }
+
+        // Checks and keeps their name. Run off the UI thread: it looks at the names already on the board.
+        private string SaveBoardName(string name)
+        {
+            name = (name ?? "").Trim();
+            string why = BadName(name);
+            if (why != null) return why;
+            string taken = null;
+            try
+            {
+                using (WebClient web = new WebClient())
+                {
+                    web.Encoding = Encoding.UTF8;
+                    string names = web.DownloadString(BoardNames);
+                    if (names.Length < 2000000 && Regex.IsMatch(names, "\"" + Regex.Escape(NameKey(name)) + "\"\\s*:")) taken = names;
+                }
+            }
+            catch (WebException error) { if (!(error.Response is HttpWebResponse) || ((HttpWebResponse)error.Response).StatusCode != HttpStatusCode.NotFound) taken = ""; }
+            catch (Exception) { taken = ""; }
+            if (taken != null && taken.Length > 0 && Kept("lbclaimed") != NameKey(name)) return "Someone's already got " + name + " on the board, choom. Try another?";
+            Keep("lbname", name);
+            return taken == "" ? "Saved " + name + ". I couldn't check the board just now, so it'll tell you if it's taken when you send your week."
+                : "You're " + name + " on the leaderboards now, choom. Press Send my week to put your numbers up.";
+        }
+
+        private string BoardForm()
+        {
+            string name = Kept("lbname");
+            string[] n = BoardWeek();
+            string body = "Leaderboard name: " + name + "\nWeek: " + Week() + "\nHours watched: " + n[0] + "\nVideos finished: " + n[1] + "\nSites visited: " + n[2]
+                + "\nBest survival run: " + n[3] + "\nBest guess the site run: " + n[4] + "\nBest typing speed: " + n[5]
+                + "\n\n---\nSent from Capri Browser. Only the name and the numbers above go on the board. Please don't add anything else: this page is public.";
+            return "https://github.com/tob7as/Browser-addons/issues/new?title=" + Uri.EscapeDataString("[Leaderboard] " + name) + "&body=" + Uri.EscapeDataString(body);
+        }
+
+        private string BoardBox()
+        {
+            string name = Kept("lbname");
+            string[] n = BoardWeek();
+            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Weekly top 10s on Browser addons: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown, and the boards start fresh every Monday.</div>"
+                + (name.Length > 0 ? "<div class=\"n\" style=\"margin:12px 0 4px;letter-spacing:3px\">" + Esc(name) + "</div>" : "")
+                + "<div class=\"cr\"><input id=\"lb\" maxlength=\"16\" placeholder=\"Leaderboard name\" value=\"" + Esc(name) + "\"><a class=\"bt\" href=\"#\" onclick=\"location.href='" + Own + "play?g=lbname&n='+encodeURIComponent(document.getElementById('lb').value);return false\">"
+                + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my week</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboard</a></div>"
+                + "<div class=\"s\" style=\"margin-top:10px\">This week: " + n[0] + " h watched &middot; " + n[1] + " videos &middot; " + n[2] + " sites &middot; survival " + n[3] + " &middot; Guess the Site " + n[4] + " &middot; " + n[5] + " WPM</div>"
+                + "<div class=\"s\">Send my week opens a short form on GitHub with just that. You sign in and send it yourself, so your GitHub username shows on the form; the board itself only shows your leaderboard name.</div></div>";
+        }
+
+        private void Board(string which, string all)
+        {
+            if (which == "lbopen") { OpenTab(null, BoardPage, true); return; }
+            if (which == "lbsend")
+            {
+                if (Kept("lbname").Length == 0) { mod.Tell("Pick a leaderboard name first, choom."); return; }
+                Keep("lbclaimed", NameKey(Kept("lbname")));
+                OpenTab(null, BoardForm(), true);
+                mod.Tell("Here's your week, choom. Sign in and press Create on GitHub, and you'll be on the board in a minute or two.");
+                return;
+            }
+            string name = "";
+            try { name = Uri.UnescapeDataString(Regex.Match(all, "[&]n=([^&]*)").Groups[1].Value.Replace('+', ' ')); } catch (Exception) { }
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string said = SaveBoardName(name);
+                Post(delegate { foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open); mod.Tell(said); });
+            });
         }
 
         private static string Took(int seconds) { return seconds / 3600 + "h " + seconds / 60 % 60 + "m"; }
@@ -6646,6 +6754,7 @@ public class CapriInternalBrowser : ICapriMod
             if (lobby != null) html.Append("<div class=\"n\" style=\"margin:12px 0 4px;letter-spacing:3px\">").Append(lobby).Append("</div>");
             html.Append("<div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=coop\">New code</a><input id=\"rc\" placeholder=\"CAPRI-XXXX\" maxlength=\"10\"><a class=\"bt\" href=\"#\" onclick=\"location.href='").Append(Own).Append("play?g=join&c='+encodeURIComponent(document.getElementById('rc').value);return false\">Join</a>")
                 .Append(lobby != null ? "<a class=\"bt go\" href=\"" + Own + "play?g=go\">Start 3, 2, 1</a>" : "").Append(lobby != null || race != null ? "<a class=\"bt\" href=\"" + Own + "play?g=cancel\">Cancel race</a>" : "").Append("<a class=\"bt" + (Flag("timed", false) ? " go" : "") + "\" href=\"" + Own + "play?g=timed\">3-minute limit: " + (Flag("timed", false) ? "ON" : "OFF") + "</a>").Append("</div></div>");
+            html.Append("</div>").Append(BoardBox());
             html.Append("</div><h1>THIS WEEK <span>&gt;</span></h1><div class=\"row\">");
             string[,] stats = { { Took(Stat("watch" + Week())), "watching videos" }, { Took(Stat("yt" + Week())), "of that on YouTube" }, { Stat("videos").ToString(), "videos finished, all time" }, { Stat("pages").ToString(), "pages visited, all time" }, { Stat("maxtabs").ToString(), "most tabs at once" }, { Stat("typingbest") + " WPM", "best typing speed" }, { Stat("survival").ToString(), "best survival run" }, { Stat("guessbest").ToString(), "best Guess the Site run" } };
             for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
@@ -10089,7 +10198,7 @@ public class CapriInternalBrowser : ICapriMod
                     mod.Summarise(t.Title, t.Address, "The part they highlighted on \"" + t.Title + "\": " + picked, delegate { }, "Explain the part they highlighted, simply and briefly.");
                 });
             };
-            v.Ended = delegate(string title) { if (!t.Private) Bump("videos", 1); if (!t.Private && Flag("react", true)) mod.React(title); };
+            v.Ended = delegate(string title) { if (!t.Private) { Bump("videos", 1); Bump("videos" + Week(), 1); } if (!t.Private && Flag("react", true)) mod.React(title); };
             v.Opening = delegate(string url) { Later(delegate { OpenTab(null, url, true); }); };
             v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea)$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
             v.Blocked = delegate(string url)
