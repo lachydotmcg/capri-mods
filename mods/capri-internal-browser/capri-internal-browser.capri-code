@@ -6900,7 +6900,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             string[] c = look.Colors;
             return "<style>.tb{position:fixed;z-index:99;max-width:340px;padding:10px 14px 12px;background:" + c[0] + ";border:1px solid " + c[5] + ";"
-                + "box-shadow:0 0 16px rgba(232,66,70,.3);color:" + c[2] + ";font-size:13px;line-height:1.45;pointer-events:none;"
+                + "box-shadow:0 0 16px rgba(232,66,70,.3);color:" + c[2] + ";font-size:13px;line-height:1.45;pointer-events:none;animation:none!important;"
                 + "opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s}.tb.on{opacity:1;transform:none}"
                 + ".tb b{display:block;color:" + c[5] + ";font-size:14px;margin-bottom:4px;font-weight:600}</style>"
                 + "<div id='tb' class='tb'><b></b><span></span></div><script>(function(){var tb=document.getElementById('tb'),t=0,iv=0,cur=null,mx=0,my=0;"
