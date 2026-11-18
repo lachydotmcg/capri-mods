@@ -28,6 +28,9 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "skip 2 minutes" / "go back 30 seconds" / "skip to 3:20" | Skips or rewinds the video |
 | "skip the ad" / "skip intro" | Presses the Skip button with the mouse, if one is showing |
 | "go back to the last video" | Opens the video you watched before this one |
+| "screenshot this" | Asks which part: the whole page, what's on screen, or a bit you drag over |
+| "screenshot the video" / "screenshot the comments" | Finds that part of the page and snaps just it |
+| "bookmark this" / "open my bookmarks" | Bookmarks the page / opens Bookmarks |
 | "reopen that tab" | Brings back the last tab you closed (Ctrl+Shift+T, or Recently closed in the menu) |
 | "summarise this page and add it to my notes" | Says the summary and saves it with the page's name, link and date |
 | "find the price and put it in my Shopping notes" / "add milk to my Shopping notes" | Saves it in that notebook |
@@ -71,7 +74,11 @@ Make your own commands from the sidebar's Custom jobs button (or say "open custo
 
 ## Also in it
 
-- Notes: a notes app with your own notebooks (you make them; Capri only uses yours and asks "Should I add it to Shopping notes?"), search, dates, screenshots, links and pictures
+- **Noted**: notes as a chat with yourself. Leave a note in the box at the bottom (Enter sends), paste or attach pictures and files, add the page's link, and make your own Noted chats (Capri only uses yours and asks "Should I add it to Shopping notes?"). Right-click a card to edit, copy, move or delete it.
+- **Bookmarks**: the star on the sidebar (Ctrl+Shift+B), with folders, search, drag and drop, and Import from Opera GX, Opera, Chrome, Edge, Brave or Vivaldi (read from their file on your PC only when you press it). The star in the address box bookmarks the page (Ctrl+Shift+D).
+- **Extensions**: the puzzle next to Summarise. Add Chrome-style extensions you downloaded yourself (a folder, .zip or .crx), turn them on or off, open their popup or options, or remove them. Capri Browser never downloads extensions for you.
+- **Screenshots**: the camera next to the puzzle. Pick an area (Ctrl+Shift+X), what's on screen, or the whole page. Each one is saved in Pictures\Capri Browser, copied, and can go into Noted.
+- Smoother: side panels slide, tabs grow in and shrink away, a red line glides to the tab you pick, menus fade in
 - Offer to skip (off until you turn it on): when Skip ad, Skip intro or Skip recap shows up, she asks, and presses it on your yes
 - Watch-along (off until you turn it on): she reacts now and then during videos
 - Catch-up: coming back to a tab that changed, she tells you what's new
