@@ -1964,6 +1964,36 @@ public class CapriInternalBrowser : ICapriMod
         return build >= 22000 ? "Windows 11 (build " + build + ")" : build >= 10240 ? "Windows 10 (build " + build + ")" : "Windows";
     }
 
+    // Capri Browser's own server on Cloudflare (Browser addons' worker/): the leaderboards and the bug/idea box, no account needed.
+    internal const string WorkerUrl = "https://capri-browser.tobiasprojects77.workers.dev/";
+
+    // Posts JSON to the worker. Gives { "ok" or "no", what it said }, or null when it couldn't be reached.
+    internal static string[] ToWorker(string path, string json)
+    {
+        string got = null;
+        try
+        {
+            using (WebClient web = new WebClient())
+            {
+                web.Encoding = Encoding.UTF8;
+                web.Headers[HttpRequestHeader.ContentType] = "application/json";
+                got = web.UploadString(WorkerUrl + path, "POST", json);
+            }
+        }
+        catch (WebException error)
+        {
+            HttpWebResponse r = error.Response as HttpWebResponse;
+            if (r == null || (int)r.StatusCode >= 500) return null;
+            try { using (StreamReader read = new StreamReader(r.GetResponseStream(), Encoding.UTF8)) got = read.ReadToEnd(); } catch (Exception) { return null; }
+        }
+        catch (Exception) { return null; }
+        if (got == null || got.Length > 4000) return null;
+        Match say = Regex.Match(got, "\"(?:message|why)\":\"((?:[^\"\\\\]|\\\\.){1,400})\"");
+        string text = "";
+        try { text = say.Success ? Regex.Unescape(say.Groups[1].Value) : ""; } catch (Exception) { }
+        return new[] { got.StartsWith("{\"ok\":true", StringComparison.Ordinal) ? "ok" : "no", Regex.Replace(text, "[\\x00-\\x1f<>]", " ").Trim() };
+    }
+
     internal static string FeedbackUrl(bool bug) { return FeedbackUrl(bug, "", null); }
 
     internal static string FeedbackUrl(bool bug, string title, string written)
@@ -2570,9 +2600,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "30c1312f1c9f0b2a44f20368e98f41d283734f92";
+    private const string AddonsCommit = "273fcbd0d7ee21693ba69d81035d09339ea039ed";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=a17d42fa642f515f72860e78aa1adc35632f5b5953c4e3e979cc399f0bd70707;settings.css=9be37e5f43b601290237c89df60113ab353d653393e9ef13a2c9fb5376807807;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=d6607790ee0a22ca92d1f1f9ceba938c0ce40a397320d4cdd26d162bcdebe621;settings.css=9be37e5f43b601290237c89df60113ab353d653393e9ef13a2c9fb5376807807;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -6814,15 +6844,14 @@ public class CapriInternalBrowser : ICapriMod
             mod.Tell(wpm + " words per minute at " + accuracy + "% accuracy." + (accuracy < 90 ? " Under 90% accuracy doesn't count for your best, choom." : wpm > best ? " New personal best!" : " Your best is " + best + "."));
         }
 
-        // ---- Weekly leaderboards on Browser addons ----
-        // They pick a name, and "Send my week" opens a GitHub form with only that name and this week's six numbers, which they
-        // send themselves. A check on GitHub refuses rude or taken names, then puts the numbers on LEADERBOARD.md. No keys here.
+        // ---- Weekly leaderboards ----
+        // They pick a name, and "Send my week" sends only that name and this week's six numbers to Capri Browser's leaderboard
+        // server, which refuses rude, taken or unbelievable ones. No account needed. LEADERBOARD.md on GitHub is a copy of it.
         private const string BoardPage = "https://github.com/tob7as/Browser-addons/blob/main/LEADERBOARD.md";
-        private const string BoardNames = "https://raw.githubusercontent.com/tob7as/Browser-addons/main/leaderboard/names.json";
-        private const string BoardData = "https://raw.githubusercontent.com/tob7as/Browser-addons/main/leaderboard/board.txt";
+        private const string BoardData = WorkerUrl + "board.txt";
 
         // Rude bits caught anywhere in a name, and words only caught on their own (so Sussex, grapes and peacocks are fine).
-        // The same lists are in Browser addons' .github/leaderboard.js, which has the final say.
+        // The same lists are in Browser addons' worker/capri-worker.js, which has the final say.
         private static readonly string[] RudeBits = { "fuck", "fuk", "fack", "fcker", "phuck", "shit", "cunt", "bitch", "nigg", "niga", "nigr", "fag", "retard", "whore", "slut", "pussy", "penis", "vagina", "porn", "nazi", "hitler", "kkk", "twat", "wanker", "jizz", "killyourself", "tranny", "molest", "pedo", "bastard", "asshole", "dildo", "boob", "titty", "horny", "nude", "naked", "admin", "moderator", "official" };
         private static readonly string[] RudeWords = { "sex", "rape", "cock", "dick", "cum", "anal", "tits", "spic", "chink", "kike", "coon", "paki", "gook", "dyke", "isis", "kys", "rapist", "wank", "ass", "arse", "hoe", "capri", "tobtas", "lachy", "staff", "system", "null", "everyone", "anthropic" };
 
@@ -6855,50 +6884,51 @@ public class CapriInternalBrowser : ICapriMod
                 Stat("survival" + w).ToString(), Stat("guessbest" + w).ToString(), Stat("typingbest" + w).ToString() };
         }
 
-        // Checks and keeps their name. Run off the UI thread: it looks at the names already on the board.
+        // This copy's random leaderboard key, made once and kept here. The server only keeps its hash; it's what lets only you use your name.
+        private string BoardKey()
+        {
+            string key = Kept("lbkey");
+            if (Regex.IsMatch(key, "^[a-f0-9]{32}$")) return key;
+            byte[] b = new byte[16];
+            using (System.Security.Cryptography.RandomNumberGenerator r = System.Security.Cryptography.RandomNumberGenerator.Create()) r.GetBytes(b);
+            key = BitConverter.ToString(b).Replace("-", "").ToLowerInvariant();
+            Keep("lbkey", key);
+            return key;
+        }
+
+        // Checks their name and claims it on the leaderboards. Run off the UI thread.
         private string SaveBoardName(string name)
         {
             name = (name ?? "").Trim();
             string why = BadName(name);
             if (why != null) return why;
-            string taken = null;
-            try
-            {
-                using (WebClient web = new WebClient())
-                {
-                    web.Encoding = Encoding.UTF8;
-                    string names = web.DownloadString(BoardNames);
-                    if (names.Length < 2000000 && Regex.IsMatch(names, "\"" + Regex.Escape(NameKey(name)) + "\"\\s*:")) taken = names;
-                }
-            }
-            catch (WebException error) { if (!(error.Response is HttpWebResponse) || ((HttpWebResponse)error.Response).StatusCode != HttpStatusCode.NotFound) taken = ""; }
-            catch (Exception) { taken = ""; }
-            if (taken != null && taken.Length > 0 && Kept("lbclaimed") != NameKey(name)) return "Someone's already got " + name + " on the board, choom. Try another?";
+            string[] got = ToWorker("name", "{\"name\":" + Quote(name) + ",\"key\":" + Quote(BoardKey()) + "}");
+            if (got != null && got[0] != "ok") return got[1].Length > 0 ? got[1] : "That name didn't work, choom. Try another?";
             Keep("lbname", name);
-            return taken == "" ? "Saved " + name + ". I couldn't check the board just now, so it'll tell you if it's taken when you send your week."
+            return got == null ? "Saved " + name + ". I couldn't reach the leaderboards just now, so it'll be checked when you send your week."
                 : "You're " + name + " on the leaderboards now, choom. Press Send my week to put your numbers up.";
         }
 
-        private string BoardForm()
+        // Sends their name and this week's six numbers, nothing else. Run off the UI thread.
+        private string SendWeek()
         {
-            string name = Kept("lbname");
             string[] n = BoardWeek();
-            string body = "Leaderboard name: " + name + "\nWeek: " + Week() + "\nHours watched: " + n[0] + "\nVideos finished: " + n[1] + "\nSites visited: " + n[2]
-                + "\nBest survival run: " + n[3] + "\nBest guess the site run: " + n[4] + "\nBest typing speed: " + n[5]
-                + "\n\n---\nSent from Capri Browser. Only the name and the numbers above go on the board. Please don't add anything else: this page is public.";
-            return "https://github.com/tob7as/Browser-addons/issues/new?title=" + Uri.EscapeDataString("[Leaderboard] " + name) + "&body=" + Uri.EscapeDataString(body);
+            string[] got = ToWorker("week", "{\"name\":" + Quote(Kept("lbname")) + ",\"key\":" + Quote(BoardKey()) + ",\"week\":" + Quote(Week()) + ",\"hours\":" + n[0] + ",\"videos\":" + n[1]
+                + ",\"sites\":" + n[2] + ",\"survival\":" + n[3] + ",\"guess\":" + n[4] + ",\"wpm\":" + n[5] + "}");
+            if (got == null) return "I couldn't reach the leaderboards just now, choom. Try again in a bit.";
+            return got[1].Length > 0 ? got[1] : got[0] == "ok" ? "You're on this week's boards, choom." : "That didn't go through, choom. Try again in a bit.";
         }
 
         private string BoardBox()
         {
             string name = Kept("lbname");
             string[] n = BoardWeek();
-            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Weekly top 10s on Browser addons: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown, and the boards start fresh every Monday.</div>"
+            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Weekly top 10s: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown, and the boards start fresh every Monday.</div>"
                 + (name.Length > 0 ? "<div class=\"n\" style=\"margin:12px 0 4px;letter-spacing:3px\">" + Esc(name) + "</div>" : "")
                 + "<div class=\"cr\"><input id=\"lb\" maxlength=\"16\" placeholder=\"Leaderboard name\" value=\"" + Esc(name) + "\"><a class=\"bt\" href=\"#\" onclick=\"location.href='" + Own + "play?g=lbname&n='+encodeURIComponent(document.getElementById('lb').value);return false\">"
                 + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my week</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboards</a></div>"
                 + "<div class=\"s\" style=\"margin-top:10px\">This week: " + n[0] + " h watched &middot; " + n[1] + " videos &middot; " + n[2] + " sites &middot; survival " + n[3] + " &middot; Guess the Site " + n[4] + " &middot; " + n[5] + " WPM</div>"
-                + "<div class=\"s\">Send my week opens a short form on GitHub with just that. You sign in and send it yourself, so your GitHub username shows on the form; the board itself only shows your leaderboard name.</div></div>";
+                + "<div class=\"s\">Send my week sends just your leaderboard name and those six numbers. No account needed, and nothing else about you is sent.</div></div>";
         }
 
         // ---- The Leaderboards tab ----
@@ -6970,7 +7000,7 @@ public class CapriInternalBrowser : ICapriMod
                 .Append(week.Length > 0 ? "WEEK <b>" + week.Substring(5) + "</b> &middot; " : "").Append("FRESH BOARDS IN <b>").Append(left).Append(left == 1 ? " DAY" : " DAYS").Append("</b></div></div>")
                 .Append("<div class=\"wk\">").Append(changed.Length > 0 ? "Last change " + changed : "").Append(changed.Length > 0 && Kept("lb-got").Length > 0 ? " &middot; " : "").Append(Kept("lb-got").Length > 0 ? "checked " + Esc(Kept("lb-got")) : "").Append("</div>");
             if (boardBusy && Kept("lb-board").Length == 0) html.Append("<div class=\"warn\">Getting this week's boards...</div>");
-            else if (boardFailed) html.Append("<div class=\"warn\">").Append(Kept("lb-board").Length > 0 ? "Couldn't reach Browser addons just now, so these are from the last check. Press Refresh to try again." : "Couldn't reach Browser addons just now. Press Refresh to try again.").Append("</div>");
+            else if (boardFailed) html.Append("<div class=\"warn\">").Append(Kept("lb-board").Length > 0 ? "Couldn't reach the leaderboards just now, so these are from the last check. Press Refresh to try again." : "Couldn't reach the leaderboards just now. Press Refresh to try again.").Append("</div>");
             else if (week.Length > 0 && week != Week()) html.Append("<div class=\"warn\">These are last week's boards. This week's start as soon as someone sends their week.</div>");
 
             // Where they are on each board, worked out while drawing the boards.
@@ -7021,9 +7051,7 @@ public class CapriInternalBrowser : ICapriMod
             if (which == "lbsend")
             {
                 if (Kept("lbname").Length == 0) { mod.Tell("Pick a leaderboard name first, choom."); return; }
-                Keep("lbclaimed", NameKey(Kept("lbname")));
-                OpenTab(null, BoardForm(), true);
-                mod.Tell("Here's your week, choom. Sign in and press Create on GitHub, and you'll be on the board in a minute or two.");
+                ThreadPool.QueueUserWorkItem(delegate { string said = SendWeek(); Post(delegate { mod.Tell(said); LoadBoards(); }); });
                 return;
             }
             string name = "";
@@ -10727,8 +10755,19 @@ public class CapriInternalBrowser : ICapriMod
                     Func<string, string> part = delegate(string key) { Match one = Regex.Match(w, "&" + key + "=([^&]*)"); try { return one.Success ? Uri.UnescapeDataString(one.Groups[1].Value.Replace('+', ' ')).Trim() : ""; } catch (Exception) { return ""; } };
                     string title = part("t"), said = part("m");
                     if (title.Length == 0 || said.Length == 0) { mod.Tell("Write a title and a few words first, choom."); return; }
-                    OpenTab(null, FeedbackUrl(part("k") == "bug", title.Length > 100 ? title.Substring(0, 100) : title, said.Length > 2000 ? said.Substring(0, 2000) : said), true);
-                    mod.Tell("Here it is on GitHub, choom. Press Submit and it's sent.");
+                    bool bug = part("k") == "bug";
+                    if (title.Length > 100) title = title.Substring(0, 100);
+                    if (said.Length > 2000) said = said.Substring(0, 2000);
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        string[] got = ToWorker("feedback", "{\"kind\":\"" + (bug ? "bug" : "idea") + "\",\"title\":" + Quote(title) + ",\"text\":" + Quote(said) + ",\"version\":\"2.0.0\",\"windows\":" + Quote(WindowsName()) + "}");
+                        Post(delegate
+                        {
+                            if (got != null && got[0] == "ok") { t.Viewer.Script("(function(){var f=document.querySelector('form.fb');if(f)f.reset();return 1})()"); mod.Tell("Sent, choom. Thanks! It went straight to the Capri Browser team."); }
+                            else if (got != null) mod.Tell(got[1].Length > 0 ? got[1] : "That didn't send, choom. Try again in a bit.");
+                            else { OpenTab(null, FeedbackUrl(bug, title, said), true); mod.Tell("I couldn't reach the bug box, so here it is on GitHub instead. Press Submit there to send it."); }
+                        });
+                    });
                 }
                 else if (w == "quiet") { UpdateAll(true, null); mod.Tell("Downloading the rest in the background, choom. Browse away."); t.Special = null; ShowReader(t); }
                 else { t.Special = null; ShowReader(t); }
