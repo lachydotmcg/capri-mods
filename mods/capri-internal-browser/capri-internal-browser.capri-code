@@ -1758,11 +1758,20 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // ---- Bugs and ideas: a GitHub issue form, filled in with nothing about them, that they send themselves ----
-    internal static string FeedbackUrl(bool bug)
+    private static string WindowsName()
     {
-        string body = bug ? "**What happened?**\n\n\n**What did you expect to happen?**\n\n\n**How to make it happen again**\n1. \n2. \n\n" : "**Your idea**\n\n\n**Why it would be good**\n\n\n";
-        body += "---\nCapri Browser 2.0.0 on Windows " + Environment.OSVersion.Version.Major + "." + Environment.OSVersion.Version.Build + "\n(Please don't put passwords or personal details here: this page is public.)";
-        return "https://github.com/tob7as/Browser-addons/issues/new?title=" + Uri.EscapeDataString(bug ? "[Bug] " : "[Idea] ") + "&body=" + Uri.EscapeDataString(body);
+        int build = 0;
+        try { using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion")) if (k != null) int.TryParse(k.GetValue("CurrentBuildNumber") as string, out build); } catch (Exception) { }
+        return build >= 22000 ? "Windows 11 (build " + build + ")" : build >= 10240 ? "Windows 10 (build " + build + ")" : "Windows";
+    }
+
+    internal static string FeedbackUrl(bool bug) { return FeedbackUrl(bug, "", null); }
+
+    internal static string FeedbackUrl(bool bug, string title, string written)
+    {
+        string body = written != null ? written + "\n\n" : bug ? "**What happened?**\n\n\n**What did you expect to happen?**\n\n\n**How to make it happen again**\n1. \n2. \n\n" : "**Your idea**\n\n\n**Why it would be good**\n\n\n";
+        body += "---\nCapri Browser 2.0.0 on " + WindowsName() + "\n(Please don't put passwords or personal details here: this page is public.)";
+        return "https://github.com/tob7as/Browser-addons/issues/new?title=" + Uri.EscapeDataString((bug ? "[Bug] " : "[Idea] ") + title) + "&body=" + Uri.EscapeDataString(body);
     }
 
     // A page saying "your PC is infected, call this number".
@@ -2362,9 +2371,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "2051e0d6a955d249e5f867c90ad44263e7ceb2df";
+    private const string AddonsCommit = "833c19b4e038effca8d57980ca29dae887da0f9e";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=caece2250d908d62de1682b814b809d962af02c67300daeb529b31f060bc0f13;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=60d547f1c9d7a67fd765eff841addf173b77d2d6044c403d0ae906d260a75c7c;pages/pages.css=932da063ed4f1a0b8883397895c5339cac7a67fa92bbb9efbe086e2d6d2fde21;pages/welcome.html=d75b43dbf5aaf5e9f5d3202b0955f0a941e9cf943ee0d957a12a3434f9a28adc;settings.css=b208f29459ae78a7ca903cca3ee5bf5bcbc9d73babcffc6793de1fb27263003f;whats-new.txt=6e6a619d0c9322eab44efeaf40b8ae2a15bc978c965a63516b89e59cf441a283";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=caece2250d908d62de1682b814b809d962af02c67300daeb529b31f060bc0f13;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=60d547f1c9d7a67fd765eff841addf173b77d2d6044c403d0ae906d260a75c7c;pages/pages.css=932da063ed4f1a0b8883397895c5339cac7a67fa92bbb9efbe086e2d6d2fde21;pages/welcome.html=4b13bcf2eb96717ea981976d6d0bd81d5d9ab7c552c57a5e74ad7811c36c436b;settings.css=b208f29459ae78a7ca903cca3ee5bf5bcbc9d73babcffc6793de1fb27263003f;whats-new.txt=6e6a619d0c9322eab44efeaf40b8ae2a15bc978c965a63516b89e59cf441a283";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -9739,8 +9748,8 @@ public class CapriInternalBrowser : ICapriMod
             }
             else { css = SafeCss(got[0]) ? got[0] : ""; body = got[1]; }
             for (int i = 0; i < c.Length; i++) css = css.Replace("%C" + i + "%", c[i]);
-            return Start(mod.look, css).Replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';style-src 'unsafe-inline';img-src data:;form-action 'none'\">").Append(body.Replace("%OWN%", Own).Replace("%DL%", dlNote == null ? "" : "<p style=\"border:1px solid " + c[5] + ";padding:10px 14px\">" + WebUtility.HtmlEncode(dlNote) + "</p>"))
-                .Append("<div style=\"margin:28px 40px;padding:14px 18px;border:1px solid " + c[6] + ";max-width:640px\"><b style=\"color:" + c[5] + ";letter-spacing:2px\">FOUND A BUG? GOT AN IDEA?</b>"
+            return Start(mod.look, css).Replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';style-src 'unsafe-inline';img-src data:;form-action " + Own.TrimEnd('/') + "\">").Append(body.Replace("%OWN%", Own).Replace("%DL%", dlNote == null ? "" : "<p style=\"border:1px solid " + c[5] + ";padding:10px 14px\">" + WebUtility.HtmlEncode(dlNote) + "</p>"))
+                .Append(body.Contains("value=\"send\"") ? "" : "<div style=\"margin:28px 40px;padding:14px 18px;border:1px solid " + c[6] + ";max-width:640px\"><b style=\"color:" + c[5] + ";letter-spacing:2px\">FOUND A BUG? GOT AN IDEA?</b>"
                 + "<p style=\"color:" + c[3] + ";font-size:13px\">Opens a short form on GitHub. You sign in and send it yourself, and nothing about you is added to it.</p>"
                 + "<a style=\"color:" + c[4] + ";margin-right:22px\" href=\"" + Own + "go?w=bug\">REPORT A BUG</a><a style=\"color:" + c[4] + "\" href=\"" + Own + "go?w=idea\">SUGGEST AN IDEA</a></div>")
                 .Append("</body></html>").ToString();
@@ -10156,7 +10165,7 @@ public class CapriInternalBrowser : ICapriMod
             };
             v.Ended = delegate(string title) { if (!t.Private) { Bump("videos", 1); Bump("videos" + Week(), 1); } if (!t.Private && Flag("react", true)) mod.React(title); };
             v.Opening = delegate(string url) { Later(delegate { OpenTab(null, url, true); }); };
-            v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea)$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
+            v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea|send&k=(bug|idea)&t=[^&#]{0,600}&m=[^&#]{0,12000})$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
             v.Blocked = delegate(string url)
             {
                 t.OnReader = true;
@@ -10318,6 +10327,14 @@ public class CapriInternalBrowser : ICapriMod
                 else if (w == "settings") SettingsShown = true;
                 else if (w == "download") { dlNote = "Starting the download..."; ShowReader(t); UpdateAll(false, t); }
                 else if (w == "bug" || w == "idea") OpenTab(null, FeedbackUrl(w == "bug"), true);
+                else if (w.StartsWith("send&", StringComparison.Ordinal))
+                {
+                    Func<string, string> part = delegate(string key) { Match one = Regex.Match(w, "&" + key + "=([^&]*)"); try { return one.Success ? Uri.UnescapeDataString(one.Groups[1].Value.Replace('+', ' ')).Trim() : ""; } catch (Exception) { return ""; } };
+                    string title = part("t"), said = part("m");
+                    if (title.Length == 0 || said.Length == 0) { mod.Tell("Write a title and a few words first, choom."); return; }
+                    OpenTab(null, FeedbackUrl(part("k") == "bug", title.Length > 100 ? title.Substring(0, 100) : title, said.Length > 2000 ? said.Substring(0, 2000) : said), true);
+                    mod.Tell("Here it is on GitHub, choom. Press Submit and it's sent.");
+                }
                 else if (w == "quiet") { UpdateAll(true, null); mod.Tell("Downloading the rest in the background, choom. Browse away."); t.Special = null; ShowReader(t); }
                 else { t.Special = null; ShowReader(t); }
                 return;
