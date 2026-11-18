@@ -2815,38 +2815,8 @@ public class CapriInternalBrowser : ICapriMod
         return true;
     }
 
-    // Every file out of a zip into folder (an extension they picked). Names that would climb out of the folder are skipped.
-    internal static string UnzipAll(byte[] zip, string folder)
-    {
-        int end = -1;
-        for (int i = zip.Length - 22; i >= Math.Max(0, zip.Length - 65557); i--) if (BitConverter.ToUInt32(zip, i) == 0x06054b50) { end = i; break; }
-        if (end < 0) return "it isn't a zip";
-        int count = BitConverter.ToUInt16(zip, end + 10), at = (int)BitConverter.ToUInt32(zip, end + 16);
-        string root = Path.GetFullPath(folder).TrimEnd('\\') + "\\";
-        long total = 0;
-        for (int n = 0; n < count; n++)
-        {
-            if (at + 46 > zip.Length || BitConverter.ToUInt32(zip, at) != 0x02014b50) return "the zip is damaged";
-            int method = BitConverter.ToUInt16(zip, at + 10), packed = (int)BitConverter.ToUInt32(zip, at + 20), size = (int)BitConverter.ToUInt32(zip, at + 24);
-            int nameLength = BitConverter.ToUInt16(zip, at + 28), extra = BitConverter.ToUInt16(zip, at + 30), comment = BitConverter.ToUInt16(zip, at + 32);
-            int local = (int)BitConverter.ToUInt32(zip, at + 42);
-            string name = Encoding.UTF8.GetString(zip, at + 46, nameLength).Replace('/', '\\');
-            at += 46 + nameLength + extra + comment;
-            if (name.EndsWith("\\")) continue;
-            string target = Path.GetFullPath(Path.Combine(folder, name));
-            if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
-            total += size;
-            if (total > 200L * 1024 * 1024) return "it's too big";
-            int data = local + 30 + BitConverter.ToUInt16(zip, local + 26) + BitConverter.ToUInt16(zip, local + 28);
-            Directory.CreateDirectory(Path.GetDirectoryName(target));
-            if (method == 0) { using (FileStream o = File.Create(target)) o.Write(zip, data, size); continue; }
-            if (method != 8) return "it uses a kind of zip I can't open";
-            using (MemoryStream input = new MemoryStream(zip, data, packed))
-            using (DeflateStream inflate = new DeflateStream(input, CompressionMode.Decompress))
-            using (FileStream o = File.Create(target)) inflate.CopyTo(o);
-        }
-        return null;
-    }
+    // Every file out of a zip into folder (an extension they picked).
+    internal static string UnzipAll(byte[] zip, string folder) { return Untar(zip, folder, null); }
 
     // ---- Capri Browser: a page beside her Mainframe ----
 
@@ -6280,31 +6250,95 @@ public class CapriInternalBrowser : ICapriMod
 
         private static string Num(double n) { return n.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture); }
 
-        // Edge's picture of the page, from the DevTools call.
-        private void Picture(System.Threading.Tasks.Task<string> run, Action<Bitmap> got)
+        // What's on screen in the tab, as Edge saves it to a picture file.
+        private void Still(Tab t, Action<Bitmap> got)
         {
-            if (run == null) { got(null); return; }
-            run.ContinueWith(delegate(System.Threading.Tasks.Task<string> done)
+            string file = Path.Combine(Path.GetTempPath(), "capri-shot-" + Guid.NewGuid().ToString("N") + ".png");
+            t.Viewer.Shot(file, delegate(string failed)
             {
                 Bitmap b = null;
-                try
-                {
-                    Match m = Regex.Match(done.Result ?? "", "\"data\"\\s*:\\s*\"([^\"]+)\"");
-                    if (m.Success)
-                        using (MemoryStream s = new MemoryStream(Convert.FromBase64String(m.Groups[1].Value.Replace("\\/", "/"))))
-                        using (Image i = Image.FromStream(s)) b = new Bitmap(i);
-                }
-                catch (Exception) { }
+                if (failed == null) try { using (Image i = Image.FromFile(file)) b = new Bitmap(i); } catch (Exception) { }
+                try { File.Delete(file); } catch (Exception) { }
                 Post(delegate { got(b); });
             });
         }
 
-        // A part of the page by its place on the page (CSS pixels from the top left of the whole page), drawn even if it's off screen.
+        private const string PagePlace = "JSON.stringify([innerWidth,innerHeight,scrollX,scrollY])";
+
+        // A part of the page by its place on the page (CSS pixels from the top left of the whole page). Taller than the
+        // screen, it scrolls down a screen at a time and joins the pictures, then puts the page back where it was.
         private void ShotOf(Tab t, double x, double y, double w, double h, Action<Bitmap> got)
         {
-            w = Math.Max(1, Math.Min(w, 4000));
-            h = Math.Max(1, Math.Min(h, 16000));
-            Picture(t.Viewer.Cdp("Page.captureScreenshot", "{\"format\":\"png\",\"captureBeyondViewport\":true,\"clip\":{\"x\":" + Num(Math.Max(0, x)) + ",\"y\":" + Num(Math.Max(0, y)) + ",\"width\":" + Num(w) + ",\"height\":" + Num(h) + ",\"scale\":1}}"), got);
+            System.Threading.Tasks.Task<string> ask = t.Viewer.Script(PagePlace);
+            if (ask == null) { got(null); return; }
+            ask.ContinueWith(delegate(System.Threading.Tasks.Task<string> done)
+            {
+                string[] p = new string[0];
+                try { p = Unjson(done.Result).Trim('[', ']').Split(','); } catch (Exception) { }
+                Post(delegate
+                {
+                    double iw, ih, sx, sy;
+                    System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+                    if (p.Length != 4 || !double.TryParse(p[0], System.Globalization.NumberStyles.Float, inv, out iw) || !double.TryParse(p[1], System.Globalization.NumberStyles.Float, inv, out ih) || !double.TryParse(p[2], System.Globalization.NumberStyles.Float, inv, out sx) || !double.TryParse(p[3], System.Globalization.NumberStyles.Float, inv, out sy) || iw < 1 || ih < 1) { got(null); return; }
+                    x = Math.Max(sx, Math.Min(x, sx + iw - 1));
+                    w = Math.Max(1, Math.Min(w, sx + iw - x));
+                    y = Math.Max(0, y);
+                    h = Math.Max(1, Math.Min(h, 12000));
+                    Bitmap whole = null;
+                    double filled = y, k = 0;
+                    Action<double> band = null;
+                    Action finish = delegate
+                    {
+                        t.Viewer.Script("scrollTo({left:" + Num(sx) + ",top:" + Num(sy) + ",behavior:'instant'})");
+                        got(whole);
+                    };
+                    band = delegate(double top)
+                    {
+                        System.Threading.Tasks.Task<string> moved = t.Viewer.Script("scrollTo({left:" + Num(sx) + ",top:" + Num(top) + ",behavior:'instant'});scrollY");
+                        if (moved == null) { finish(); return; }
+                        moved.ContinueWith(delegate(System.Threading.Tasks.Task<string> m)
+                        {
+                            double at = top;
+                            try { double.TryParse(Unjson(m.Result), System.Globalization.NumberStyles.Float, inv, out at); } catch (Exception) { }
+                            Post(delegate
+                            {
+                                System.Windows.Forms.Timer settle = new System.Windows.Forms.Timer { Interval = 220 };
+                                settle.Tick += delegate
+                                {
+                                    settle.Stop();
+                                    settle.Dispose();
+                                    Still(t, delegate(Bitmap b)
+                                    {
+                                        if (b == null) { if (whole != null) whole.Dispose(); whole = null; finish(); return; }
+                                        if (whole == null) { k = b.Width / iw; whole = new Bitmap(Math.Max(1, (int)(w * k)), Math.Max(1, (int)(h * k))); }
+                                        double from = Math.Max(filled, at), to = Math.Min(y + h, at + ih);
+                                        if (to > from)
+                                            using (Graphics g = Graphics.FromImage(whole))
+                                                g.DrawImage(b, new RectangleF(0, (float)((from - y) * k), (float)(w * k), (float)((to - from) * k)), new RectangleF((float)((x - sx) * k), (float)((from - at) * k), (float)(w * k), (float)((to - from) * k)), GraphicsUnit.Pixel);
+                                        b.Dispose();
+                                        bool stuck = to <= filled;
+                                        filled = Math.Max(filled, to);
+                                        if (filled >= y + h - 1 || stuck) finish(); else band(filled);
+                                    });
+                                };
+                                settle.Start();
+                            });
+                        });
+                    };
+                    // Already all on screen: one picture, no scrolling.
+                    if (y >= sy && y + h <= sy + ih)
+                        Still(t, delegate(Bitmap b)
+                        {
+                            if (b == null) { got(null); return; }
+                            k = b.Width / iw;
+                            Rectangle cut = Rectangle.Intersect(new Rectangle((int)((x - sx) * k), (int)((y - sy) * k), Math.Max(1, (int)(w * k)), Math.Max(1, (int)(h * k))), new Rectangle(0, 0, b.Width, b.Height));
+                            Bitmap part = cut.Width > 0 && cut.Height > 0 ? b.Clone(cut, b.PixelFormat) : null;
+                            b.Dispose();
+                            got(part);
+                        });
+                    else band(y);
+                });
+            });
         }
 
         private const string PageSize = "(function(){var d=document.documentElement,b=document.body||d;return [0,0,Math.max(d.scrollWidth,b.scrollWidth,innerWidth),Math.max(d.scrollHeight,b.scrollHeight,innerHeight)].join(',')})()";
@@ -6327,7 +6361,7 @@ public class CapriInternalBrowser : ICapriMod
             Bump("shots", 1);
             if (how == "visible" || how == "area")
             {
-                Picture(t.Viewer.Cdp("Page.captureScreenshot", "{\"format\":\"png\"}"), delegate(Bitmap b)
+                Still(t, delegate(Bitmap b)
                 {
                     if (b == null || how == "visible") { ShotDone(t, b, said); return; }
                     PickArea(t, b, said);
@@ -8497,35 +8531,41 @@ public class CapriInternalBrowser : ICapriMod
         catch (Exception error) { return Inner(error).Message; }
     }
 
-    // One file out of a zip (a .nupkg is one), with only what System.dll has: the central directory and DeflateStream.
+    // One file out of a zip (a .nupkg is one), unpacked by Windows' own tar.exe.
     public static byte[] Unzip(byte[] zip, string name)
     {
-        int end = -1;
-        for (int i = zip.Length - 22; i >= Math.Max(0, zip.Length - 65557); i--) if (BitConverter.ToUInt32(zip, i) == 0x06054b50) { end = i; break; }
-        if (end < 0) return null;
-        int count = BitConverter.ToUInt16(zip, end + 10), at = (int)BitConverter.ToUInt32(zip, end + 16);
-        for (int n = 0; n < count; n++)
+        string folder = Path.Combine(Path.GetTempPath(), "capri-unzip-" + Guid.NewGuid().ToString("N"));
+        try
         {
-            if (BitConverter.ToUInt32(zip, at) != 0x02014b50) return null;
-            int method = BitConverter.ToUInt16(zip, at + 10), packed = (int)BitConverter.ToUInt32(zip, at + 20), size = (int)BitConverter.ToUInt32(zip, at + 24);
-            int nameLength = BitConverter.ToUInt16(zip, at + 28), extra = BitConverter.ToUInt16(zip, at + 30), comment = BitConverter.ToUInt16(zip, at + 32);
-            int local = (int)BitConverter.ToUInt32(zip, at + 42);
-            if (Encoding.UTF8.GetString(zip, at + 46, nameLength) == name)
-            {
-                int data = local + 30 + BitConverter.ToUInt16(zip, local + 26) + BitConverter.ToUInt16(zip, local + 28);
-                if (method == 0) { byte[] raw = new byte[size]; Buffer.BlockCopy(zip, data, raw, 0, size); return raw; }
-                if (method != 8) return null;
-                using (MemoryStream input = new MemoryStream(zip, data, packed))
-                using (DeflateStream inflate = new DeflateStream(input, CompressionMode.Decompress))
-                using (MemoryStream output = new MemoryStream(size))
-                {
-                    inflate.CopyTo(output);
-                    return output.ToArray();
-                }
-            }
-            at += 46 + nameLength + extra + comment;
+            if (Untar(zip, folder, name) != null) return null;
+            string file = Path.Combine(folder, name.Replace('/', '\\'));
+            return File.Exists(file) ? File.ReadAllBytes(file) : null;
         }
-        return null;
+        catch (Exception) { return null; }
+        finally { try { Directory.Delete(folder, true); } catch (Exception) { } }
+    }
+
+    // Files out of a zip into folder (just only, when given) with Windows' own tar, which reads zips and won't write
+    // outside the folder. Null when it worked.
+    internal static string Untar(byte[] zip, string folder, string only)
+    {
+        string file = Path.Combine(Path.GetTempPath(), "capri-zip-" + Guid.NewGuid().ToString("N") + ".zip");
+        try
+        {
+            string windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows), tar = Path.Combine(windows, "Sysnative\\tar.exe");
+            if (!File.Exists(tar)) tar = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "tar.exe");
+            if (!File.Exists(tar)) return "Windows' tar.exe isn't on this PC";
+            File.WriteAllBytes(file, zip);
+            Directory.CreateDirectory(folder);
+            System.Diagnostics.ProcessStartInfo start = new System.Diagnostics.ProcessStartInfo(tar, "-xf \"" + file + "\" -C \"" + folder.TrimEnd('\\') + "\"" + (only == null ? "" : " \"" + only + "\"")) { UseShellExecute = false, CreateNoWindow = true };
+            using (System.Diagnostics.Process run = System.Diagnostics.Process.Start(start))
+            {
+                if (!run.WaitForExit(120000)) { try { run.Kill(); } catch (Exception) { } return "unpacking took too long"; }
+                return run.ExitCode == 0 ? null : "it couldn't be unpacked";
+            }
+        }
+        catch (Exception error) { return error.Message; }
+        finally { try { File.Delete(file); } catch (Exception) { } }
     }
 
     private static byte[] DownloadBytes(string address, Action<int> progress)
@@ -8705,14 +8745,9 @@ public class CapriInternalBrowser : ICapriMod
             if (!link.Success) continue;
             string address = WebUtility.HtmlDecode(link.Groups[1].Value);
             Match coded = Regex.Match(address, @"^https://www\.bing\.com/ck/a\?.*?[?&]u=a1([A-Za-z0-9_-]+)");
-            if (coded.Success)
-            {
-                string base64 = coded.Groups[1].Value.Replace('-', '+').Replace('_', '/');
-                try { address = Encoding.UTF8.GetString(Convert.FromBase64String(base64.PadRight(base64.Length + (4 - base64.Length % 4) % 4, '='))); }
-                catch (FormatException) { continue; }
-            }
+            // Bing's own forwarding link is kept as it is: opening it takes them to the site.
             Uri uri;
-            if (!Uri.TryCreate(address, UriKind.Absolute, out uri) || (uri.Scheme != "http" && uri.Scheme != "https") || uri.Host.EndsWith("bing.com", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Uri.TryCreate(address, UriKind.Absolute, out uri) || (uri.Scheme != "http" && uri.Scheme != "https") || (!coded.Success && uri.Host.EndsWith("bing.com", StringComparison.OrdinalIgnoreCase))) continue;
             Match snippet = Regex.Match(body, @"<p\b[^>]*>(.*?)</p>", RegexOptions.Singleline);
             found.Add(new Result { Title = Clip(Flat(link.Groups[2].Value), 120), Address = uri.AbsoluteUri, Snippet = snippet.Success ? Clip(Flat(snippet.Groups[1].Value), 300) : "" });
             if (found.Count == 8) break;
