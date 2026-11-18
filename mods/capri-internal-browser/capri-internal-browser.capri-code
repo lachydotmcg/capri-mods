@@ -3671,8 +3671,9 @@ public class CapriInternalBrowser : ICapriMod
             SuspendLayout();
             if (on) notesWere = notes.Visible;
             strip.Visible = top.Visible = side.Visible = !on;
-            notes.Visible = !on && notesWere;
-            if (on) marks.Visible = false;
+            notes.Visible = false;
+            if (!on && notesWere) ToggleSide(notes, NotesWide());
+            marks.Visible = false;
             loading.Visible = !on && tab != null && tab.Busy;
             if (on) SettingsShown = false;
             BrowserWindow form = whole as BrowserWindow;
@@ -4764,7 +4765,7 @@ public class CapriInternalBrowser : ICapriMod
             if (form != null) form.WindowState = form.WindowState == FormWindowState.Maximized ? FormWindowState.Normal : FormWindowState.Maximized;
         }
 
-        internal void Framed(bool maximised) { if (caption[1] != null) caption[1].Text = maximised ? "" : ""; }
+        internal void Framed(bool maximised) { if (caption[1] != null) caption[1].Text = maximised ? "\uE923" : "\uE922"; }
 
         // Capri's logo at the far left, and minimise, maximise and close at the right, all in the tab strip.
         private void BuildCaption()
@@ -4777,7 +4778,7 @@ public class CapriInternalBrowser : ICapriMod
             };
             logo.Click += delegate { if (!JustShut) PageMenu().Show(logo, new Point(0, logo.Height)); };
             new ToolTip().SetToolTip(logo, "Capri Browser");
-            string[] icons = { "", "", "" }, tips = { "Minimise", "Maximise", "Close" };
+            string[] icons = { "\uE921", "\uE922", "\uE8BB" }, tips = { "Minimise", "Maximise", "Close" };
             for (int i = 0; i < 3; i++)
             {
                 int which = i;
@@ -4939,28 +4940,150 @@ public class CapriInternalBrowser : ICapriMod
         }
 
         private readonly Panel marks = new Panel();
-        private int sliding;   // the width a side panel is sliding to or from, so its cards keep their size meanwhile
+        // Counts each panel's slides, so a newer one wins over one still running.
+        private readonly Dictionary<Panel, int> slideCount = new Dictionary<Panel, int>();
+        private int Slides(Panel p) { int n; return slideCount.TryGetValue(p, out n) ? n : 0; }
+        private int NextSlide(Panel p) { slideCount[p] = Slides(p) + 1; return slideCount[p]; }
 
-        // Slides Noted or Bookmarks out from the sidebar, or back in. Only one is out at a time.
+        // Noted and Bookmarks live over the page, in the page's own area. Opening slides one in from the sidebar's edge
+        // (only its position moves, so nothing re-lays out while it does); closing slides it back. Pinned, it sits beside
+        // the page instead, and stays when they click the page.
+        private bool PinnedSide(Panel p) { return Kept(p == notes ? "pin-noted" : "pin-marks") == "1"; }
+
+        private void PlaceSide(Panel p)
+        {
+            if (p.Dock == DockStyle.Left) return;
+            p.Top = 0;
+            p.Height = holder.ClientSize.Height;
+        }
+
         private void ToggleSide(Panel p, int width)
         {
             if (full) return;
-            if (p.Visible && p.Width > 1) { SlideIn(p, width); return; }
-            foreach (Panel other in new[] { notes, marks }) if (other != p && other.Visible) other.Visible = false;
-            sliding = width;
-            p.Width = 1;
+            if (p.Visible) { SlideIn(p, width); return; }
+            foreach (Panel other in new[] { notes, marks }) if (other != p && other.Visible) SlideIn(other, other.Width);
+            int my = NextSlide(p);
+            p.Dock = DockStyle.None;
+            p.Width = width;
+            PlaceSide(p);
+            p.Left = -width;
             p.Visible = true;
-            Ease(p, 210, delegate(float e) { p.Width = Math.Max(1, (int)(width * e)); }, delegate { p.Width = width; sliding = 0; });
+            p.BringToFront();
+            Ease(p, 240, delegate(float e) { if (my == Slides(p)) p.Left = (int)(-width * (1 - e)); }, delegate
+            {
+                if (my != Slides(p)) return;
+                p.Left = 0;
+                if (PinnedSide(p)) { p.Dock = DockStyle.Left; p.SendToBack(); }
+            });
         }
 
         private void SlideIn(Panel p, int width)
         {
-            sliding = width;
-            Ease(p, 170, delegate(float e) { p.Width = Math.Max(1, (int)(width * (1 - e))); }, delegate { p.Visible = false; p.Width = width; sliding = 0; });
+            if (!p.Visible) return;
+            int my = NextSlide(p);
+            if (p.Dock == DockStyle.Left) { p.Dock = DockStyle.None; PlaceSide(p); p.Left = 0; p.BringToFront(); }
+            int from = p.Left;
+            Ease(p, 190, delegate(float e) { if (my == Slides(p)) p.Left = from + (int)((-p.Width - from) * e); }, delegate
+            {
+                if (my != Slides(p)) return;
+                p.Visible = false;
+                p.Left = 0;
+            });
         }
 
-        // Shows a side panel at once (when Capri adds a note), sliding it out if it was in.
+        // Shows a side panel (when Capri adds a note), sliding it out if it was in.
         private void ShowSide(Panel p, int width) { if (!p.Visible) ToggleSide(p, width); }
+
+        // Clicking the page closes a panel that isn't pinned, like Opera's.
+        private void PageClicked()
+        {
+            foreach (Panel p in new[] { notes, marks }) if (p.Visible && p.Dock != DockStyle.Left && !PinnedSide(p) && Form.ActiveForm == FindForm()) SlideIn(p, p.Width);
+        }
+
+        // The top of a side panel: its icon and name, a pin, and close.
+        private Panel SideHead(Panel p, string glyph, string name, out Label title)
+        {
+            Panel head = new Panel { Dock = DockStyle.Top, Height = 52 };
+            Label icon = new Label { Text = glyph, Dock = DockStyle.Left, Width = glyph == null ? 16 : 46, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font("Segoe MDL2 Assets", 14f), Tag = "red" };
+            title = new Label { Text = name, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(UiBold, 14f), UseMnemonic = false, AutoEllipsis = true };
+            Button shut = Flat("\uE711", "Close (Esc)", DockStyle.Right, 40);
+            Button pin = Flat("\uE718", "Pin beside the page", DockStyle.Right, 36);
+            string key = p == notes ? "pin-noted" : "pin-marks";
+            Action showPin = delegate { bool on = Kept(key) == "1"; pin.Text = on ? "\uE841" : "\uE718"; pin.Tag = on ? "red" : null; pin.ForeColor = on ? mod.look.Shade(5) : mod.look.Shade(3); };
+            pin.Click += delegate
+            {
+                bool on = Kept(key) != "1";
+                Keep(key, on ? "1" : "0");
+                showPin();
+                if (on) { p.Dock = DockStyle.Left; p.SendToBack(); }
+                else { p.Dock = DockStyle.None; PlaceSide(p); p.Left = 0; p.BringToFront(); }
+            };
+            shut.Click += delegate { SlideIn(p, p.Width); };
+            head.Controls.Add(title);
+            head.Controls.Add(pin);
+            head.Controls.Add(shut);
+            head.Controls.Add(icon);
+            p.VisibleChanged += delegate { showPin(); };
+            // The right edge drags to make it wider; a thin line and a soft shadow mark it.
+            Panel grip = new Panel { Dock = DockStyle.Right, Width = 6, Cursor = Cursors.SizeWE };
+            bool dragging = false;
+            int from = 0, was = 0;
+            grip.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Look look = mod.look;
+                using (System.Drawing.Drawing2D.LinearGradientBrush shade = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(0, 0, grip.Width, Math.Max(1, grip.Height)), look.Shade(1), Mix(look.Shade(1), Color.Black, .45f), 0f))
+                    e.Graphics.FillRectangle(shade, 0, 0, grip.Width, grip.Height);
+                using (Pen line = new Pen(dragging ? look.Shade(5) : look.Shade(6))) e.Graphics.DrawLine(line, grip.Width - 1, 0, grip.Width - 1, grip.Height);
+            };
+            grip.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button != MouseButtons.Left) return; dragging = true; from = Cursor.Position.X; was = p.Width; grip.Capture = true; grip.Invalidate(); };
+            grip.MouseMove += delegate { if (dragging) p.Width = Math.Max(260, Math.Min(Math.Min(720, holder.Width - 200), was + Cursor.Position.X - from)); };
+            grip.MouseUp += delegate { if (!dragging) return; dragging = false; grip.Capture = false; grip.Invalidate(); Keep(p == notes ? "noteswidth" : "markswidth", p.Width.ToString()); };
+            p.Controls.Add(grip);
+            p.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Escape) SlideIn(p, p.Width); };
+            return head;
+        }
+
+        // A search box in a rounded ring, red when it has focus, like Opera's. The ring panel holds the box.
+        private Panel Ring(TextBox box, string cue)
+        {
+            Panel row = new Panel { Dock = DockStyle.Top, Height = 48, Padding = new Padding(14, 4, 14, 8) };
+            Panel ring = new Panel { Dock = DockStyle.Fill, Padding = new Padding(34, 8, 14, 4) };
+            Buffered(ring);
+            Buffered(row);
+            box.Dock = DockStyle.Fill;
+            box.BorderStyle = BorderStyle.None;
+            box.Font = new System.Drawing.Font(Ui, 10.5f);
+            SetCue(box, cue);
+            ring.Controls.Add(box);
+            row.Controls.Add(ring);
+            ring.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Look look = mod.look;
+                Graphics g = e.Graphics;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(row.BackColor);
+                Rectangle r = new Rectangle(1, 1, ring.Width - 3, ring.Height - 3);
+                using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
+                {
+                    int d = Math.Min(r.Height, 18);
+                    p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90); p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure();
+                    using (SolidBrush fillIn = new SolidBrush(look.Shade(0))) g.FillPath(fillIn, p);
+                    using (Pen line = new Pen(box.Focused ? look.Shade(5) : Mix(look.Shade(6), look.Shade(5), .35f), box.Focused ? 2 : 1)) g.DrawPath(line, p);
+                }
+                TextRenderer.DrawText(g, "\uE721", new System.Drawing.Font("Segoe MDL2 Assets", 10f), new Rectangle(8, 0, 24, ring.Height), look.Shade(3), TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter);
+            };
+            box.GotFocus += delegate { ring.Invalidate(); };
+            box.LostFocus += delegate { ring.Invalidate(); };
+            box.BackColorChanged += delegate { ring.Invalidate(); };
+            return row;
+        }
+
+        // Dark scrollbars and tree arrows on dark looks.
+        private void DarkScroll(Control c)
+        {
+            Action theme = delegate { try { SetWindowTheme(c.Handle, mod.look.Shade(1).GetBrightness() < .5f ? "DarkMode_Explorer" : "Explorer", null); } catch (Exception) { } };
+            if (c.IsHandleCreated) theme(); else c.HandleCreated += delegate { theme(); };
+        }
 
         // The red line under the tab in front, which glides to the next tab when they switch.
         private readonly Panel slider = new Panel { Height = 2, Visible = false };
@@ -5010,7 +5133,14 @@ public class CapriInternalBrowser : ICapriMod
 
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string app, string list);
 
-        private static void Buffered(Control c) { typeof(Control).GetProperty("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(c, true, null); }
+        // Drawn in one go and redrawn whole when resized, so nothing smears.
+        private static void Buffered(Control c)
+        {
+            typeof(Control).GetProperty("DoubleBuffered", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(c, true, null);
+            typeof(Control).GetProperty("ResizeRedraw", BindingFlags.NonPublic | BindingFlags.Instance).SetValue(c, true, null);
+        }
+
+        [DllImport("user32.dll", EntryPoint = "SendMessage")] private static extern IntPtr Poke(IntPtr window, int message, IntPtr wParam, IntPtr lParam);
 
         private Button Flat(string glyph, string tip, DockStyle dock, int width)
         {
@@ -5070,42 +5200,51 @@ public class CapriInternalBrowser : ICapriMod
             string inBook = "", finding = "";
             object editing = null;
 
-            // The top: Noted's paper plane, the chat's name, and the close button.
-            Panel head = new Panel { Dock = DockStyle.Top, Height = 52 };
-            Label plane = new Label { Text = "", Dock = DockStyle.Left, Width = 44, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font("Segoe MDL2 Assets", 14f) };
-            Label named = new Label { Text = "Noted", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(UiBold, 14f), UseMnemonic = false, AutoEllipsis = true };
-            Button shut = Flat("", "Close Noted", DockStyle.Right, 40);
-            shut.Click += delegate { SlideIn(notes, notes.Width); };
-            head.Controls.Add(named);
-            head.Controls.Add(shut);
-            head.Controls.Add(plane);
+            // The top: Noted's paper plane, the chat's name, pin and close.
+            Buffered(notes);
+            Label named;
+            Panel head = SideHead(notes, "\uE724", "Noted", out named);
+            Label plane = new Label();
+            Button shut = new Button();
 
-            // Which chat, a button for a new one, and search.
-            Panel bar = new Panel { Dock = DockStyle.Top, Height = 68, Padding = new Padding(12, 0, 12, 8) };
-            Panel pickRow = new Panel { Dock = DockStyle.Top, Height = 30 };
-            ComboBox picker = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList, FlatStyle = FlatStyle.Flat, Font = new System.Drawing.Font(UiBold, 10f) };
-            Button newChat = Flat("", "New Noted chat", DockStyle.Right, 34);
-            pickRow.Controls.Add(picker);
-            pickRow.Controls.Add(newChat);
-            TextBox search = new TextBox { Dock = DockStyle.Bottom, BorderStyle = BorderStyle.FixedSingle, Font = new System.Drawing.Font(Ui, 10f) };
-            SetCue(search, "Search Noted");
-            bar.Controls.Add(search);
-            bar.Controls.Add(pickRow);
+            // Which chat (a button that opens the list of chats), a button for a new one, and search.
+            Panel bar = new Panel { Dock = DockStyle.Top, Height = 36, Padding = new Padding(14, 0, 12, 4) };
+            Button picker = new Button { Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(UiBold, 10f), Cursor = Cursors.Hand, TabStop = false, UseMnemonic = false };
+            picker.FlatAppearance.BorderSize = 1;
+            Button newChat = Flat("\uE710", "New Noted chat", DockStyle.Right, 36);
+            bar.Controls.Add(picker);
+            bar.Controls.Add(newChat);
+            TextBox search = new TextBox();
+            Panel searchRow = Ring(search, "Search Noted");
             new ToolTip().SetToolTip(picker, "Your Noted chats. Right-click to rename or delete one.");
 
             // The feed: oldest at the top, newest at the bottom by the box, like a chat.
             feed = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
             Buffered(feed);
+            DarkScroll(feed);
             Label empty = new Label { Text = "Nothing here yet.\nLeave a note for yourself below, drop in a picture, or ask Capri to add something.", Dock = DockStyle.Top, Height = 90, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font(Ui, 10f), Visible = false };
             feed.Controls.Add(empty);
             List<Control> cards = new List<Control>();
             System.Drawing.Font small = new System.Drawing.Font(Ui, 8.5f);
             Action lay = null;
+            bool laying = false;
             lay = delegate
             {
-                int y = 10 + feed.AutoScrollPosition.Y, w = Math.Max(120, (sliding > 0 ? sliding - SystemInformation.VerticalScrollBarWidth : feed.ClientSize.Width) - 28);
-                foreach (Control c in cards) { if (c.Width != w || c.Top != y || c.Left != 14) c.SetBounds(14, y, w, c.Height); y += c.Height + 12; }
+                if (laying) return;
+                laying = true;
+                // Always leaves room for the scrollbar, so cards don't change width when it comes and goes.
+                int y = 12 + feed.AutoScrollPosition.Y, w = Math.Max(120, feed.Width - SystemInformation.VerticalScrollBarWidth - 26);
+                foreach (Control c in cards)
+                {
+                    bool wider = c.Width != w;
+                    if (wider || c.Top != y || c.Left != 12) c.SetBounds(12, y, w, c.Height);
+                    // A note's height comes from its words at this width: ask the box for it again after a width change.
+                    RichTextBox words = c.Tag as RichTextBox;
+                    if (wider && words != null) Poke(words.Handle, 0x0441, IntPtr.Zero, IntPtr.Zero);
+                    y += c.Height + 12;
+                }
                 feed.AutoScrollMinSize = new Size(0, y - feed.AutoScrollPosition.Y);
+                laying = false;
             };
             feed.Resize += delegate { lay(); };
             int glide = 0;
@@ -5129,9 +5268,9 @@ public class CapriInternalBrowser : ICapriMod
             // The box at the bottom: write, paste or drop a picture, attach a file, add the page's link, then Enter.
             Panel composer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(12, 10, 6, 10) };
             Label editingNote = new Label { Dock = DockStyle.Bottom, Height = 22, Text = "Editing a note  ·  Enter saves, Esc cancels", TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0), Font = new System.Drawing.Font(Ui, 9f), Visible = false };
-            Button send = Flat("", "Send to Noted (Enter)", DockStyle.Right, 34);
-            Button attach = Flat("", "Add a picture or a file", DockStyle.Right, 34);
-            Button pageLink = Flat("", "Add this page's link", DockStyle.Right, 34);
+            Button send = Flat("\uE724", "Send to Noted (Enter)", DockStyle.Right, 34);
+            Button attach = Flat("\uE723", "Add a picture or a file", DockStyle.Right, 34);
+            Button pageLink = Flat("\uE71B", "Add this page's link", DockStyle.Right, 34);
             noteText.Dock = DockStyle.Fill;
             noteText.BorderStyle = BorderStyle.None;
             noteText.ScrollBars = RichTextBoxScrollBars.Vertical;
@@ -5210,7 +5349,7 @@ public class CapriInternalBrowser : ICapriMod
                 int i = ids.IndexOf(id);
                 Look look = mod.look;
                 Color back = Mix(look.Shade(1), look.Shade(5), .06f);
-                Panel c = new Panel { Height = 64, BackColor = back, Padding = new Padding(14, 12, 14, 24) };
+                Panel c = new Panel { Height = 64, BackColor = back, Padding = new Padding(14, 12, 14, 26) };
                 Buffered(c);
                 string[] lines = plain[i].Replace("\r", "").Trim().Split('\n');
                 string last = lines[lines.Length - 1].Trim();
@@ -5231,7 +5370,7 @@ public class CapriInternalBrowser : ICapriMod
                     {
                         title.Height = TextRenderer.MeasureText(title.Text, title.Font, new Size(Math.Max(40, c.Width - 28), 0), TextFormatFlags.WordBreak).Height + 2;
                         int h = c.Padding.Vertical + title.Height + site.Height;
-                        if (c.Height != h) { c.Height = h; lay(); }
+                        if (c.Height != h) { c.Height = h; Later(delegate { lay(); }); }
                     };
                 }
                 else
@@ -5243,9 +5382,10 @@ public class CapriInternalBrowser : ICapriMod
                     words.LinkClicked += delegate(object sender, LinkClickedEventArgs e) { OpenLink(e.LinkText); };
                     words.ContentsResized += delegate(object sender, ContentsResizedEventArgs e)
                     {
-                        int h = e.NewRectangle.Height + 4 + c.Padding.Vertical;
-                        if (c.Height != h) { c.Height = h; lay(); }
+                        int h = Math.Max(52, e.NewRectangle.Height + 6 + c.Padding.Vertical);
+                        if (c.Height != h) { c.Height = h; Later(delegate { lay(); }); }
                     };
+                    c.Tag = words;
                     words.DoubleClick += delegate { edit(id); };
                     c.Controls.Add(words);
                     parts.Add(words);
@@ -5343,6 +5483,7 @@ public class CapriInternalBrowser : ICapriMod
             {
                 if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control) { e.SuppressKeyPress = true; post(); }
                 else if (e.KeyCode == Keys.Escape && editing != null) { e.SuppressKeyPress = true; editing = null; editingNote.Visible = false; noteText.Clear(); }
+                else if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; SlideIn(notes, notes.Width); }
                 else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && Clipboard.ContainsImage()) { e.SuppressKeyPress = true; using (Image pasted = Clipboard.GetImage()) putPicture(pasted); }
                 else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && !Clipboard.ContainsImage() && Clipboard.ContainsText()) { e.SuppressKeyPress = true; noteText.SelectionColor = mod.look.Shade(2); noteText.SelectedText = Clipboard.GetText(); }
             };
@@ -5398,15 +5539,8 @@ public class CapriInternalBrowser : ICapriMod
             bool picking = false;
             ShowBook = delegate
             {
-                picking = true;
-                picker.Items.Clear();
-                picker.Items.Add(Main);
-                foreach (string book in Notebooks()) picker.Items.Add(book);
-                picker.Items.Add(Everything);
-                picker.Items.Add(Make);
-                picker.SelectedItem = inBook == null ? Everything : inBook.Length == 0 ? Main : (object)inBook;
-                if (picker.SelectedIndex < 0) { inBook = ""; picker.SelectedIndex = 0; }
-                picking = false;
+                if (inBook != null && inBook.Length > 0 && !new List<string>(Notebooks()).Contains(inBook)) inBook = "";
+                picker.Text = "  " + chatName(inBook) + "   \u25BE";
                 named.Text = inBook == null || inBook.Length == 0 ? "Noted" : "Noted  ·  " + inBook;
             };
             Action makeChat = delegate
@@ -5418,15 +5552,24 @@ public class CapriInternalBrowser : ICapriMod
                 if (found == null) { mine.Add(name); Keep("notebooks", string.Join("\u001e", mine.ToArray())); found = name; }
                 inBook = found;
             };
-            picker.SelectedIndexChanged += delegate
+            picker.Click += delegate
             {
-                if (picking) return;
-                string pick = picker.SelectedItem as string;
-                if (pick == Make) makeChat();
-                else inBook = pick == Everything ? null : pick == Main ? "" : pick;
-                ShowBook();
-                fill();
+                if (JustShut) return;
+                ContextMenuStrip m = NewMenu();
+                List<string> chats = new List<string> { Main };
+                chats.AddRange(Notebooks());
+                chats.Add(Everything);
+                foreach (string one in chats)
+                {
+                    string pick = one;
+                    string now = inBook == null ? Everything : inBook.Length == 0 ? Main : inBook;
+                    Item(m.Items, (pick == now ? "\u2713  " : "     ") + pick, "", true, delegate { inBook = pick == Everything ? null : pick == Main ? "" : pick; ShowBook(); fill(); });
+                }
+                m.Items.Add(new ToolStripSeparator());
+                Item(m.Items, Make, "", true, delegate { makeChat(); ShowBook(); fill(); });
+                m.Show(picker, new Point(0, picker.Height));
             };
+            if (picking) ShowBook();
             newChat.Click += delegate { makeChat(); ShowBook(); fill(); };
             ContextMenuStrip chatMenu = new ContextMenuStrip();
             chatMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
@@ -5467,11 +5610,13 @@ public class CapriInternalBrowser : ICapriMod
                 Look look = mod.look;
                 bool changed = tinted != look.Shade(1);
                 tinted = look.Shade(1);
-                head.BackColor = bar.BackColor = look.Shade(1);
-                plane.ForeColor = look.Shade(5);
+                notes.BackColor = head.BackColor = bar.BackColor = searchRow.BackColor = look.Shade(1);
+                foreach (Control part in head.Controls) if ("red".Equals(part.Tag)) part.ForeColor = look.Shade(5); else part.ForeColor = look.Shade(3);
                 named.ForeColor = look.Shade(2);
                 picker.BackColor = search.BackColor = look.Shade(0);
                 picker.ForeColor = search.ForeColor = look.Shade(2);
+                picker.FlatAppearance.BorderColor = look.Shade(6);
+                picker.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), look.Shade(5), .2f);
                 feed.BackColor = look.Shade(0);
                 empty.ForeColor = look.Shade(3);
                 composer.BackColor = look.Shade(1);
@@ -5481,20 +5626,23 @@ public class CapriInternalBrowser : ICapriMod
                 cue.BackColor = look.Shade(1);
                 editingNote.ForeColor = look.Shade(5);
                 editingNote.BackColor = look.Shade(1);
-                foreach (Button b in new[] { shut, newChat, send, attach, pageLink }) { b.BackColor = Color.Transparent; b.ForeColor = look.Shade(3); }
+                foreach (Button b in new[] { newChat, send, attach, pageLink }) { b.BackColor = Color.Transparent; b.ForeColor = look.Shade(3); }
                 send.ForeColor = look.Shade(5);
                 if (changed && cards.Count > 0) fill();
             };
-            notes.VisibleChanged += delegate { if (notes.Visible) { marks.Visible = false; noteTint(); scrollEnd(); } };
+            notes.VisibleChanged += delegate { if (notes.Visible) { noteTint(); lay(); scrollEnd(); } };
             ShowBook();
             noteTint();
             fill();
             notes.Controls.Add(feed);
             notes.Controls.Add(editingNote);
             notes.Controls.Add(composer);
+            notes.Controls.Add(searchRow);
             notes.Controls.Add(bar);
             notes.Controls.Add(head);
             feed.BringToFront();
+            notes.Width = NotesWide();
+            DarkScroll(noteText);
         }
 
         // Links in Noted: web pages open as a tab, files show in File Explorer.
@@ -5512,7 +5660,7 @@ public class CapriInternalBrowser : ICapriMod
 
         private sealed class Mark { public string Folder, Title, Url; }
         private readonly TreeView markTree = new TreeView();
-        private readonly Label star = new Label { Text = "", Dock = DockStyle.Right, Width = 30, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f), Cursor = Cursors.Hand };
+        private readonly Label star = new Label { Text = "\uE734", Dock = DockStyle.Right, Width = 30, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f), Cursor = Cursors.Hand };
         private readonly ToolTip starTip = new ToolTip();
         private Action marksChanged = delegate { };
         private string starAt;
@@ -5571,7 +5719,7 @@ public class CapriInternalBrowser : ICapriMod
             return null;
         }
 
-        internal void ShowMarks() { ToggleSide(marks, MarksWide); }
+        internal void ShowMarks() { ToggleSide(marks, marks.Width); }
 
         private void ShowStar()
         {
@@ -5580,7 +5728,7 @@ public class CapriInternalBrowser : ICapriMod
             starAt = page ? t.Address : null;
             bool on = page && Marks().Exists(delegate(Mark m) { return m.Url == t.Address; });
             star.Visible = page;
-            star.Text = on ? "" : "";
+            star.Text = on ? "\uE735" : "\uE734";
             star.ForeColor = on ? mod.look.Shade(5) : mod.look.Shade(3);
             starTip.SetToolTip(star, on ? "Remove bookmark (Ctrl+Shift+D)" : "Bookmark this page (Ctrl+Shift+D)");
         }
@@ -5588,41 +5736,17 @@ public class CapriInternalBrowser : ICapriMod
         private void BuildMarks()
         {
             marks.Dock = DockStyle.Left;
-            marks.Width = MarksWide;
+            int savedWide;
+            marks.Width = int.TryParse(Kept("markswidth"), out savedWide) ? Math.Max(260, Math.Min(720, savedWide)) : MarksWide;
             marks.Visible = false;
             marks.Padding = new Padding(0, 0, 0, 8);
-            Panel head = new Panel { Dock = DockStyle.Top, Height = 52 };
-            Label title = new Label { Text = "Bookmarks", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(16, 0, 0, 0), Font = new System.Drawing.Font(UiBold, 14f) };
-            Button shut = Flat("", "Close bookmarks", DockStyle.Right, 40);
-            shut.Click += delegate { SlideIn(marks, MarksWide); };
-            head.Controls.Add(title);
-            head.Controls.Add(shut);
-
-            // The search box in a rounded red-edged ring, like Opera's.
-            Panel findRow = new Panel { Dock = DockStyle.Top, Height = 50, Padding = new Padding(14, 4, 14, 10) };
-            Panel ring = new Panel { Dock = DockStyle.Fill, Padding = new Padding(34, 8, 12, 4) };
-            TextBox find = new TextBox { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, Font = new System.Drawing.Font(Ui, 10.5f) };
-            SetCue(find, "Search bookmarks");
-            ring.Controls.Add(find);
-            findRow.Controls.Add(ring);
-            ring.Paint += delegate(object sender, PaintEventArgs e)
-            {
-                Look look = mod.look;
-                Graphics g = e.Graphics;
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(look.Shade(1));
-                Rectangle r = new Rectangle(1, 1, ring.Width - 3, ring.Height - 3);
-                using (System.Drawing.Drawing2D.GraphicsPath p = new System.Drawing.Drawing2D.GraphicsPath())
-                {
-                    int d = Math.Min(r.Height, 18);
-                    p.AddArc(r.X, r.Y, d, d, 180, 90); p.AddArc(r.Right - d, r.Y, d, d, 270, 90); p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90); p.AddArc(r.X, r.Bottom - d, d, d, 90, 90); p.CloseFigure();
-                    using (SolidBrush fillIn = new SolidBrush(look.Shade(0))) g.FillPath(fillIn, p);
-                    using (Pen line = new Pen(find.Focused ? look.Shade(5) : Mix(look.Shade(6), look.Shade(5), .5f), 2)) g.DrawPath(line, p);
-                }
-                TextRenderer.DrawText(g, "", new System.Drawing.Font("Segoe MDL2 Assets", 10f), new Rectangle(8, 0, 24, ring.Height), look.Shade(3), TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter);
-            };
-            find.GotFocus += delegate { ring.Invalidate(); };
-            find.LostFocus += delegate { ring.Invalidate(); };
+            Buffered(marks);
+            Label title;
+            Panel head = SideHead(marks, "\uE734", "Bookmarks", out title);
+            TextBox find = new TextBox();
+            Panel findRow = Ring(find, "Search bookmarks");
+            Panel ring = (Panel)findRow.Controls[0];
+            Button shut = new Button();
 
             // Add this page, a new folder, and bringing them over from another browser.
             FlowLayoutPanel tools = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 34, Padding = new Padding(10, 0, 10, 4), WrapContents = false };
@@ -5647,7 +5771,35 @@ public class CapriInternalBrowser : ICapriMod
             markTree.FullRowSelect = true;
             markTree.HotTracking = true;
             markTree.ShowNodeToolTips = true;
-            markTree.ItemHeight = 28;
+            markTree.ItemHeight = 30;
+            markTree.DrawMode = TreeViewDrawMode.OwnerDrawAll;
+            markTree.ShowPlusMinus = false;
+            markTree.ShowRootLines = false;
+            TreeNode hovered = null;
+            Buffered(markTree);
+            DarkScroll(markTree);
+            markTree.MouseMove += delegate(object sender, MouseEventArgs e) { TreeNode n = markTree.GetNodeAt(e.Location); if (n != hovered) { hovered = n; markTree.Invalidate(); } };
+            markTree.MouseLeave += delegate { hovered = null; markTree.Invalidate(); };
+            markTree.AfterExpand += delegate { markTree.Invalidate(); };
+            markTree.AfterCollapse += delegate { markTree.Invalidate(); };
+            markTree.DrawNode += delegate(object sender, DrawTreeNodeEventArgs e)
+            {
+                if (e.Bounds.Height <= 0) return;
+                Look look = mod.look;
+                Graphics g = e.Graphics;
+                Rectangle row = new Rectangle(0, e.Bounds.Y, markTree.ClientSize.Width, e.Bounds.Height);
+                bool on = e.Node == markTree.SelectedNode && markTree.Focused, over = e.Node == hovered;
+                using (SolidBrush back = new SolidBrush(on ? Mix(look.Shade(1), look.Shade(5), .22f) : over ? Mix(look.Shade(1), look.Shade(5), .1f) : look.Shade(1))) g.FillRectangle(back, row);
+                if (on) using (SolidBrush bar = new SolidBrush(look.Shade(5))) g.FillRectangle(bar, 0, row.Y + 5, 3, row.Height - 10);
+                int x = 8 + e.Node.Level * 20;
+                bool folder = e.Node.Tag is string;
+                using (System.Drawing.Font icons = new System.Drawing.Font("Segoe MDL2 Assets", 8f))
+                    if (folder) TextRenderer.DrawText(g, e.Node.IsExpanded ? "\uE70D" : "\uE76C", icons, new Rectangle(x, row.Y, 16, row.Height), look.Shade(3), TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter);
+                x += 18;
+                if (markTree.ImageList != null && e.Node.ImageIndex >= 0 && e.Node.ImageIndex < markTree.ImageList.Images.Count) g.DrawImage(markTree.ImageList.Images[e.Node.ImageIndex], x, row.Y + (row.Height - 18) / 2);
+                x += 24;
+                TextRenderer.DrawText(g, e.Node.Text, folder ? new System.Drawing.Font(UiBold, 10f) : markTree.Font, new Rectangle(x, row.Y, row.Width - x - 6, row.Height), e.Node.Tag == null ? look.Shade(3) : look.Shade(2), TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            };
             markTree.Indent = 20;
             markTree.Font = new System.Drawing.Font(Ui, 10.5f);
             markTree.AllowDrop = true;
@@ -5661,6 +5813,7 @@ public class CapriInternalBrowser : ICapriMod
                 Look look = mod.look;
                 marks.BackColor = head.BackColor = findRow.BackColor = tools.BackColor = treeBox.BackColor = look.Shade(1);
                 title.ForeColor = look.Shade(2);
+                foreach (Control part in head.Controls) if (part != title) part.ForeColor = "red".Equals(part.Tag) ? look.Shade(5) : look.Shade(3);
                 status.ForeColor = look.Shade(3);
                 status.BackColor = look.Shade(1);
                 find.BackColor = look.Shade(0);
@@ -5668,10 +5821,9 @@ public class CapriInternalBrowser : ICapriMod
                 markTree.BackColor = look.Shade(1);
                 markTree.ForeColor = look.Shade(2);
                 markTree.LineColor = look.Shade(3);
-                shut.ForeColor = look.Shade(3);
                 foreach (Control c in tools.Controls) { Button b = c as Button; if (b == null) continue; b.BackColor = look.Shade(0); b.ForeColor = look.Shade(2); b.FlatAppearance.BorderColor = look.Shade(6); b.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), look.Shade(5), .25f); }
                 glyphs.Images.Clear();
-                foreach (string[] g in new[] { new[] { "", "3" }, new[] { "", "5" }, new[] { "", "5" } })
+                foreach (string[] g in new[] { new[] { "\uE8B7", "3" }, new[] { "\uE774", "5" }, new[] { "\uE734", "5" } })
                 {
                     Bitmap b = new Bitmap(18, 18);
                     using (Graphics gr = Graphics.FromImage(b))
@@ -5737,7 +5889,7 @@ public class CapriInternalBrowser : ICapriMod
                     if (t != null && t.OnReader && t.Page == null && t.Special == null) Go(t, m.Url); else OpenTab(null, m.Url, true);
                 }
                 else if (e.Button == MouseButtons.Middle && m != null) OpenTab(null, m.Url, false);
-                else if (e.Button == MouseButtons.Left && folder != null && e.X > e.Node.Bounds.Left - 4) { if (e.Node.IsExpanded) e.Node.Collapse(); else e.Node.Expand(); }
+                else if (e.Button == MouseButtons.Left && folder != null) { if (e.Node.IsExpanded) e.Node.Collapse(); else e.Node.Expand(); }
                 else if (e.Button == MouseButtons.Right && (m != null || folder != null)) Later(delegate { MarkMenu(m, folder); });
             };
             markTree.ItemDrag += delegate(object sender, ItemDragEventArgs e) { TreeNode n = e.Item as TreeNode; if (n != null && n.Tag is Mark) markTree.DoDragDrop(n, DragDropEffects.Move); };
@@ -5799,7 +5951,7 @@ public class CapriInternalBrowser : ICapriMod
 
             tintMarks();
             fillTree();
-            marks.VisibleChanged += delegate { if (marks.Visible) { notes.Visible = false; tintMarks(); fillTree(); } };
+            marks.VisibleChanged += delegate { if (marks.Visible) { tintMarks(); fillTree(); } };
             marks.Controls.Add(treeBox);
             marks.Controls.Add(status);
             marks.Controls.Add(tools);
@@ -6132,7 +6284,7 @@ public class CapriInternalBrowser : ICapriMod
 
         private Button Puzzle()
         {
-            Button b = Tool("", 36, "Extensions", DockStyle.Right);
+            Button b = Tool("\uEA86", 36, "Extensions", DockStyle.Right);
             b.Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f);
             b.Click += delegate { if (!JustShut) ExtensionsPanel(b); };
             return b;
@@ -6201,14 +6353,14 @@ public class CapriInternalBrowser : ICapriMod
                         string id = "", name = "Extension";
                         bool on = true;
                         try { id = (string)Get(one, "Id"); name = (string)Get(one, "Name"); on = (bool)Get(one, "IsEnabled"); } catch (Exception) { }
-                        Label icon = new Label { Text = "", Left = 18, Top = y + 4, Width = 24, Height = 24, ForeColor = on ? red : faint, BackColor = back, Font = new System.Drawing.Font("Segoe MDL2 Assets", 12f) };
+                        Label icon = new Label { Text = "\uEA86", Left = 18, Top = y + 4, Width = 24, Height = 24, ForeColor = on ? red : faint, BackColor = back, Font = new System.Drawing.Font("Segoe MDL2 Assets", 12f) };
                         Label called = new Label { Text = name, Left = 46, Top = y + 6, Width = 170, Height = 22, ForeColor = on ? ink : faint, BackColor = back, Font = new System.Drawing.Font(UiBold, 10f), AutoEllipsis = true, UseMnemonic = false };
                         Button toggle = small(on ? "On" : "Off", 222);
                         toggle.AutoSize = false;
                         toggle.Width = 52;
                         toggle.Top = y + 2;
                         toggle.ForeColor = on ? red : faint;
-                        Button more = small("", 280);
+                        Button more = small("\uE712", 280);
                         more.AutoSize = false;
                         more.Width = 36;
                         more.Top = y + 2;
@@ -6265,7 +6417,7 @@ public class CapriInternalBrowser : ICapriMod
 
         private Button Camera()
         {
-            Button b = Tool("", 36, "Screenshot (Ctrl+Shift+X picks an area)", DockStyle.Right);
+            Button b = Tool("\uE722", 36, "Screenshot (Ctrl+Shift+X picks an area)", DockStyle.Right);
             b.Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f);
             b.Click += delegate
             {
@@ -6517,7 +6669,7 @@ public class CapriInternalBrowser : ICapriMod
             shotCard = c;
             c.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(look.Shade(5))) e.Graphics.DrawRectangle(line, 0, 0, c.Width - 1, c.Height - 1); };
             Label head = new Label { Text = "Screenshot saved and copied", Left = 14, Top = 10, Width = 220, Height = 22, ForeColor = look.Shade(2), BackColor = look.Shade(1), Font = new System.Drawing.Font(UiBold, 10f) };
-            Label x = new Label { Text = "", Left = 248, Top = 10, Width = 22, Height = 22, ForeColor = look.Shade(3), BackColor = look.Shade(1), Font = new System.Drawing.Font("Segoe MDL2 Assets", 9f), Cursor = Cursors.Hand };
+            Label x = new Label { Text = "\uE711", Left = 248, Top = 10, Width = 22, Height = 22, ForeColor = look.Shade(3), BackColor = look.Shade(1), Font = new System.Drawing.Font("Segoe MDL2 Assets", 9f), Cursor = Cursors.Hand };
             float k = Math.Min(252f / shot.Width, 130f / shot.Height);
             PictureBox pic = new PictureBox { Left = 14, Top = 40, Width = 252, Height = 130, SizeMode = PictureBoxSizeMode.Zoom, BackColor = look.Shade(0), Cursor = Cursors.Hand };
             Bitmap thumb = new Bitmap(shot, Math.Max(1, (int)(shot.Width * Math.Min(1f, k * 2))), Math.Max(1, (int)(shot.Height * Math.Min(1f, k * 2))));
@@ -6585,8 +6737,8 @@ public class CapriInternalBrowser : ICapriMod
                 SideBack(side, e.Graphics);
                 using (Pen line = new Pen(Mix(mod.look.Shade(0), mod.look.Shade(5), .45f))) e.Graphics.DrawLine(line, side.Width - 1, 0, side.Width - 1, side.Height);
             };
-            SideButton("", "Capri website", "https://capriai.app/favicon.ico").Click += delegate { OpenTab(null, "https://capriai.app/", true); };
-            Button discord = SideButton("", "Discord (right-click to switch)", "https://www.google.com/s2/favicons?sz=64&domain=discord.com");
+            SideButton("\uE80F", "Capri website", "https://capriai.app/favicon.ico").Click += delegate { OpenTab(null, "https://capriai.app/", true); };
+            Button discord = SideButton("\uE8BD", "Discord (right-click to switch)", "https://www.google.com/s2/favicons?sz=64&domain=discord.com");
             discord.Click += delegate { Discord(); };
             discord.MouseUp += delegate(object sender, MouseEventArgs e)
             {
@@ -6600,8 +6752,8 @@ public class CapriInternalBrowser : ICapriMod
                 pick.Items.Add(mine);
                 pick.Show(discord, e.Location);
             };
-            SideButton("", "Capri on GitHub", "https://github.githubassets.com/favicons/favicon-dark.png").Click += delegate { OpenTab(null, "https://github.com/lachydotmcg/capri-desktop", true); };
-            SideButton("\uE734", "Bookmarks (Ctrl+Shift+B)", null).Click += delegate { ToggleSide(marks, MarksWide); };
+            SideButton("\uE943", "Capri on GitHub", "https://github.githubassets.com/favicons/favicon-dark.png").Click += delegate { OpenTab(null, "https://github.com/lachydotmcg/capri-desktop", true); };
+            SideButton("\uE734", "Bookmarks (Ctrl+Shift+B)", null).Click += delegate { ToggleSide(marks, marks.Width); };
             SideButton("\uE724", "Noted", null).Click += delegate { ToggleSide(notes, NotesWide()); if (notes.Visible) noteText.Focus(); };
             SideButton("\uE81C", T(49), null).Click += delegate { ShowHistory(); };
             SideButton("\uE7FC", "Games", null).Click += delegate { ShowGames(); };
@@ -6662,9 +6814,19 @@ public class CapriInternalBrowser : ICapriMod
 
             BuildNoted();
             BuildMarks();
-            Controls.Add(edge);
-            Controls.Add(notes);
-            Controls.Add(marks);
+            notes.Dock = marks.Dock = DockStyle.None;
+            notes.Visible = marks.Visible = false;
+            holder.Controls.Add(notes);
+            holder.Controls.Add(marks);
+            holder.Resize += delegate { PlaceSide(notes); PlaceSide(marks); };
+            // A new tab's page goes under an open panel, and beside a pinned one.
+            holder.ControlAdded += delegate(object sender, ControlEventArgs e)
+            {
+                if (e.Control == notes || e.Control == marks) return;
+                e.Control.GotFocus += delegate { PageClicked(); };
+                foreach (Panel p in new[] { notes, marks }) if (p.Visible) { if (p.Dock == DockStyle.Left) p.SendToBack(); else p.BringToFront(); }
+            };
+            foreach (Control c in holder.Controls) if (c != notes && c != marks) { Control page = c; page.GotFocus += delegate { PageClicked(); }; }
             Controls.Add(side);
         }
 
