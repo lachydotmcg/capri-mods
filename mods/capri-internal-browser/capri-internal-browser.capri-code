@@ -6908,10 +6908,10 @@ public class CapriInternalBrowser : ICapriMod
                 + "function show(r){tb.children[0].textContent=r.querySelector('b').textContent;tb.children[1].textContent=r.getAttribute('data-tip');tb.className='tb on';"
                 + "var w=tb.offsetWidth,h=tb.offsetHeight,L=Math.max(8,Math.min(mx+14,innerWidth-w-12)),T=my+20;if(T+h>innerHeight-8)T=my-h-14;"
                 + "tb.style.left=L+'px';tb.style.top=T+'px';}"
-                + "document.addEventListener('mousemove',function(e){mx=e.clientX;my=e.clientY;});"
-                + "document.addEventListener('mouseover',function(e){var w=e.target.closest?e.target.closest('.r[data-tip] b,.r[data-tip] i'):null,r=w?w.closest('.r'):null;if(r===cur)return;hide();if(!r)return;"
-                + "cur=r;t=setTimeout(function(){show(r);},380);});"
-                + "addEventListener('scroll',hide,{passive:true});document.addEventListener('mousedown',hide);document.documentElement.addEventListener('mouseleave',hide);})();</script>";
+                + "function on(el){if(!el)return false;var g=document.createRange();g.selectNodeContents(el);var q=g.getClientRects();for(var k=0;k<q.length;k++){var b=q[k];if(mx>=b.left-3&&mx<=b.right+3&&my>=b.top-2&&my<=b.bottom+2)return true;}return false;}"
+                + "document.addEventListener('mousemove',function(e){mx=e.clientX;my=e.clientY;if(e.screenX===sx&&e.screenY===sy)return;sx=e.screenX;sy=e.screenY;if(Date.now()<quiet)return;var r=e.target.closest?e.target.closest('.r[data-tip]'):null;if(r&&!on(r.querySelector('b'))&&!on(r.querySelector('i')))r=null;"
+                + "if(r===cur)return;hide();if(!r)return;cur=r;t=setTimeout(function(){show(r);},380);});"
+                + "var sx=-1,sy=-1,quiet=0;function stop(){hide();quiet=Date.now()+350;}document.addEventListener('scroll',stop,{capture:true,passive:true});document.addEventListener('wheel',stop,{capture:true,passive:true});document.addEventListener('mousedown',hide);document.documentElement.addEventListener('mouseleave',hide);})();</script>";
         }
 
         private static string Row(string name, string about, string control)
