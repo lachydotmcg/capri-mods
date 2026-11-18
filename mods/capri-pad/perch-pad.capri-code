@@ -1,0 +1,1223 @@
+// capri-mod: 1
+// id: capri-pad
+// name: Capri // Pad
+// version: 1.0
+// author: CyberPhantxm
+// description: An interactive audio-reactive perch pad with custom visualizer bars, live microphone tracking, and dynamic scaling.
+// permissions: settings, music, voice
+
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class CapriPerchPadMod : ICapriMod
+{
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WAVEFORMATEX
+    {
+        public ushort wFormatTag;
+        public ushort nChannels;
+        public uint nSamplesPerSec;
+        public uint nAvgBytesPerSec;
+        public ushort nBlockAlign;
+        public ushort wBitsPerSample;
+        public ushort cbSize;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct WAVEHDR
+    {
+        public IntPtr lpData;
+        public uint dwBufferLength;
+        public uint dwBytesRecorded;
+        public IntPtr dwUser;
+        public uint dwFlags;
+        public uint dwLoops;
+        public IntPtr lpNext;
+        public IntPtr reserved;
+    }
+
+    [DllImport("winmm.dll")]
+    public static extern int waveInOpen(out IntPtr hWaveIn, uint uDeviceID, ref WAVEFORMATEX lpFormat, IntPtr dwCallback, IntPtr dwInstance, uint dwFlags);
+    [DllImport("winmm.dll")]
+    public static extern int waveInStart(IntPtr hWaveIn);
+    [DllImport("winmm.dll")]
+    public static extern int waveInStop(IntPtr hWaveIn);
+    [DllImport("winmm.dll")]
+    public static extern int waveInReset(IntPtr hWaveIn);
+    [DllImport("winmm.dll")]
+    public static extern int waveInClose(IntPtr hWaveIn);
+    [DllImport("winmm.dll")]
+    public static extern int waveInPrepareHeader(IntPtr hWaveIn, IntPtr lpWaveInHdr, uint uSize);
+    [DllImport("winmm.dll")]
+    public static extern int waveInUnprepareHeader(IntPtr hWaveIn, IntPtr lpWaveInHdr, uint uSize);
+    [DllImport("winmm.dll")]
+    public static extern int waveInAddBuffer(IntPtr hWaveIn, IntPtr lpWaveInHdr, uint uSize);
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
+
+    private const int MIC_BUFFERS = 3;
+    private const int BUFFER_SIZE = 1280;
+    private IntPtr hWaveIn = IntPtr.Zero;
+    private readonly IntPtr[] headerPtrs = new IntPtr[MIC_BUFFERS];
+    private readonly IntPtr[] bufferPtrs = new IntPtr[MIC_BUFFERS];
+    private float realMic = 0f;
+    private int micStallTicks = 0;
+
+    private void InitMic()
+    {
+        try
+        {
+            CloseMic();
+
+            WAVEFORMATEX format = new WAVEFORMATEX
+            {
+                wFormatTag = 1,
+                nChannels = 1,
+                nSamplesPerSec = 16000,
+                wBitsPerSample = 16,
+                cbSize = 0
+            };
+            format.nBlockAlign = (ushort)(format.nChannels * (format.wBitsPerSample / 8));
+            format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
+
+            int res = waveInOpen(out hWaveIn, unchecked((uint)-1), ref format, IntPtr.Zero, IntPtr.Zero, 0);
+            if (res != 0 || hWaveIn == IntPtr.Zero) return;
+
+            uint hdrSize = (uint)Marshal.SizeOf(typeof(WAVEHDR));
+            for (int i = 0; i < MIC_BUFFERS; i++)
+            {
+                bufferPtrs[i] = Marshal.AllocHGlobal(BUFFER_SIZE);
+                headerPtrs[i] = Marshal.AllocHGlobal((int)hdrSize);
+
+                WAVEHDR hdr = new WAVEHDR
+                {
+                    lpData = bufferPtrs[i],
+                    dwBufferLength = BUFFER_SIZE,
+                    dwBytesRecorded = 0,
+                    dwUser = IntPtr.Zero,
+                    dwFlags = 0,
+                    dwLoops = 0,
+                    lpNext = IntPtr.Zero,
+                    reserved = IntPtr.Zero
+                };
+
+                Marshal.StructureToPtr(hdr, headerPtrs[i], false);
+                waveInPrepareHeader(hWaveIn, headerPtrs[i], hdrSize);
+                waveInAddBuffer(hWaveIn, headerPtrs[i], hdrSize);
+            }
+
+            waveInStart(hWaveIn);
+            micStallTicks = 0;
+        }
+        catch { }
+    }
+
+    private void CloseMic()
+    {
+        try
+        {
+            uint hdrSize = (uint)Marshal.SizeOf(typeof(WAVEHDR));
+            if (hWaveIn != IntPtr.Zero)
+            {
+                waveInReset(hWaveIn);
+                waveInStop(hWaveIn);
+                for (int i = 0; i < MIC_BUFFERS; i++)
+                {
+                    if (headerPtrs[i] != IntPtr.Zero)
+                    {
+                        waveInUnprepareHeader(hWaveIn, headerPtrs[i], hdrSize);
+                    }
+                }
+                waveInClose(hWaveIn);
+                hWaveIn = IntPtr.Zero;
+            }
+            for (int i = 0; i < MIC_BUFFERS; i++)
+            {
+                if (headerPtrs[i] != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(headerPtrs[i]);
+                    headerPtrs[i] = IntPtr.Zero;
+                }
+                if (bufferPtrs[i] != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(bufferPtrs[i]);
+                    bufferPtrs[i] = IntPtr.Zero;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void PollMicBuffer()
+    {
+        if (hWaveIn == IntPtr.Zero)
+        {
+            if (++micStallTicks > 50)
+            {
+                micStallTicks = 0;
+                InitMic();
+            }
+            return;
+        }
+
+        bool anyProcessed = false;
+        uint hdrSize = (uint)Marshal.SizeOf(typeof(WAVEHDR));
+
+        for (int b = 0; b < MIC_BUFFERS; b++)
+        {
+            if (headerPtrs[b] == IntPtr.Zero || bufferPtrs[b] == IntPtr.Zero) continue;
+
+            WAVEHDR hdr = (WAVEHDR)Marshal.PtrToStructure(headerPtrs[b], typeof(WAVEHDR));
+
+            if ((hdr.dwFlags & 1) == 1)
+            {
+                anyProcessed = true;
+                int bytesRecorded = (int)hdr.dwBytesRecorded;
+                if (bytesRecorded > 0)
+                {
+                    int sampleCount = bytesRecorded / 2;
+                    short[] samples = new short[sampleCount];
+                    Marshal.Copy(bufferPtrs[b], samples, 0, sampleCount);
+
+                    double sumSquares = 0;
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        double sample = samples[i] / 32768.0;
+                        sumSquares += sample * sample;
+                    }
+
+                    double rms = Math.Sqrt(sumSquares / sampleCount);
+                    float energy = (float)Math.Min(1.0, rms * 35.0);
+                    if (energy > realMic) realMic = energy;
+                }
+
+                waveInUnprepareHeader(hWaveIn, headerPtrs[b], hdrSize);
+                hdr.dwFlags = 0;
+                hdr.dwBytesRecorded = 0;
+                Marshal.StructureToPtr(hdr, headerPtrs[b], false);
+                waveInPrepareHeader(hWaveIn, headerPtrs[b], hdrSize);
+                waveInAddBuffer(hWaveIn, headerPtrs[b], hdrSize);
+            }
+            else if ((hdr.dwFlags & 2) == 0)
+            {
+                waveInUnprepareHeader(hWaveIn, headerPtrs[b], hdrSize);
+                hdr.dwFlags = 0;
+                hdr.dwBytesRecorded = 0;
+                Marshal.StructureToPtr(hdr, headerPtrs[b], false);
+                waveInPrepareHeader(hWaveIn, headerPtrs[b], hdrSize);
+                waveInAddBuffer(hWaveIn, headerPtrs[b], hdrSize);
+            }
+        }
+
+        if (anyProcessed)
+        {
+            micStallTicks = 0;
+        }
+        else if (++micStallTicks > 25)
+        {
+            micStallTicks = 0;
+            InitMic();
+        }
+    }
+
+    private void GetConfiguredSize(int capriSize, out int padWidth, out int padHeight)
+    {
+        if (capriSize <= 200)
+        {
+            padWidth = 115;
+            padHeight = 44;
+        }
+        else if (capriSize <= 300)
+        {
+            padWidth = 122;
+            padHeight = 46;
+        }
+        else if (capriSize <= 350)
+        {
+            padWidth = 136;
+            padHeight = 52;
+        }
+        else if (capriSize <= 380)
+        {
+            padWidth = 155;
+            padHeight = 55;
+        }
+        else
+        {
+            padWidth = 212;
+            padHeight = 58;
+        }
+    }
+
+    private const BindingFlags AnyFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
+    private ICapriHost capri;
+    private PerchPadForm pad;
+    private ICapriTimer uiTimer;
+    
+    private bool autoPerch = true;
+    private bool onPad = false;
+    public bool lastFacingLeft = false;
+    
+    private Point savedPadHip = new Point(260, 260);
+    private Form companionWindow;
+    private object capriOwner;
+    private PropertyInfo hologramStateProp;
+    private Action<IntPtr, Bitmap, Point> drawLayered;
+    private Mirror mirror;
+    private Bitmap rawSurface;
+    private Bitmap translucentSurface;
+    private Graphics rawGraphics;
+    private Graphics translucentGraphics;
+    private ImageAttributes holoAttributes;
+    private IntPtr cloakedHandle = IntPtr.Zero;
+    private readonly List<FieldInfo> facingBoolFields = new List<FieldInfo>();
+
+    private Point lastVelocityPos = Point.Empty;
+    private double currentVelocity = 0;
+
+    private int tickCount = 0;
+    private const string PAD_TITLE = "CyberPerchNode";
+
+    private bool moveMenuInjected = false;
+    private ToolStripMenuItem perchPadCheckMenuItem = null;
+
+    [DllImport("user32.dll")]
+    private static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        ResolveCompanionWindow();
+        InitMic();
+
+        autoPerch = capri.Store.Flag("auto_perch", true);
+        
+        pad = new PerchPadForm(this);
+
+        host.Ui.Drawing += delegate(CapriFrame frame)
+        {
+            if (frame != null)
+            {
+                if (lastFacingLeft != frame.FacingLeft)
+                {
+                    lastFacingLeft = frame.FacingLeft;
+                    if (pad != null && !pad.IsDisposed)
+                    {
+                        pad.SetControlsOnLeft(!lastFacingLeft);
+                    }
+                }
+            }
+        };
+
+        host.Her.Dropped += OnHerDropped;
+        host.Her.Dragged += OnHerDragged;
+
+        uiTimer = host.Timers.Every(0.04, OnUiTick);
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        if (uiTimer != null) uiTimer.Cancel();
+        CloseMic();
+        RestoreHologram();
+        if (mirror != null)
+        {
+            mirror.Dispose();
+            mirror = null;
+        }
+
+        if (pad != null)
+        {
+            pad.Close();
+            pad.Dispose();
+            pad = null;
+        }
+
+        if (companionWindow != null)
+        {
+            try
+            {
+                ContextMenuStrip cms = companionWindow.ContextMenuStrip;
+                if (cms != null)
+                {
+                    cms.Opening -= OnMainMenuOpening;
+                }
+            }
+            catch { }
+        }
+    }
+
+    private void ResolveCompanionWindow()
+    {
+        try
+        {
+            FieldInfo f = capri.GetType().GetField("capri", AnyFlags);
+            if (f != null)
+            {
+                capriOwner = f.GetValue(capri);
+                if (capriOwner != null)
+                {
+                    Type ownerType = capriOwner.GetType();
+                    hologramStateProp = ownerType.GetProperty("HologramOn", AnyFlags);
+                    Type native = ownerType.Assembly.GetType("CapriDesktop.Native", false);
+                    MethodInfo render = native == null ? null : native.GetMethod("DrawLayered",
+                        BindingFlags.Static | BindingFlags.NonPublic, null,
+                        new[] { typeof(IntPtr), typeof(Bitmap), typeof(Point) }, null);
+                    if (render != null)
+                    {
+                        drawLayered = (Action<IntPtr, Bitmap, Point>)Delegate.CreateDelegate(typeof(Action<IntPtr, Bitmap, Point>), render);
+                    }
+                }
+            }
+
+            if (capri.Ui != null && capri.Ui.Window != null)
+                companionWindow = capri.Ui.Window;
+            else if (capriOwner is Form)
+                companionWindow = capriOwner as Form;
+
+            if (companionWindow != null)
+            {
+                if (hologramStateProp == null)
+                {
+                    Type winType = companionWindow.GetType();
+                    hologramStateProp = winType.GetProperty("HologramOn", AnyFlags);
+                    if (hologramStateProp != null && capriOwner == null) capriOwner = companionWindow;
+                    if (drawLayered == null)
+                    {
+                        Type native = winType.Assembly.GetType("CapriDesktop.Native", false);
+                        MethodInfo render = native == null ? null : native.GetMethod("DrawLayered",
+                            BindingFlags.Static | BindingFlags.NonPublic, null,
+                            new[] { typeof(IntPtr), typeof(Bitmap), typeof(Point) }, null);
+                        if (render != null)
+                        {
+                            drawLayered = (Action<IntPtr, Bitmap, Point>)Delegate.CreateDelegate(typeof(Action<IntPtr, Bitmap, Point>), render);
+                        }
+                    }
+                }
+
+                facingBoolFields.Clear();
+                Type t = companionWindow.GetType();
+                while (t != null)
+                {
+                    FieldInfo[] fields = t.GetFields(AnyFlags);
+                    foreach (FieldInfo field in fields)
+                    {
+                        if (field.FieldType == typeof(bool))
+                        {
+                            string fn = field.Name.ToLowerInvariant();
+                            if (fn.Contains("left") || fn.Contains("flip") || fn.Contains("face") || fn.Contains("mirror"))
+                            {
+                                if (!facingBoolFields.Contains(field)) facingBoolFields.Add(field);
+                            }
+                        }
+                    }
+                    t = t.BaseType;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void ReleaseHologramSurfaces()
+    {
+        if (rawGraphics != null) { rawGraphics.Dispose(); rawGraphics = null; }
+        if (translucentGraphics != null) { translucentGraphics.Dispose(); translucentGraphics = null; }
+        if (holoAttributes != null) { holoAttributes.Dispose(); holoAttributes = null; }
+        if (rawSurface != null) { rawSurface.Dispose(); rawSurface = null; }
+        if (translucentSurface != null) { translucentSurface.Dispose(); translucentSurface = null; }
+    }
+
+    private void RestoreHologram()
+    {
+        if (cloakedHandle != IntPtr.Zero)
+        {
+            try
+            {
+                int off = 0;
+                DwmSetWindowAttribute(cloakedHandle, 13, ref off, 4);
+            }
+            catch { }
+            cloakedHandle = IntPtr.Zero;
+        }
+        if (mirror != null && mirror.Visible) mirror.Hide();
+        ReleaseHologramSurfaces();
+    }
+
+    private void UpdateHologramMirror()
+    {
+        try
+        {
+            bool active = onPad && pad != null && !pad.IsDisposed && pad.Visible && pad.IsHandleCreated &&
+                hologramStateProp != null && capriOwner != null && drawLayered != null &&
+                (bool)hologramStateProp.GetValue(capriOwner, null);
+
+            if (!active)
+            {
+                if (cloakedHandle != IntPtr.Zero || (mirror != null && mirror.Visible))
+                    RestoreHologram();
+                return;
+            }
+
+            IntPtr handle = pad.Handle;
+            Point at = pad.Location;
+            Size sz = pad.Size;
+
+            if (cloakedHandle != handle)
+            {
+                RestoreHologram();
+                int on = 1;
+                DwmSetWindowAttribute(handle, 13, ref on, 4);
+                cloakedHandle = handle;
+            }
+
+            if (mirror == null || mirror.IsDisposed) mirror = new Mirror();
+            mirror.Bounds = new Rectangle(at, sz);
+
+            if (rawSurface == null || rawSurface.Size != sz)
+            {
+                ReleaseHologramSurfaces();
+                rawSurface = new Bitmap(sz.Width, sz.Height, PixelFormat.Format32bppPArgb);
+                rawGraphics = Graphics.FromImage(rawSurface);
+                translucentSurface = new Bitmap(sz.Width, sz.Height, PixelFormat.Format32bppPArgb);
+                translucentGraphics = Graphics.FromImage(translucentSurface);
+                translucentGraphics.CompositingMode = CompositingMode.SourceCopy;
+                holoAttributes = new ImageAttributes();
+                holoAttributes.SetColorMatrix(new ColorMatrix { Matrix33 = 0.63f });
+            }
+
+            rawGraphics.Clear(Color.Transparent);
+            pad.RenderPadSurface(rawGraphics);
+
+            translucentGraphics.DrawImage(rawSurface, new Rectangle(Point.Empty, sz), 0, 0,
+                sz.Width, sz.Height, GraphicsUnit.Pixel, holoAttributes);
+
+            drawLayered(mirror.Handle, translucentSurface, at);
+            if (!mirror.Visible) mirror.Show();
+        }
+        catch { }
+    }
+
+    public Cursor GetCapriCursor()
+    {
+        try
+        {
+            if (companionWindow != null && companionWindow.Cursor != null)
+            {
+                return companionWindow.Cursor;
+            }
+        }
+        catch { }
+        return Cursors.Hand;
+    }
+
+    private void TryInjectMenu()
+    {
+        if (moveMenuInjected || companionWindow == null) return;
+        try
+        {
+            ContextMenuStrip cms = companionWindow.ContextMenuStrip;
+            if (cms == null)
+            {
+                Type t = companionWindow.GetType();
+                while (t != null && cms == null)
+                {
+                    FieldInfo[] fields = t.GetFields(AnyFlags);
+                    foreach (FieldInfo f in fields)
+                    {
+                        if (f.FieldType == typeof(ContextMenuStrip))
+                        {
+                            cms = f.GetValue(companionWindow) as ContextMenuStrip;
+                            if (cms != null) break;
+                        }
+                    }
+                    t = t.BaseType;
+                }
+            }
+
+            if (cms != null)
+            {
+                cms.Opening -= OnMainMenuOpening;
+                cms.Opening += OnMainMenuOpening;
+                moveMenuInjected = true;
+            }
+        }
+        catch { }
+    }
+
+    private void OnMainMenuOpening(object sender, System.ComponentModel.CancelEventArgs e)
+    {
+        ContextMenuStrip cms = sender as ContextMenuStrip;
+        if (cms == null) return;
+
+        foreach (ToolStripItem topItem in cms.Items)
+        {
+            ToolStripMenuItem mi = topItem as ToolStripMenuItem;
+            if (mi != null && mi.Text.Trim().Equals("Move", StringComparison.OrdinalIgnoreCase))
+            {
+                mi.DropDownOpening -= OnMoveMenuOpening;
+                mi.DropDownOpening += OnMoveMenuOpening;
+            }
+        }
+    }
+
+    private void OnMoveMenuOpening(object sender, EventArgs e)
+    {
+        ToolStripMenuItem mi = sender as ToolStripMenuItem;
+        if (mi == null) return;
+
+        for (int i = mi.DropDownItems.Count - 1; i >= 0; i--)
+        {
+            ToolStripItem sub = mi.DropDownItems[i];
+            if (sub.Text == "Auto Perch Pad" || sub.Text == "Sit on pad")
+            {
+                mi.DropDownItems.RemoveAt(i);
+            }
+        }
+
+        int insertIdx = mi.DropDownItems.Count;
+        for (int i = 0; i < mi.DropDownItems.Count; i++)
+        {
+            if (mi.DropDownItems[i].Text.Contains("Sit here") || mi.DropDownItems[i].Text.Contains("Sit on windows"))
+            {
+                insertIdx = i + 1;
+            }
+        }
+
+        ToolStripMenuItem chk = new ToolStripMenuItem("Auto Perch Pad");
+        chk.ForeColor = mi.ForeColor;
+        chk.BackColor = mi.BackColor;
+        chk.Font = mi.Font;
+        chk.Checked = autoPerch;
+        
+        chk.Click += delegate 
+        { 
+            SetPerchPadActiveState(!autoPerch);
+        };
+        
+        mi.DropDownItems.Insert(insertIdx, chk);
+        perchPadCheckMenuItem = chk;
+    }
+
+    private void OnHerDragged()
+    {
+        if (onPad && pad != null && pad.Visible)
+        {
+            ClosePadInstantly();
+        }
+    }
+
+    private void OnHerDropped(Point hip)
+    {
+        if (autoPerch && !IsOnTaskbar(hip) && currentVelocity < 850)
+        {
+            if (!onPad) SpawnPadAtCurrentPos();
+            capri.Her.Move("sit");
+        }
+    }
+
+    private void ClosePadInstantly()
+    {
+        onPad = false;
+        RestoreHologram();
+        if (pad != null && pad.Visible) pad.Hide();
+    }
+
+    public void ClosePadAndStand()
+    {
+        ClosePadInstantly();
+        string anim = (capri.Her.Animation ?? "").ToLowerInvariant();
+        if (anim.Contains("perch") || anim.Contains("sleep") || anim.Contains("sit"))
+        {
+            capri.Her.Move("stand_up");
+        }
+    }
+
+    private void SetPerchPadActiveState(bool active)
+    {
+        autoPerch = active;
+        capri.Store.Set("auto_perch", autoPerch);
+
+        if (!autoPerch)
+        {
+            ClosePadInstantly();
+        }
+    }
+
+    public void EnsurePadZOrder()
+    {
+        if (pad == null || pad.IsDisposed || !pad.Visible) return;
+        try
+        {
+            if (companionWindow != null && !companionWindow.IsDisposed)
+            {
+                SetWindowPos(pad.Handle, companionWindow.Handle, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+                if (mirror != null && !mirror.IsDisposed && mirror.Visible)
+                {
+                    SetWindowPos(mirror.Handle, companionWindow.Handle, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+                }
+            }
+        }
+        catch { }
+    }
+
+    private bool IsHangingOrRiding()
+    {
+        string anim = (capri.Her.Animation ?? "").ToLowerInvariant();
+        string st = (capri.Her.State ?? "").ToLowerInvariant();
+        
+        if (anim.Contains("dangle") || anim.Contains("hang") || anim.Contains("climb")) return true;
+        if (anim.Contains("ride") || anim.Contains("cursor") || anim.Contains("mouse")) return true;
+        if (st.Contains("riding") || st.Contains("cursor") || st.Contains("mouse")) return true;
+
+        if (anim.Contains("sit") && Control.MouseButtons == MouseButtons.None && !capri.Her.Dragging)
+        {
+            Rectangle b = capri.Her.Bounds;
+            Point hip = new Point(b.Left + (b.Width / 2), b.Top + (int)(b.Height * 0.72));
+            Point m = Cursor.Position;
+            if (Math.Abs(hip.X - m.X) < 25 && Math.Abs(hip.Y - m.Y) < 25)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool IsOnTaskbar(Point hip)
+    {
+        Rectangle screen = capri.Her.Screen;
+        int herSize = capri.Settings.Size;
+        int taskbarThreshold = Math.Max(65, (int)(herSize * 0.35));
+        return hip.Y >= screen.Bottom - taskbarThreshold;
+    }
+
+    public bool IsSleeping()
+    {
+        string st = (capri.Her.State ?? "").ToLowerInvariant();
+        string anim = (capri.Her.Animation ?? "").ToLowerInvariant();
+        return st == "asleep" || anim.Contains("sleep");
+    }
+
+    private void SpawnPadAtCurrentPos()
+    {
+        if (pad == null || pad.IsDisposed) pad = new PerchPadForm(this);
+
+        Rectangle b = capri.Her.Bounds;
+        Point hip = new Point(b.Left + (b.Width / 2), b.Top + (int)(b.Height * 0.72));
+
+        savedPadHip = hip;
+        capri.Store.Set("pad_x", savedPadHip.X);
+        capri.Store.Set("pad_y", savedPadHip.Y);
+
+        onPad = true;
+
+        UpdatePadGeometry();
+        SyncPadToHerBounds();
+        
+        if (!pad.Visible) pad.Show();
+        UpdateHologramMirror();
+        EnsurePadZOrder();
+    }
+
+    private void SyncPadToHerBounds()
+    {
+        if (capri.Her.Dragging || pad == null || pad.IsDisposed) return;
+
+        Rectangle b = capri.Her.Bounds;
+        bool facingLeft = lastFacingLeft; 
+        
+        int hipX = b.Left + (int)(b.Width * 0.50);
+        int x;
+
+        if (facingLeft)
+        {
+            x = hipX - (int)(pad.Width * 0.05);
+            pad.SetControlsOnLeft(false);
+        }
+        else
+        {
+            x = hipX - (int)(pad.Width * 0.95);
+            pad.SetControlsOnLeft(true);
+        }
+
+        int seatY = b.Top + (int)(b.Height * 0.79);
+        int y = seatY;
+
+        Rectangle screen = capri.Her.Screen;
+        if (x < screen.Left + 4) x = screen.Left + 4;
+        if (x + pad.Width > screen.Right - 4) x = screen.Right - pad.Width - 4;
+        if (y < screen.Top + 20) y = screen.Top + 20;
+        if (y + pad.Height > screen.Bottom - 2) y = screen.Bottom - pad.Height - 2;
+
+        if (Math.Abs(pad.Left - x) > 1 || Math.Abs(pad.Top - y) > 1)
+        {
+            pad.Location = new Point(x, y);
+        }
+    }
+
+    private void UpdatePadGeometry()
+    {
+        if (pad == null || pad.IsDisposed) return;
+
+        int herSize = capri.Settings.Size;
+
+        int targetWidth;
+        int targetHeight;
+        GetConfiguredSize(herSize, out targetWidth, out targetHeight);
+
+        if (pad.Width != targetWidth || pad.Height != targetHeight)
+        {
+            pad.Size = new Size(targetWidth, targetHeight);
+        }
+    }
+
+    private void OnUiTick()
+    {
+        tickCount++;
+        realMic *= 0.8f;
+        PollMicBuffer();
+
+        Rectangle hb = capri.Her.Bounds;
+        Point currentHip = new Point(hb.Left + (hb.Width / 2), hb.Top + (int)(hb.Height * 0.72));
+        
+        if (lastVelocityPos != Point.Empty)
+        {
+            double dist = Math.Sqrt(Math.Pow(currentHip.X - lastVelocityPos.X, 2) + Math.Pow(currentHip.Y - lastVelocityPos.Y, 2));
+            currentVelocity = dist / 0.04; 
+        }
+        lastVelocityPos = currentHip;
+
+        if (!moveMenuInjected && tickCount % 50 == 0) TryInjectMenu();
+
+        if (capri.Her.Dragging) return;
+
+        string anim = (capri.Her.Animation ?? "").ToLowerInvariant();
+        string st = (capri.Her.State ?? "").ToLowerInvariant();
+        
+        bool isSitting = anim.Contains("sit") || anim.Contains("perch") || anim.Contains("sleep") || st == "asleep";
+
+        if (onPad && !isSitting)
+        {
+            ClosePadInstantly();
+        }
+
+        if (onPad && pad != null && !pad.IsDisposed && pad.Visible)
+        {
+            UpdatePadGeometry();
+            SyncPadToHerBounds();
+
+            int barCount = pad.GetBarCount();
+            float[] levels = null;
+            float loudness = 0f;
+            try
+            {
+                if (capri.Has("music"))
+                {
+                    levels = capri.Music.Levels(barCount);
+                    loudness = (float)capri.Music.Loudness;
+                }
+            }
+            catch { }
+
+            pad.UpdateVisuals(
+                capri.Her.State ?? "idle",
+                capri.Her.Animation ?? "idle",
+                capri.Voice.Talking,
+                IsSleeping(),
+                capri.Settings.Size,
+                levels,
+                loudness,
+                realMic,
+                tickCount
+            );
+
+            UpdateHologramMirror();
+            if (tickCount % 15 == 0) EnsurePadZOrder();
+        }
+    }
+
+    private sealed class Mirror : Form
+    {
+        internal Mirror()
+        {
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            StartPosition = FormStartPosition.Manual;
+            AutoScaleMode = AutoScaleMode.None;
+            TopMost = true;
+        }
+
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams style = base.CreateParams;
+                style.ExStyle |= 0x00080000 | 0x08000000 | 0x00000080 | 0x20;
+                return style;
+            }
+        }
+    }
+
+    private class PerchPadForm : Form
+    {
+        private readonly CapriPerchPadMod mod;
+        private string currentState = "idle";
+        private bool isTalking = false;
+        private bool isSleeping = false;
+        private bool hasPcMusicSignal = false;
+        private bool hasUserMicSignal = false;
+        private int currentCapriSize = 200;
+        private float[] bars = new float[26];
+        private int tick = 0;
+        private bool closeHover = false;
+        private bool controlsOnLeft = false;
+        private Rectangle closeRect;
+
+        private static readonly Color[] CapriRgbPalette = new Color[]
+        {
+            Color.FromArgb(255, 0, 60),   
+            Color.FromArgb(255, 0, 120),  
+            Color.FromArgb(255, 55, 165), 
+            Color.FromArgb(165, 65, 255), 
+            Color.FromArgb(120, 84, 240)  
+        };
+
+        public PerchPadForm(CapriPerchPadMod owner)
+        {
+            mod = owner;
+            Text = PAD_TITLE;
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            Size = new Size(122, 46);
+            ShowInTaskbar = false;
+            DoubleBuffered = true;
+            BackColor = Color.FromArgb(14, 7, 22);
+            Cursor = mod.GetCapriCursor();
+        }
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return true; }
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x00000080 | 0x00000008;
+                return cp;
+            }
+        }
+
+        public void SetControlsOnLeft(bool onLeft)
+        {
+            if (controlsOnLeft != onLeft)
+            {
+                controlsOnLeft = onLeft;
+                Invalidate();
+            }
+        }
+
+        public int GetBarCount()
+        {
+            int areaWidth = Math.Max(54, Width - 18);
+            int count = areaWidth / 8;
+            return Math.Max(8, Math.Min(26, count));
+        }
+
+        public void UpdateVisuals(string state, string anim, bool talking, bool sleeping, int herSize, float[] audioLevels, float loudness, float micLevel, int tickCount)
+        {
+            currentState = (state ?? "idle").ToLowerInvariant();
+            isSleeping = sleeping;
+            currentCapriSize = herSize;
+            tick = tickCount;
+
+            int desiredBars = GetBarCount();
+            if (bars.Length != desiredBars) bars = new float[desiredBars];
+
+            float maxBand = 0f;
+            if (audioLevels != null)
+            {
+                for (int i = 0; i < audioLevels.Length; i++)
+                    if (audioLevels[i] > maxBand) maxBand = audioLevels[i];
+            }
+
+            bool anySpeakerAudio = maxBand > 0.012f || loudness > 0.012f;
+            hasUserMicSignal = micLevel > 0.015f;
+            isTalking = (talking || currentState == "talking") && (!hasUserMicSignal || anySpeakerAudio);
+            hasPcMusicSignal = !isTalking && anySpeakerAudio;
+
+            for (int i = 0; i < bars.Length; i++)
+            {
+                bars[i] *= 0.8f; 
+
+                if (isTalking)
+                {
+                    double fastWave = Math.Abs(Math.Sin((tick * 1.25) + (i * 1.05)));
+                    float chaos = (float)(Math.Cos(tick * 0.8 + i * 1.9));
+                    float target = (float)Math.Max(0.06, 0.12 + fastWave * 0.6 + chaos * 0.24);
+                    if (target > bars[i]) bars[i] = target;
+                }
+                else if (hasUserMicSignal)
+                {
+                    float chaos = (float)Math.Abs(Math.Sin(tick * 1.3 + i * 2.7));
+                    float target = (micLevel * 0.6f) + (micLevel * 0.4f * chaos);
+                    if (target > bars[i]) bars[i] = target;
+                }
+                else if (hasPcMusicSignal && audioLevels != null && i < audioLevels.Length)
+                {
+                    float raw = audioLevels[i];
+                    if (raw >= 0.009f)
+                    {
+                        float boosted = (float)Math.Pow(Math.Min(1.0, raw * 2.25), 0.62);
+                        float chaos = (float)(Math.Sin(tick * 1.5 + i * 2.5) * Math.Cos(tick * 0.9 - i * 1.2));
+                        float target = Math.Min(1f, Math.Max(0.06f, boosted + (chaos * 0.3f * boosted)));
+                        if (target > bars[i]) bars[i] = target;
+                    }
+                }
+                else if (currentState == "thinking")
+                {
+                    double pulse = (Math.Sin((tick * 0.45) - (i * 0.55)) + 1.0) * 0.5;
+                    float target = (float)(0.12 + pulse * 0.38);
+                    if (target > bars[i]) bars[i] = target;
+                }
+                else
+                {
+                    if (0.05f > bars[i]) bars[i] = 0.05f;
+                }
+            }
+            Invalidate();
+        }
+
+        private Color SampleCapriRgb(double phase)
+        {
+            double pos = phase % CapriRgbPalette.Length;
+            if (pos < 0) pos += CapriRgbPalette.Length;
+            int idx1 = (int)Math.Floor(pos) % CapriRgbPalette.Length;
+            int idx2 = (idx1 + 1) % CapriRgbPalette.Length;
+            double frac = pos - Math.Floor(pos);
+
+            Color c1 = CapriRgbPalette[idx1];
+            Color c2 = CapriRgbPalette[idx2];
+            return Color.FromArgb(
+                (int)Math.Round(c1.R + (c2.R - c1.R) * frac),
+                (int)Math.Round(c1.G + (c2.G - c1.G) * frac),
+                (int)Math.Round(c1.B + (c2.B - c1.B) * frac)
+            );
+        }
+
+        private Color GetActiveAccentColor()
+        {
+            if (isSleeping) return Color.FromArgb(0x30, 0x58, 0xAF);
+            if (isTalking) return (tick % 2 == 0) ? Color.FromArgb(0xFF, 0x00, 0x46) : Color.FromArgb(0x95, 0x00, 0x29);
+            if (hasUserMicSignal) return Color.FromArgb(120, 84, 240); 
+            if (currentState == "thinking") return Color.FromArgb(0x78, 0x54, 0xF0);
+            if (hasPcMusicSignal) return SampleCapriRgb(tick * 0.18);
+            
+            return Color.FromArgb(0x70, 0x6C, 0x7E);
+        }
+
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            int cut = 6;
+            Point[] pts = new Point[] {
+                new Point(cut, 0), new Point(Width - cut, 0), new Point(Width, cut),
+                new Point(Width, Height - cut), new Point(Width - cut, Height),
+                new Point(cut, Height), new Point(0, Height - cut), new Point(0, cut)
+            };
+            using (GraphicsPath path = new GraphicsPath())
+            {
+                path.AddPolygon(pts);
+                Region = new Region(path);
+            }
+        }
+
+        public void RenderPadSurface(Graphics g)
+        {
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+
+            int w = Width - 1;
+            int h = Height - 1;
+            int cut = 6;
+
+            Point[] borderPts = new Point[] {
+                new Point(cut, 0), new Point(w - cut, 0), new Point(w, cut),
+                new Point(w, h - cut), new Point(w - cut, h), new Point(cut, h),
+                new Point(0, h - cut), new Point(0, cut)
+            };
+
+            using (SolidBrush bg = new SolidBrush(Color.FromArgb(15, 8, 22)))
+            {
+                g.FillPolygon(bg, borderPts);
+            }
+
+            int headerH = (int)(Height * 0.45); 
+            if (headerH < 21) headerH = 21;
+
+            using (Pen sepPen = new Pen(Color.FromArgb(90, 22, 48), 1f))
+            {
+                g.DrawLine(sepPen, 6, headerH, w - 6, headerH);
+            }
+
+            Color accentColor = GetActiveAccentColor();
+            int ledX;
+            int ledY = (headerH / 2) - 5; 
+            float titleX;
+
+            if (controlsOnLeft)
+            {
+                closeRect = new Rectangle(5, (headerH / 2) - 7, 15, 15);
+                ledX = closeRect.Right + 3;
+                titleX = ledX + 13;
+            }
+            else
+            {
+                closeRect = new Rectangle(w - 18, (headerH / 2) - 7, 15, 15);
+                ledX = closeRect.Left - 13;
+                titleX = 7f;
+            }
+
+            using (Font f = new Font("Consolas", 7.4f, FontStyle.Bold))
+            using (SolidBrush textBrush = new SolidBrush(Color.FromArgb(245, 70, 115)))
+            {
+                if (controlsOnLeft)
+                {
+                    SizeF tSize = g.MeasureString("CAPRI // PAD", f);
+                    titleX = Math.Max(ledX + 13, w - tSize.Width - 5);
+                }
+                g.DrawString("CAPRI // PAD", f, textBrush, titleX, (headerH / 2) - 6);
+            }
+
+            Color xColor = closeHover ? Color.FromArgb(255, 0, 70) : Color.FromArgb(190, 175, 200);
+            using (Pen xPen = new Pen(xColor, 1.6f))
+            {
+                g.DrawLine(xPen, closeRect.Left + 4, closeRect.Top + 4, closeRect.Right - 4, closeRect.Bottom - 4);
+                g.DrawLine(xPen, closeRect.Right - 4, closeRect.Top + 4, closeRect.Left + 4, closeRect.Bottom - 4);
+            }
+
+            using (SolidBrush glow = new SolidBrush(Color.FromArgb(75, accentColor)))
+            using (SolidBrush core = new SolidBrush(accentColor))
+            {
+                g.FillEllipse(glow, ledX, ledY, 11, 11);
+                g.FillEllipse(core, ledX + 2, ledY + 2, 7, 7);
+            }
+
+            int areaLeft = 8;
+            int areaRight = w - 8;
+            int areaTop = headerH + 4;
+            int areaBottom = h - 5;
+            int areaWidth = Math.Max(40, areaRight - areaLeft);
+            int areaHeight = Math.Max(10, areaBottom - areaTop);
+
+            if (isSleeping)
+            {
+                string codeText = "status = \"sleeping...\";";
+                float fontSize;
+
+                if (currentCapriSize <= 210) { fontSize = 5.7f; }
+                else if (currentCapriSize <= 310) { fontSize = 6.25f; }
+                else if (currentCapriSize <= 390) { fontSize = 6.9f; }
+                else if (currentCapriSize <= 480) { fontSize = 8.4f; }
+                else { fontSize = 9.5f; }
+
+                using (Font codeFont = new Font("Consolas", fontSize, FontStyle.Regular))
+                using (SolidBrush kwBrush = new SolidBrush(Color.FromArgb(130, 175, 255)))
+                {
+                    SizeF sz = g.MeasureString(codeText, codeFont);
+                    g.DrawString(codeText, codeFont, kwBrush, areaLeft + Math.Max(0, (areaWidth - sz.Width) / 2f), areaTop + (areaHeight - sz.Height) / 2f);
+                }
+            }
+            else
+            {
+                int n = bars.Length;
+                int gap = 3;
+                int barWidth = Math.Max(3, (areaWidth - (gap * (n - 1))) / n);
+                int totalBarsWidth = (barWidth * n) + (gap * (n - 1));
+                int startX = areaLeft + (areaWidth - totalBarsWidth) / 2;
+
+                using (SolidBrush trackBrush = new SolidBrush(Color.FromArgb(28, 20, 36)))
+                {
+                    for (int i = 0; i < n; i++)
+                    {
+                        int bx = startX + i * (barWidth + gap);
+                        g.FillRectangle(trackBrush, bx, areaTop, barWidth, areaHeight);
+
+                        int bh = Math.Max(2, (int)Math.Round(bars[i] * areaHeight));
+                        int by = areaBottom - bh;
+
+                        Color barColor = isTalking ? Color.FromArgb(0xFF, 0x00, 0x46) : (hasUserMicSignal ? Color.FromArgb(120, 84, 240) : (hasPcMusicSignal ? SampleCapriRgb((tick * 0.22) + (i * 0.32)) : accentColor));
+                        
+                        using (SolidBrush barBrush = new SolidBrush(barColor))
+                        {
+                            g.FillRectangle(barBrush, bx, by, barWidth, bh);
+                        }
+                    }
+                }
+            }
+
+            using (Pen borderPen = new Pen(Color.FromArgb(145, 24, 62), 1f))
+            using (Pen cornerPen = new Pen(Color.FromArgb(255, 0, 70), 1.8f))
+            {
+                g.DrawPolygon(borderPen, borderPts);
+                g.DrawLine(cornerPen, 0, cut + 8, 0, cut);
+                g.DrawLine(cornerPen, 0, cut, cut, 0);
+                g.DrawLine(cornerPen, w - cut, h, w, h - cut);
+                g.DrawLine(cornerPen, w, h - cut, w, h - cut - 8);
+            }
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            RenderPadSurface(e.Graphics);
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            
+            bool hover = closeRect.Contains(e.Location);
+            if (hover != closeHover)
+            {
+                closeHover = hover;
+                Cursor = closeHover ? Cursors.Hand : mod.GetCapriCursor();
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            if (closeHover)
+            {
+                closeHover = false;
+                Cursor = mod.GetCapriCursor();
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            
+            if (closeRect.Contains(e.Location))
+            {
+                mod.ClosePadAndStand();
+            }
+        }
+    }
+}
