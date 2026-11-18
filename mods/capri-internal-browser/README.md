@@ -3,9 +3,9 @@
 A full web browser built into Capri. Capri can see the page you're on and use it with you: she opens sites, finds videos, controls playback, summarises pages and reads them out loud.
 
 - Kind: code mod
-- Version: 1.9.9
+- Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** (it uses the larger 1 MB code mod limit to grow; 1.9.9 itself is about 256 KB) and the Microsoft Edge WebView2 engine (built into Windows 11)
+- Needs: **Capri 0.9.4 or newer** (about 476 KB of readable code, under the 1 MB code mod limit) and the Microsoft Edge WebView2 engine (built into Windows 11)
 - Windows only
 
 ## Say this
@@ -24,7 +24,18 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Browser note (nothing said: the page you're on) |
 | "research this" / "look into ..." / "do some research on ..." | Looks it up, then saves what she found in a new note |
 | "screenshot this and add it to my notes" | Puts a screenshot of the page in a new Browser note |
-| "pause" / "skip 30 seconds" / "louder" | Controls the video |
+| "pause" / "louder" / "next video" | Controls the video |
+| "skip 2 minutes" / "go back 30 seconds" / "skip to 3:20" | Skips or rewinds the video |
+| "skip the ad" / "skip intro" | Presses the Skip button with the mouse, if one is showing |
+| "go back to the last video" | Opens the video you watched before this one |
+| "reopen that tab" | Brings back the last tab you closed (Ctrl+Shift+T, or Recently closed in the menu) |
+| "summarise this page and add it to my notes" | Says the summary and saves it with the page's name, link and date |
+| "find the price and put it in my Shopping notes" / "add milk to my Shopping notes" | Saves it in that notebook |
+| "what did I miss?" | Sums up what changed on the tab since you last looked |
+| "remind me about this tonight" / "remind me in 2 hours about this" | Brings the page back then |
+| "what's 20% of 85" / "what time is it in Tokyo" / "5 km in miles" | Answers straight away, no tab |
+| "open custom jobs" | Opens your Custom jobs |
+| Your own job's words, like "movie night" | Runs your Custom job |
 | "pop the video out" | Puts the video in a small floating window |
 | "summarise this page" | Tells you what the page is about in a few lines |
 | "read this to me" | Reads the page out loud |
@@ -43,10 +54,27 @@ Turn on **Message via Discord in the browser** in Settings > Capri features. Cap
 
 She uses the Discord tab you already have open, and picks the closest name in your direct messages. If nobody there matches, she tries Discord's search and stops if its top result doesn't match the name.
 
+Most of these also work in Capri Browser's 22 other languages (Spanish, French, German, Japanese, Korean and more).
+
+## Ad blocker
+
+- Blocks ad servers and trackers from **EasyList** and **EasyPrivacy** (free lists, from easylist.to) and Peter Lowe's ad server list, and hides ad boxes on pages.
+- Takes away invisible layers that open an ad wherever you click, and stops pop-ups and redirects to other sites from clicks on nothing.
+- Puts a red outline and a warning on fake Download buttons that go to ad sites.
+- Warns you about "your PC is infected, call this number" scam pages and offers to close them.
+- Click the shield for **Privacy Protection**: ads, trackers and pop-ups stopped on the page, **Turn off for this site** for ads and for trackers, and the list of blocked trackers.
+- The lists come from Browser addons as `data/adblock.txt` (about 3 MB), kept as a file in the mod's folder. It keeps EasyList's licence (CC BY-SA 3.0 and GPLv3).
+
+## Custom jobs
+
+Make your own commands from the sidebar's Custom jobs button (or say "open custom jobs"): **what you say** in quotes, an optional **link** to open first, and **steps** in plain words, one a line (play, full screen, volume 40, skip 2 minutes, click Shuffle, summarise, add it to School notes, wait 5...). Steps are only Capri Browser's own actions: a job can't run code, she never types passwords, and clicks or typing on messaging and social sites still wait for your yes.
+
 ## Also in it
 
-- Ad blocking, plus warnings for scam sites and risky downloads
-- Browser notes with screenshots, links and pictures
+- Notes: a notes app with your own notebooks (you make them; Capri only uses yours and asks "Should I add it to Shopping notes?"), search, dates, screenshots, links and pictures
+- Offer to skip (off until you turn it on): when Skip ad, Skip intro or Skip recap shows up, she asks, and presses it on your yes
+- Watch-along (off until you turn it on): she reacts now and then during videos
+- Catch-up: coming back to a tab that changed, she tells you what's new
 - History by topic and a weekly wrap-up
 - Games: Wiki Race (with co-op codes), Guess the Site, Typing Race and Survival, Quiz, and more from Browser addons
 - Achievements and browsing stats
@@ -57,17 +85,17 @@ She uses the Discord tab you already have open, and picks the closest name in yo
 
 - **It replaces two of her tools.** While the mod is on, her `open_app` (for browsers) and `open_website` tools open pages in Capri Browser instead of your normal browser.
 - **It adds a `capri_browser` tool** she uses to open, search, read, click, type and scroll. On messaging and social sites (Discord, Gmail, Outlook, WhatsApp, Messenger, Facebook, Instagram, X, Reddit, Telegram, Slack, Teams, LinkedIn, TikTok, Snapchat, Bluesky) a click, typing or Enter **waits for your yes**, so text on a page can't make her send something.
-- **It moves your real mouse and presses keys** for some video controls: it clicks the video and presses F for full screen on sites that need a real click.
+- **It moves your real mouse and presses keys.** Before she clicks, skips, plays or scrolls on a page, the mouse glides to that spot with the takeover animation (Settings > Capri features > Move the real mouse turns this off; the action itself still happens). It only clicks for real to press a Skip button you said yes to, and for full screen on sites that need a real click (it also presses F there).
 
 ## What it sends, and where
 
-Every turn, her brain gets a short note about the browser: the **title and address of the tab in front** (when a private tab is in front she gets nothing about it), and the **sites you use most**. Page text only goes to her brain when you ask her about a page. Private tabs are never read, and they are left out of the tab list she sees.
+Every turn, her brain gets a short note about the browser: the **title and address of the tab in front** (when a private tab is in front she gets nothing about it), and the **sites you use most**. Page text only goes to her brain when you ask her about a page, ask what you missed on a tab, or save something from a page to your notes. With Watch-along on, the title of the video you're watching goes to her brain now and then. Your notes, notebooks, Custom jobs and reminders stay on your PC. Private tabs are never read, and they are left out of the tab list she sees.
 
 The mod itself (not the pages you visit) contacts:
 
 | Host | Why |
 | --- | --- |
-| raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | Games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
+| raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | The ad blocker lists, voice commands in other languages, games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
 | en.wikipedia.org (or your language's Wikipedia), www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
 | www.google.com/s2/favicons, github.githubassets.com, and each Speed Dial site | Little site icons for Speed Dial and the sidebar |
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
