@@ -781,6 +781,158 @@ public class CapriInternalBrowser : ICapriMod
     // One of her extras, on unless they turned it off in settings (dark mode for sites starts off).
     internal static bool Flag(string key, bool on) { string v = Host == null ? "" : Host.Store.Get("opt-" + key, "") ?? ""; return v.Length == 0 ? on : v == "1"; }
 
+    // ---- Site settings: what each site may use and do, like Opera's. ----
+    // Each row: key, name, icon, Edge's permission number (-1 for the ones Capri Browser handles itself), and the built-in default.
+    internal static readonly string[,] PermList =
+    {
+        { "loc", "Location", "", "3", "Ask" },
+        { "cam", "Camera", "", "2", "Ask" },
+        { "mic", "Microphone", "", "1", "Ask" },
+        { "sensor", "Motion sensors", "", "5", "Allow" },
+        { "notify", "Notifications", "", "4", "Ask" },
+        { "js", "JavaScript", "", "-1", "Allow" },
+        { "img", "Images", "", "-1", "Allow" },
+        { "pop", "Pop-ups and redirects", "", "-1", "Block sneaky ones" },
+        { "sound", "Sound", "", "-1", "Automatic" },
+        { "autoplay", "Autoplay", "", "9", "Allow" },
+        { "dl", "Automatic downloads", "", "7", "Ask" },
+        { "midi", "MIDI devices", "", "11", "Ask" },
+        { "clip", "Clipboard", "", "6", "Ask" },
+        { "files", "File editing", "", "8", "Ask" },
+        { "fonts", "Fonts", "", "10", "Ask" },
+        { "window", "Window management", "", "12", "Ask" }
+    };
+
+    // Kept in Capri's store as lines of "site, permission, allow/block/ask". "*" is every site's default.
+    private static Dictionary<string, string> perms;
+    private static readonly object permGate = new object();
+
+    internal static string PermHost(string host)
+    {
+        host = (host ?? "").ToLowerInvariant();
+        return host.StartsWith("www.", StringComparison.Ordinal) ? host.Substring(4) : host;
+    }
+
+    private static void LoadPerms()
+    {
+        if (perms != null) return;
+        perms = new Dictionary<string, string>();
+        string all = Host == null ? "" : Host.Store.Get("siteperms", "") ?? "";
+        foreach (string line in all.Split('\n'))
+        {
+            string[] parts = line.Trim().Split('\t');
+            if (parts.Length == 3 && parts[2].Length > 0) perms[parts[0] + "\t" + parts[1]] = parts[2];
+        }
+    }
+
+    private static void SavePerms()
+    {
+        StringBuilder all = new StringBuilder();
+        foreach (KeyValuePair<string, string> one in perms) all.Append(one.Key).Append('\t').Append(one.Value).Append('\n');
+        if (Host != null) Host.Store.Set("siteperms", all.ToString());
+    }
+
+    internal static int PermRow(string key)
+    {
+        for (int i = 0; i < PermList.GetLength(0); i++) if (PermList[i, 0] == key) return i;
+        return -1;
+    }
+
+    // What a site may do: its own setting, or every site's, or "" for the built-in default.
+    internal static string SitePerm(string host, string key)
+    {
+        if (string.IsNullOrEmpty(host)) return "";
+        lock (permGate)
+        {
+            LoadPerms();
+            string v;
+            if (host != "*" && perms.TryGetValue(PermHost(host) + "\t" + key, out v)) return v;
+            return perms.TryGetValue("*\t" + key, out v) ? v : "";
+        }
+    }
+
+    // Only what was set for this site itself.
+    internal static string OwnPerm(string host, string key)
+    {
+        lock (permGate)
+        {
+            LoadPerms();
+            string v;
+            return perms.TryGetValue((host == "*" ? "*" : PermHost(host)) + "\t" + key, out v) ? v : "";
+        }
+    }
+
+    internal static void SetPerm(string host, string key, string value)
+    {
+        lock (permGate)
+        {
+            LoadPerms();
+            string at = (host == "*" ? "*" : PermHost(host)) + "\t" + key;
+            if (string.IsNullOrEmpty(value)) perms.Remove(at); else perms[at] = value;
+            SavePerms();
+        }
+    }
+
+    internal static void ResetPerms(string host)
+    {
+        lock (permGate)
+        {
+            LoadPerms();
+            string start = (host == "*" ? "*" : PermHost(host)) + "\t";
+            List<string> gone = new List<string>();
+            foreach (string key in perms.Keys) if (key.StartsWith(start, StringComparison.Ordinal)) gone.Add(key);
+            foreach (string key in gone) perms.Remove(key);
+            SavePerms();
+        }
+    }
+
+    // Sites with their own settings, and how many they changed.
+    internal static SortedDictionary<string, int> PermSites()
+    {
+        SortedDictionary<string, int> sites = new SortedDictionary<string, int>();
+        lock (permGate)
+        {
+            LoadPerms();
+            foreach (string key in perms.Keys)
+            {
+                string site = key.Substring(0, key.IndexOf('\t'));
+                if (site == "*") continue;
+                int n;
+                sites.TryGetValue(site, out n);
+                sites[site] = n + 1;
+            }
+        }
+        return sites;
+    }
+
+    internal static bool ImagesBlocked()
+    {
+        lock (permGate)
+        {
+            LoadPerms();
+            foreach (KeyValuePair<string, string> one in perms) if (one.Key.EndsWith("\timg", StringComparison.Ordinal) && one.Value == "block") return true;
+        }
+        return false;
+    }
+
+    // The addresses a site's data and permissions live under.
+    internal static List<string> SiteOrigins(string host, bool plain)
+    {
+        List<string> all = new List<string> { "https://" + host };
+        if (!host.StartsWith("www.", StringComparison.Ordinal)) all.Add("https://www." + host);
+        if (plain) { all.Add("http://" + host); if (!host.StartsWith("www.", StringComparison.Ordinal)) all.Add("http://www." + host); }
+        return all;
+    }
+
+    internal static string Bytes(long n)
+    {
+        System.Globalization.CultureInfo en = System.Globalization.CultureInfo.InvariantCulture;
+        if (n < 1024) return n + " B";
+        if (n < 1048576) return (n / 1024.0).ToString("0.#", en) + " KB";
+        if (n < 1073741824) return (n / 1048576.0).ToString("0.#", en) + " MB";
+        return (n / 1073741824.0).ToString("0.##", en) + " GB";
+    }
+
     private DateTime reacted;
 
     // A video they watched in her browser just ended: a short reaction, and what to watch next.
@@ -3390,6 +3542,8 @@ public class CapriInternalBrowser : ICapriMod
             box.Controls.Add(shield);
             shield.Paint += delegate(object sender, PaintEventArgs e) { DrawShield(e.Graphics); };
             shield.Click += delegate { Tab t = tab; if (t != null && !JustShut) ShieldPanel(t); };
+            lens.Cursor = Cursors.Hand;
+            lens.Click += delegate { Tab t = tab; if (t != null && !JustShut) LockPanel(t); };
             box.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(mod.look.Shade(6))) e.Graphics.DrawRectangle(line, 0, 0, box.Width - 1, box.Height - 1); };
 
             Button back = Tool("\uE76B", 36, "Back (Alt+Left)", DockStyle.Left), forward = Tool("\uE76C", 36, "Forward (Alt+Right)", DockStyle.Left), reload = Tool("\uE72C", 36, "Reload (F5)", DockStyle.Left);
@@ -3450,7 +3604,7 @@ public class CapriInternalBrowser : ICapriMod
                 lens.Text = "\uE72E";
                 lens.ForeColor = look.Shade(4);
                 address.ForeColor = look.Shade(2);
-                tip = "Secure connection (https): what you send this site is encrypted.";
+                tip = "Secure connection (https). Click for site info and settings.";
             }
             else if (scheme == "http")
             {
@@ -3646,6 +3800,340 @@ public class CapriInternalBrowser : ICapriMod
             FadeIn(drop);
             Point under = shield.PointToScreen(new Point(shield.Width, shield.Height + 4));
             drop.Show(new Point(Math.Max(0, under.X - card.Width), under.Y));
+        }
+
+
+        // ---- The lock: site info like Opera's. Connection, cookies and site data, and the site's own settings. ----
+        private void LockPanel(Tab t)
+        {
+            Uri at;
+            if (t.OnReader || t.Address == null || !Uri.TryCreate(t.Address, UriKind.Absolute, out at) || !at.Scheme.StartsWith("http", StringComparison.Ordinal))
+            {
+                address.Focus();
+                address.SelectAll();
+                return;
+            }
+            Look look = mod.look;
+            string host = at.Host.ToLowerInvariant();
+            bool secure = at.Scheme == "https";
+            Color back = look.Shade(1), ink = look.Shade(2), faint = look.Shade(3), accent = look.Shade(4), red = look.Shade(5), edge = look.Shade(6);
+            Color hover = Mix(back, ink, .08f);
+            const int wide = 330;
+            Panel card = new Panel { Width = wide, BackColor = back };
+            ToolStripDropDown drop = new ToolStripDropDown { Padding = Padding.Empty, Margin = Padding.Empty, DropShadowEnabled = true, BackColor = back };
+            ToolStripControlHost holder = new ToolStripControlHost(card) { Padding = Padding.Empty, Margin = Padding.Empty, AutoSize = false };
+            int y = 0;
+            Action<int> show = null;
+
+            Func<string, float, Color, Label> text = delegate(string words, float size, Color color)
+            {
+                Label l = new Label { Text = words, AutoSize = false, Width = wide - 38, Left = 18, Top = y, ForeColor = color, BackColor = back, Font = new System.Drawing.Font(Ui, size), UseMnemonic = false };
+                l.Height = TextRenderer.MeasureText(words, l.Font, new Size(l.Width, 0), TextFormatFlags.WordBreak).Height + 4;
+                card.Controls.Add(l);
+                y += l.Height;
+                return l;
+            };
+            // A row like Opera's: icon, words, and an arrow or "opens elsewhere" sign at the end.
+            Action<string, string, Color, string, Action> line = delegate(string glyph, string words, Color color, string tail, Action click)
+            {
+                Panel row = new Panel { Left = 0, Top = y, Width = wide, Height = 44, BackColor = back };
+                Label icon = new Label { Text = glyph, Left = 18, Top = 0, Width = 30, Height = 44, TextAlign = ContentAlignment.MiddleLeft, ForeColor = color, BackColor = Color.Transparent, Font = new System.Drawing.Font("Segoe MDL2 Assets", 12f) };
+                Label name = new Label { Text = words, Left = 50, Top = 0, Width = wide - 96, Height = 44, TextAlign = ContentAlignment.MiddleLeft, ForeColor = color, BackColor = Color.Transparent, Font = new System.Drawing.Font(Ui, 11f), UseMnemonic = false };
+                Label end = new Label { Text = tail ?? "", Left = wide - 42, Top = 0, Width = 24, Height = 44, TextAlign = ContentAlignment.MiddleCenter, ForeColor = faint, BackColor = Color.Transparent, Font = new System.Drawing.Font("Segoe MDL2 Assets", 9f) };
+                row.Controls.Add(icon);
+                row.Controls.Add(name);
+                row.Controls.Add(end);
+                if (click != null)
+                {
+                    EventHandler enter = delegate { row.BackColor = hover; };
+                    EventHandler leave = delegate { if (!row.IsDisposed && !row.ClientRectangle.Contains(row.PointToClient(Cursor.Position))) row.BackColor = back; };
+                    EventHandler go = delegate { click(); };
+                    foreach (Control c in new Control[] { row, icon, name, end }) { c.MouseEnter += enter; c.MouseLeave += leave; c.Click += go; c.Cursor = Cursors.Hand; }
+                }
+                card.Controls.Add(row);
+                y += 44;
+            };
+            // The top: the site's name (or a back arrow and the page's name), and the close cross.
+            Action<string, Action> top = delegate(string title, Action backTo)
+            {
+                if (backTo != null)
+                {
+                    Label arrow = new Label { Text = "", Left = 12, Top = 12, Width = 28, Height = 28, ForeColor = ink, BackColor = back, Font = new System.Drawing.Font("Segoe MDL2 Assets", 11f), Cursor = Cursors.Hand, TextAlign = ContentAlignment.MiddleCenter };
+                    arrow.MouseEnter += delegate { arrow.ForeColor = red; };
+                    arrow.MouseLeave += delegate { arrow.ForeColor = ink; };
+                    arrow.Click += delegate { backTo(); };
+                    card.Controls.Add(arrow);
+                }
+                Label head = new Label { Text = title, Left = backTo != null ? 44 : 18, Top = 12, Width = wide - 100, Height = 28, ForeColor = backTo != null ? ink : accent, BackColor = back, Font = new System.Drawing.Font(UiBold, 11.5f), UseMnemonic = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft };
+                card.Controls.Add(head);
+                Label shut = new Label { Text = "", Left = wide - 42, Top = 12, Width = 28, Height = 28, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font("Segoe MDL2 Assets", 10f), Cursor = Cursors.Hand, TextAlign = ContentAlignment.MiddleCenter };
+                new ToolTip().SetToolTip(shut, "Close");
+                shut.MouseEnter += delegate { shut.ForeColor = red; };
+                shut.MouseLeave += delegate { shut.ForeColor = faint; };
+                shut.Click += delegate { drop.Close(); };
+                card.Controls.Add(shut);
+                y = 50;
+            };
+
+            show = delegate(int view)
+            {
+                card.SuspendLayout();
+                List<Control> old = new List<Control>();
+                foreach (Control c in card.Controls) old.Add(c);
+                card.Controls.Clear();
+                Later(delegate { foreach (Control c in old) c.Dispose(); });
+                y = 0;
+                if (view == 0)
+                {
+                    top(host, null);
+                    line(secure ? "" : "", secure ? "Connection is secure" : "Connection is not secure", secure ? ink : red, "", delegate { show(1); });
+                    line("", "Cookies and site data", ink, "", delegate { show(2); });
+                    line("", "Site settings", ink, "", delegate { drop.Close(); Later(delegate { OpenSiteSettings(host); }); });
+                    int changed = 0;
+                    for (int i = 0; i < PermList.GetLength(0); i++) if (OwnPerm(host, PermList[i, 0]).Length > 0) changed++;
+                    if (changed > 0) { y += 2; text(changed == 1 ? "You changed 1 permission for this site." : "You changed " + changed + " permissions for this site.", 9f, faint); }
+                    y += 8;
+                }
+                else if (view == 1)
+                {
+                    top(secure ? "Connection is secure" : "Connection is not secure", delegate { show(0); });
+                    text(secure ? "Your information (like passwords or card numbers) is private when it's sent to this site."
+                        : "Don't enter anything private here, like passwords or card numbers. This site doesn't encrypt what you send, so others could see it.", 10f, ink);
+                    y += 6;
+                    if (secure) line("", "Certificate is valid", ink, null, null);
+                    else line("", "This site doesn't use https", red, null, null);
+                    y += 6;
+                }
+                else
+                {
+                    top("Cookies and site data", delegate { show(0); });
+                    Label info = text("Checking what this site keeps on your PC...", 10f, faint);
+                    y += 10;
+                    Button wipe = new Button { Text = "Delete cookies and site data", Left = 18, Top = y, Width = wide - 36, Height = 34, FlatStyle = FlatStyle.Flat, BackColor = look.Shade(0), ForeColor = ink, Font = new System.Drawing.Font(Ui, 10f), Cursor = Cursors.Hand, TabStop = false };
+                    wipe.FlatAppearance.BorderColor = edge;
+                    wipe.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), red, .25f);
+                    wipe.Click += delegate { drop.Close(); Later(delegate { WipeSiteData(host, t); }); };
+                    card.Controls.Add(wipe);
+                    y += 46;
+                    line("", "Manage in Site settings", ink, "", delegate { drop.Close(); Later(delegate { OpenSiteSettings(host); }); });
+                    y += 4;
+                    t.Viewer.SiteData(host, delegate(string got) { Post(delegate { if (info.IsDisposed) return; info.Text = DataLine(got); info.ForeColor = ink; }); });
+                }
+                card.ResumeLayout();
+                card.Height = y;
+                holder.Size = card.Size;
+                drop.Size = card.Size;
+                card.Invalidate();
+            };
+            card.Paint += delegate(object sender, PaintEventArgs e) { using (Pen border = new Pen(edge)) e.Graphics.DrawRectangle(border, 0, 0, card.Width - 1, card.Height - 1); };
+            drop.Items.Add(holder);
+            drop.Closed += delegate { menuShut = DateTime.Now; Later(delegate { drop.Dispose(); }); };
+            show(0);
+            FadeIn(drop);
+            drop.Show(lens.PointToScreen(new Point(0, lens.Height + 4)));
+        }
+
+        // "3 cookies in use, 387 B of site data"
+        private static string DataLine(string got)
+        {
+            if (string.IsNullOrEmpty(got)) return "Couldn't check right now.";
+            string cookies = DataCookies(got);
+            return (cookies ?? "Cookies unknown") + " in use. " + DataSize(got) + " of site data.";
+        }
+
+        private static string DataSize(string got)
+        {
+            long used;
+            string[] parts = (got ?? "").Split('|');
+            return long.TryParse(parts[0], out used) && used >= 0 ? Bytes(used) : "Unknown";
+        }
+
+        private static string DataCookies(string got)
+        {
+            int count;
+            string[] parts = (got ?? "").Split('|');
+            if (parts.Length < 2 || !int.TryParse(parts[1], out count) || count < 0) return null;
+            return count == 1 ? "1 cookie" : count + " cookies";
+        }
+
+        private void WipeSiteData(string host, Tab from)
+        {
+            string question = "Delete all cookies and site data for " + host + "? You'll be signed out of it. Your history and saved passwords stay.";
+            if (MessageBox.Show(FindForm(), question, "Capri Browser", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            Viewer v = from != null && from.Viewer.Modern ? from.Viewer : null;
+            if (v == null) foreach (Tab one in tabs) if (one.Viewer.Modern && !one.Private) { v = one.Viewer; break; }
+            if (v == null) { mod.Tell("Edge's engine isn't running yet, so there's nothing to clear right now, choom."); return; }
+            string h = PermHost(host);
+            v.WipeSite(h, delegate(string failed)
+            {
+                Post(delegate
+                {
+                    siteInfo.Remove(h);
+                    mod.Tell(failed == null ? "Done, choom. " + h + "'s cookies and site data are gone." : "I couldn't clear it, choom: " + failed);
+                    RefreshSettingsTabs();
+                    if (from != null && !from.OnReader && PermHost(HostOf(from.Address)) == h) from.Viewer.Reload();
+                });
+            });
+        }
+
+        // ---- Settings: grouped like Opera's, with a page for each site. ----
+        private string settingsSite, settingsJump;
+        private readonly Dictionary<string, string> siteInfo = new Dictionary<string, string>();
+
+        private void RefreshSettingsTabs() { foreach (Tab open in tabs) if (open.Special == "settings") ShowReader(open); }
+
+        // From the lock: Settings, on this site's own page.
+        private void OpenSiteSettings(string host)
+        {
+            settingsSite = PermHost(host);
+            siteInfo.Remove(settingsSite);
+            settingsY = 0;
+            foreach (Tab open in tabs) if (open.Special == "settings") { ShowReader(open); Select(open); return; }
+            OpenTab(null, null, true);
+            tab.Special = "settings";
+            ShowReader(tab);
+        }
+
+        private void AskSiteData(string h)
+        {
+            Viewer v = null;
+            foreach (Tab one in tabs) if (one.Viewer.Modern && !one.Private) { v = one.Viewer; break; }
+            if (v == null) { siteInfo[h] = ""; return; }
+            v.SiteData(h, delegate(string got) { Post(delegate { siteInfo[h] = got ?? ""; if (settingsSite == h) RefreshSettingsTabs(); }); });
+        }
+
+        // A site setting went into Edge's own permission store too, for every open tab's engine.
+        private void PushPerm(string host, int row)
+        {
+            int kind;
+            if (host == null || host == "*" || !int.TryParse(PermList[row, 3], out kind) || kind < 0) return;
+            string now = SitePerm(host, PermList[row, 0]);
+            foreach (Tab one in tabs) one.Viewer.Permit(kind, host, now);
+        }
+
+        private void SettingsSections(out string[] ids, out string[] titles, out string[] icons)
+        {
+            ids = new[] { "look", "capri", "video", "privacy", "search", "tabs", "files", "lang", "discord", "keys", "can", "updates" };
+            titles = new[] { "Appearance", "Capri features", T(15), "Privacy & security", T(34), T(45), T(43), T(22), "Discord", T(23), "What Capri can do", "Updates" };
+            icons = new[] { "", "", "", "", "", "", "", "", "", "", "", "" };
+        }
+
+        // The menu on the left, in groups. On a site's page its links go back to the main page.
+        private string SettingsNav(string[] ids, string[] titles, string[] icons, int lit)
+        {
+            StringBuilder nav = new StringBuilder("<nav class='nav'><h1>" + Esc(T(7).ToUpperInvariant()) + "</h1>");
+            for (int i = 0; i < ids.Length; i++)
+            {
+                if (i == 3 || i == 7 || i == 11) nav.Append("<hr class='gp'>");
+                string go = lit >= 0 ? "S('site','#" + ids[i] + "');return false" : "Go(event,'" + ids[i] + "')";
+                nav.Append("<a href='#").Append(ids[i]).Append("'").Append(i == lit ? " class='on'" : "").Append(" onclick=\"").Append(go).Append("\"><i class='ic'>")
+                    .Append(icons[i]).Append("</i>").Append(Esc(titles[i])).Append("</a>");
+            }
+            return nav.Append("</nav>").ToString();
+        }
+
+        private static string SettingsExtraCss(Look look)
+        {
+            string[] c = look.Colors;
+            return "<style>.st{max-width:1140px}.nav{width:236px}.nav a{white-space:nowrap}.ic{font-family:'Segoe MDL2 Assets';font-style:normal;font-size:14px;width:28px;display:inline-block;vertical-align:-2px}"
+                + ".nav hr.gp{border:none;border-top:1px solid " + c[6] + ";margin:10px 8px}"
+                + ".sub{font-size:13px;letter-spacing:2px;color:" + c[3] + ";margin:24px 0 2px;font-weight:600}"
+                + ".site{display:flex;align-items:center;padding:12px 6px;border-top:1px solid " + c[6] + ";color:" + c[2] + ";text-decoration:none;transition:background .15s}"
+                + ".site:hover{background:rgba(255,255,255,.04)}.site span{margin-left:auto;color:" + c[3] + ";font-size:13px}.site .ch{width:auto;margin-left:12px;font-size:10px;color:" + c[3] + "}"
+                + ".bk{font-family:'Segoe MDL2 Assets';color:" + c[2] + ";text-decoration:none;margin-right:12px;font-size:13px}.bk:hover{color:" + c[5] + "}"
+                + ".pi{color:" + c[3] + "}.hint{color:" + c[3] + ";font-size:13px;margin:10px 0 14px}</style>";
+        }
+
+        // The choices for one permission. On a site's page, the first is "whatever every site gets".
+        private static void PermChoices(int row, bool all, out List<string> values, out List<string> names)
+        {
+            string key = PermList[row, 0], built = PermList[row, 4];
+            Func<string, string> name = delegate(string v)
+            {
+                if (v == "ask") return "Ask";
+                if (v == "allow") return key == "pop" ? "Allow all" : key == "sound" ? "Automatic" : "Allow";
+                return key == "pop" ? "Block sneaky ones" : key == "sound" ? "Mute" : "Block";
+            };
+            values = new List<string> { "" };
+            names = new List<string>();
+            string everyone = OwnPerm("*", key);
+            names.Add((all || everyone.Length == 0 ? built : name(everyone)) + " (default)");
+            string[] picks;
+            if (key == "pop") picks = all ? new[] { "allow" } : new[] { "block", "allow" };
+            else if (key == "sound") picks = all ? new[] { "block" } : new[] { "allow", "block" };
+            else if (built == "Ask") picks = all ? new[] { "allow", "block" } : new[] { "ask", "allow", "block" };
+            else picks = all ? new[] { "block" } : new[] { "allow", "block" };
+            foreach (string p in picks) { values.Add(p); names.Add(name(p)); }
+        }
+
+        // A site's own page (or every site's defaults): its usage with Delete data, and its permissions with Reset.
+        private string SitePage(Look look, StringBuilder html)
+        {
+            string[] ids, titles, icons;
+            SettingsSections(out ids, out titles, out icons);
+            string h = settingsSite;
+            bool all = h == "*";
+            html.Append(SettingsExtraCss(look)).Append("<div class='st'>").Append(SettingsNav(ids, titles, icons, 3)).Append("<div class='main'>");
+            html.Append("<div class='card'><h2><a class='bk' href='#' title='Back' onclick=\"S('site','#privacy');return false\"></a>").Append(Esc(all ? "ALL SITES" : h.ToUpperInvariant())).Append("</h2>");
+            if (all) html.Append(Row("Default permissions", "What every site may use and do, unless you change it for that site.", ""));
+            else
+            {
+                string info;
+                if (!siteInfo.TryGetValue(h, out info)) { siteInfo[h] = null; AskSiteData(h); }
+                string wipe = "<button class='bt' onclick=\"if(confirm('Delete all cookies and site data for " + h + "? You will be signed out of it.'))S('sitewipe',1)\">Delete data</button>";
+                html.Append("<h3 class='sub'>USAGE</h3>").Append(Row(info == null ? "Checking..." : DataSize(info), info == null ? null : DataCookies(info), wipe));
+            }
+            html.Append("</div><div class='card'><h2>PERMISSIONS <span>&gt;</span></h2>");
+            html.Append(Row(all ? "Every site" : h, all ? "Sites you change on their own page keep their own setting." : "Changes apply the next time this site loads.", "<button class='bt' onclick=\"S('permreset',1)\">Reset permissions</button>"));
+            for (int i = 0; i < PermList.GetLength(0); i++)
+            {
+                List<string> values, names;
+                PermChoices(i, all, out values, out names);
+                html.Append("<div class='r'><div><b><span class='ic pi'>").Append(PermList[i, 2]).Append("</span>").Append(Esc(PermList[i, 1])).Append("</b></div><div class='c'>")
+                    .Append(Pick("perm-" + PermList[i, 0], values, names, OwnPerm(h, PermList[i, 0]), false)).Append("</div></div>");
+            }
+            html.Append("</div></div></div><script>var O='").Append(Own).Append("';function S(k,v){location.href=O+'set?k='+k+'&v='+encodeURIComponent(v)+'&y='+Math.round(scrollY);}scrollTo(0,").Append(settingsY).Append(");</script>");
+            return html.Append("</body></html>").ToString();
+        }
+
+        // Site settings' own keys on the settings page. True when it was one of them.
+        private bool SetSiteFromPage(string key, string value)
+        {
+            if (key == "site")
+            {
+                settingsY = 0;
+                settingsJump = null;
+                if (value.StartsWith("#", StringComparison.Ordinal)) { settingsSite = null; if (Regex.IsMatch(value, @"^#[a-z]+$")) settingsJump = value.Substring(1); }
+                else settingsSite = value == "*" ? "*" : Regex.IsMatch(value, @"^[a-z0-9.-]+$") ? PermHost(value) : null;
+                if (settingsSite != null && settingsSite != "*") siteInfo.Remove(settingsSite);
+                RefreshSettingsTabs();
+                return true;
+            }
+            if (key.StartsWith("perm-", StringComparison.Ordinal))
+            {
+                int row = PermRow(key.Substring(5));
+                if (row < 0 || settingsSite == null) return true;
+                SetPerm(settingsSite, PermList[row, 0], value == "allow" || value == "block" || value == "ask" ? value : "");
+                PushPerm(settingsSite, row);
+                Guard();
+                RefreshSettingsTabs();
+                return true;
+            }
+            if (key == "permreset")
+            {
+                if (settingsSite == null) return true;
+                ResetPerms(settingsSite);
+                for (int i = 0; i < PermList.GetLength(0); i++) PushPerm(settingsSite, i);
+                Guard();
+                RefreshSettingsTabs();
+                return true;
+            }
+            if (key == "sitewipe")
+            {
+                if (settingsSite != null && settingsSite != "*") WipeSiteData(settingsSite, null);
+                return true;
+            }
+            return false;
         }
 
         internal void SetAds(bool on)
@@ -4371,6 +4859,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             foreach (Tab open in tabs) if (open.Special == "settings") { Select(open); return true; }
             settingsY = 0;
+            settingsSite = null;
             OpenTab(null, null, true);
             tab.Special = "settings";
             ShowReader(tab);
@@ -4402,13 +4891,21 @@ public class CapriInternalBrowser : ICapriMod
             string[] c = look.Colors;
             StringBuilder html = Start(look, SettingsCss());
             html.Replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';script-src 'unsafe-inline';style-src 'unsafe-inline';img-src data: https://www.google.com https://*.gstatic.com;form-action 'none';base-uri 'none'\">");
-            string[] ids = { "look", "search", "video", "wall", "privacy", "files", "start", "lang", "discord", "extras", "can", "keys", "updates" };
-            string[] titles = { T(8), T(34), T(15), T(1), T(35), T(43), T(45), T(22), "Discord", "Capri features", "What Capri can do", T(23), "Updates" };
-            html.Append("<div class='st'><nav class='nav'><h1>").Append(Esc(T(7).ToUpperInvariant())).Append("</h1>");
-            for (int i = 0; i < ids.Length; i++) html.Append("<a href='#").Append(ids[i]).Append("' onclick=\"Go(event,'").Append(ids[i]).Append("')\">").Append(Esc(titles[i])).Append("</a>");
-            html.Append("</nav><div class='main'>");
+            if (settingsSite != null) return SitePage(look, html);
+            string[] ids, titles, icons;
+            SettingsSections(out ids, out titles, out icons);
+            html.Append(SettingsExtraCss(look)).Append("<div class='st'>").Append(SettingsNav(ids, titles, icons, -1)).Append("<div class='main'>");
             Func<int, string> open = delegate(int i) { return "<div class='card' id='" + ids[i] + "' style='animation-delay:" + (settingsY == 0 ? i * 40 : 0) + "ms'><h2>" + Esc(titles[i].ToUpperInvariant()) + " <span>&gt;</span></h2>"; };
+            // Capri's on/off features, each in the part it belongs to.
+            Func<string, string> extras = delegate(string group)
+            {
+                StringBuilder rows = new StringBuilder();
+                for (int i = 0; i < ExtraList.GetLength(0); i++)
+                    if (ExtraList[i, 3] == group) rows.Append(Row(ExtraList[i, 1], null, Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
+                return rows.ToString();
+            };
 
+            // Appearance: screen mode, font, text size, websites, wallpaper.
             html.Append(open(0)).Append("<div class='th'>");
             foreach (string theme in Look.ThemeNames)
             {
@@ -4422,44 +4919,49 @@ public class CapriInternalBrowser : ICapriMod
             using (InstalledFontCollection installed = new InstalledFontCollection()) foreach (FontFamily family in installed.Families) faces.Add(family.Name);
             html.Append(Row(T(12), null, Pick("font", faces, faces, look.Font, true)));
             html.Append(Row(T(13), null, "<input type='range' min='70' max='200' step='10' value='" + look.Size + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('size',this.value)\"><span class='v'>" + look.Size + "%</span>"));
-            html.Append(Row(T(33), null, Switch("sites", look.Sites))).Append("</div>");
+            html.Append(Row(T(33), null, Switch("sites", look.Sites))).Append(extras("look"));
+            html.Append(Row("Wallpaper", wallText.Text, Btn("wallpaper", T(19), false) + Btn("nowall", T(20), false)));
+            html.Append(Row(T(21), null, Switch("names", look.Names))).Append("</div>");
+
+            html.Append(open(1)).Append(extras("capri")).Append("</div>");
+            html.Append(open(2)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : "")).Append(extras("video")).Append("</div>");
+
+            // Privacy & security: tracking, ads, warnings, clearing data, and each site's settings.
+            List<string> levels = new List<string>(), levelNames = new List<string>();
+            for (int i = 0; i < 4; i++) { levels.Add(i.ToString()); levelNames.Add(T(37 + i)); }
+            html.Append(open(3)).Append(Row(T(36), "Strict may break some sites.", Pick("track", levels, levelNames, look.Track.ToString(), false)));
+            html.Append(Row(T(41), "Blocks major ad networks. Ads served by the site itself, such as on YouTube, are not affected.", Switch("ads", look.Ads))).Append(extras("privacy"));
+            html.Append(Row(T(42), "Signs you out of websites. History, Speed Dial and saved passwords are kept.", Btn("wipe", T(42), false)));
+            html.Append("<h3 class='sub'>SITE SETTINGS</h3>").Append(Row("All sites", "What sites may use and do: location, camera, microphone, pop-ups, JavaScript and more.", "<button class='bt' onclick=\"S('site','*')\">Open</button>"));
+            SortedDictionary<string, int> changed = PermSites();
+            foreach (KeyValuePair<string, int> one in changed)
+                html.Append("<a class='site' href='#' onclick=\"S('site','").Append(Esc(one.Key)).Append("');return false\"><i class='ic'></i>").Append(Esc(one.Key)).Append("<span>")
+                    .Append(one.Value == 1 ? "1 permission changed" : one.Value + " permissions changed").Append("</span><i class='ic ch'></i></a>");
+            if (changed.Count == 0) html.Append("<p class='hint'>Sites you change show up here. Click the lock next to the address on any site to see its settings.</p>");
+            html.Append("</div>");
 
             List<string> engineIds = new List<string>(), engineNames = new List<string>();
             for (int i = 0; i < Engines.GetLength(0); i++) { engineIds.Add(Engines[i, 0]); engineNames.Add(Engines[i, 1]); }
-            html.Append(open(1)).Append(Row(T(34), null, Pick("search", engineIds, engineNames, look.Search, false))).Append("</div>");
-
-            html.Append(open(2)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : "")).Append("</div>");
-
-            html.Append(open(3)).Append(Row("Wallpaper", wallText.Text, Btn("wallpaper", T(19), false) + Btn("nowall", T(20), false)));
-            html.Append(Row(T(21), null, Switch("names", look.Names))).Append("</div>");
-
-            List<string> levels = new List<string>(), levelNames = new List<string>();
-            for (int i = 0; i < 4; i++) { levels.Add(i.ToString()); levelNames.Add(T(37 + i)); }
-            html.Append(open(4)).Append(Row(T(36), "Strict may break some sites.", Pick("track", levels, levelNames, look.Track.ToString(), false)));
-            html.Append(Row(T(41), "Blocks major ad networks. Ads served by the site itself, such as on YouTube, are not affected.", Switch("ads", look.Ads)));
-            html.Append(Row(T(42), "Signs you out of websites. History, Speed Dial and saved passwords are kept.", Btn("wipe", T(42), false))).Append("</div>");
-
-            html.Append(open(5)).Append(Row(T(43), saveText.Text, Btn("folder", T(44), false))).Append("</div>");
-            html.Append(open(6)).Append(Row(T(46), null, Switch("restore", look.Restore))).Append("</div>");
+            html.Append(open(4)).Append(Row(T(34), null, Pick("search", engineIds, engineNames, look.Search, false))).Append("</div>");
+            html.Append(open(5)).Append(Row(T(46), null, Switch("restore", look.Restore))).Append(extras("tabs")).Append("</div>");
+            html.Append(open(6)).Append(Row(T(43), saveText.Text, Btn("folder", T(44), false))).Append("</div>");
 
             List<string> langIds = new List<string>(), langNames = new List<string>();
             for (int i = 0; i < Languages.GetLength(0); i++) { langIds.Add(Languages[i, 0]); langNames.Add(Languages[i, 1]); }
             html.Append(open(7)).Append(langIds.Count > 1 ? Row(T(22), null, Pick("lang", langIds, langNames, look.Lang, false)) : Row("English", "22 more languages can be downloaded. They're kept outside the mod, so they don't use its space.", Btn("getlangs", "Download languages", true))).Append("</div>");
 
             bool personal = Kept("discordmode") == "personal";
-            html.Append(open(8)).Append(Row("Discord button", "You can also switch this by right-clicking the Discord button.", Pick("discord", new[] { "capri", "personal" }, new[] { "Capri Discord server", "Your Discord" }, personal ? "personal" : "capri", false))).Append("</div>");
-
-            html.Append(open(9));
-            for (int i = 0; i < ExtraList.GetLength(0); i++) html.Append(Row(ExtraList[i, 1], null, Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
-            html.Append("</div>");
+            html.Append(open(8)).Append(Row("Discord button", "You can also switch this by right-clicking the Discord button.", Pick("discord", new[] { "capri", "personal" }, new[] { "Capri Discord server", "Your Discord" }, personal ? "personal" : "capri", false))).Append(extras("discord")).Append("</div>");
+            html.Append(open(9)).Append("<div class='pre'>").Append(Esc(KeysText)).Append("</div></div>");
             html.Append(open(10)).Append("<div class='pre'>").Append(Esc(CanText)).Append("</div></div>");
-            html.Append(open(11)).Append("<div class='pre'>").Append(Esc(KeysText)).Append("</div></div>");
             string last = Kept("updated");
-            html.Append(open(12)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
+            html.Append(open(11)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
+            string jump = settingsJump ?? "";
+            settingsJump = null;
             html.Append("</div></div><script>var O='").Append(Own).Append("';function S(k,v){location.href=O+'set?k='+k+'&v='+encodeURIComponent(v)+'&y='+Math.round(scrollY);}"
                 + "function P(b,v){var p=b.parentNode;p.children[0].className=v?'':'a';p.children[1].className=v?'a':'';S(p.getAttribute('data-k'),v);}function Go(e,id){e.preventDefault();document.getElementById(id).scrollIntoView({behavior:'smooth'});}"
                 + "var ns=document.querySelectorAll('.nav a');function Lit(){var best=0;document.querySelectorAll('.card').forEach(function(c,i){if(c.getBoundingClientRect().top<140)best=i;});ns.forEach(function(a,i){a.className=i==best?'on':'';});}"
-                + "addEventListener('scroll',Lit,{passive:true});scrollTo(0,").Append(settingsY).Append(");Lit();</script>");
+                + "addEventListener('scroll',Lit,{passive:true});scrollTo(0,").Append(settingsY).Append(");var J='").Append(jump).Append("';if(J=='look')scrollTo(0,0);else if(J){var e=document.getElementById(J);if(e)e.scrollIntoView();}Lit();</script>");
             return html.Append("</body></html>").ToString();
         }
 
@@ -4473,6 +4975,7 @@ public class CapriInternalBrowser : ICapriMod
             int n;
             int.TryParse(value, out n);
             if (y.Success) int.TryParse(y.Groups[1].Value, out settingsY);
+            if (SetSiteFromPage(key, value)) return;
             switch (key)
             {
                 case "theme": mod.look.Theme = value; Changed(); return;
@@ -6894,7 +7397,32 @@ public class CapriInternalBrowser : ICapriMod
         // Settings open as a page of their own.
         internal bool SettingsShown { get { return false; } set { if (value) WebSettings(); } }
 
-        private static readonly string[,] ExtraList = { { "control", "Takeover animation", "1" }, { "discordmsg", "Message via Discord in the browser (asks before sending)", "0" }, { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0" }, { "mouse", "Move the real mouse when Capri does things on a page", "1" }, { "catchup", "Catch me up when I come back to a tab that changed", "1" }, { "watchalong", "Watch-along: Capri reacts now and then during videos", "0" }, { "watchoften", "Watch-along reacts more often", "0" }, { "autofull", "Full screen for videos Capri opens", "1" }, { "react", "Comment when a video ends", "1" }, { "askmenu", "Ask Capri in the right-click menu", "1" }, { "glitch", "Glitch effect on takeover", "1" }, { "hoard", "Too-many-tabs reminder", "1" }, { "achieve", "Achievement notifications", "1" }, { "scam", "Suspicious site warnings", "1" }, { "shieldtalk", "Capri reacts sometimes when she blocks a sneaky redirect or pop-up", "1" }, { "downloads", "Program download warnings", "1" }, { "darkweb", "Dark mode for all sites", "0" }, { "timed", "3-minute limit on wiki races", "0" }, { "boot", "Start-up animation", "1" }, { "sleep", "Put unused tabs to sleep", "1" }, { "autopip", "Pop videos out when switching tabs", "0" }, { "holo", "Show Capri's hologram when she talks", "0" } };
+        // Key, words, on by default, and the part of Settings it shows in.
+        private static readonly string[,] ExtraList =
+        {
+            { "control", "Takeover animation", "1", "capri" },
+            { "discordmsg", "Message via Discord in the browser (asks before sending)", "0", "discord" },
+            { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0", "video" },
+            { "mouse", "Move the real mouse when Capri does things on a page", "1", "capri" },
+            { "catchup", "Catch me up when I come back to a tab that changed", "1", "tabs" },
+            { "watchalong", "Watch-along: Capri reacts now and then during videos", "0", "video" },
+            { "watchoften", "Watch-along reacts more often", "0", "video" },
+            { "autofull", "Full screen for videos Capri opens", "1", "video" },
+            { "react", "Comment when a video ends", "1", "video" },
+            { "askmenu", "Ask Capri in the right-click menu", "1", "capri" },
+            { "glitch", "Glitch effect on takeover", "1", "capri" },
+            { "hoard", "Too-many-tabs reminder", "1", "tabs" },
+            { "achieve", "Achievement notifications", "1", "capri" },
+            { "scam", "Suspicious site warnings", "1", "privacy" },
+            { "shieldtalk", "Capri reacts sometimes when she blocks a sneaky redirect or pop-up", "1", "privacy" },
+            { "downloads", "Program download warnings", "1", "privacy" },
+            { "darkweb", "Dark mode for all sites", "0", "look" },
+            { "timed", "3-minute limit on wiki races", "0", "capri" },
+            { "boot", "Start-up animation", "1", "capri" },
+            { "sleep", "Put unused tabs to sleep", "1", "tabs" },
+            { "autopip", "Pop videos out when switching tabs", "0", "video" },
+            { "holo", "Show Capri's hologram when she talks", "0", "capri" }
+        };
 
 
 
@@ -8103,6 +8631,9 @@ public class CapriInternalBrowser : ICapriMod
         public virtual void Privacy(Look look) { }
         // False when there's nothing to clear with; otherwise done gets null or why it failed.
         public virtual bool Clear(Action<string> done) { return false; }
+        public virtual void Permit(int kind, string host, string value) { }
+        public virtual void SiteData(string host, Action<string> got) { got(null); }
+        public virtual void WipeSite(string host, Action<string> done) { done("that needs Edge's engine"); }
         // A key pressed while the page has focus: true when Capri Browser used it.
         public Func<Keys, bool> Key;
         public virtual bool Modern { get { return false; } }
@@ -8187,7 +8718,7 @@ public class CapriInternalBrowser : ICapriMod
                     bool inFrame = (DateTime.UtcNow - topClick).TotalMilliseconds > 1500;
                     string frameSite = null;
                     try { Uri from; object frame = Get(request, "OriginalSourceFrameInfo"); if (frame != null && Uri.TryCreate(Get(frame, "Source") as string ?? "", UriKind.Absolute, out from)) frameSite = SiteOf(from.Host); } catch (Exception) { }
-                    if (Shielding && Uri.TryCreate(uri ?? "", UriKind.Absolute, out popTo) && (IsAd(uri) || PopAd.IsMatch(uri)
+                    if (Shielding && SitePerm(pageHost, "pop") != "allow" && Uri.TryCreate(uri ?? "", UriKind.Absolute, out popTo) && (IsAd(uri) || PopAd.IsMatch(uri)
                         || (JustClickedNothing && SiteOf(popTo.Host) != SiteOf(pageHost))
                         || (inFrame && SiteOf(popTo.Host) != SiteOf(pageHost) && SiteOf(popTo.Host) != frameSite)))
                     {
@@ -8206,6 +8737,23 @@ public class CapriInternalBrowser : ICapriMod
                     Set(request, "Handled", true);
                     if (string.IsNullOrEmpty(uri)) return;
                     if (Opening != null) Opening(uri); else Go(uri);
+                });
+                // A site asks for the camera, location and so on: its Site settings answer first, otherwise Edge asks.
+                Hook(core, "PermissionRequested", delegate(object asked)
+                {
+                    try
+                    {
+                        int kind = Convert.ToInt32(Get(asked, "PermissionKind"));
+                        string key = null;
+                        for (int i = 0; i < PermList.GetLength(0); i++) if (PermList[i, 3] == kind.ToString()) key = PermList[i, 0];
+                        Uri from;
+                        if (key == null || !Uri.TryCreate(Get(asked, "Uri") as string ?? "", UriKind.Absolute, out from)) return;
+                        string v = SitePerm(from.Host, key);
+                        if (v != "allow" && v != "block") return;
+                        PropertyInfo state = asked.GetType().GetProperty("State");
+                        state.SetValue(asked, Enum.ToObject(state.PropertyType, v == "allow" ? 1 : 2), null);
+                    }
+                    catch (Exception) { }
                 });
                 Hook(core, "DOMContentLoaded", delegate { ShieldPage(); if (Ready != null) Ready(); });
                 Hook(core, "DocumentTitleChanged", delegate { if (Titled != null) Titled(Get(core, "DocumentTitle") as string); });
@@ -8298,6 +8846,11 @@ public class CapriInternalBrowser : ICapriMod
                     {
                         if (guard == null) return;
                         string wants = Get(Get(asked, "Request"), "Uri") as string;
+                        if (pageHost != null && SitePerm(pageHost, "img") == "block" && Convert.ToInt32(Get(asked, "ResourceContext")) == 3)
+                        {
+                            Set(asked, "Response", Call(Get(core, "Environment"), "CreateWebResourceResponse", null, 403, "Blocked by Capri Browser", ""));
+                            return;
+                        }
                         bool ad = guard.Ads && !guard.AllowsAds(pageHost) && IsAd(wants);
                         bool tracker = !ad && guard.Track >= 2 && !guard.AllowsTrackers(pageHost) && IsTracker(wants);
                         if (!ad && !tracker) return;
@@ -8328,7 +8881,7 @@ public class CapriInternalBrowser : ICapriMod
                 Uri to;
                 bool byYou = true;
                 try { byYou = (bool)Get(args, "IsUserInitiated"); } catch (Exception) { }
-                if (Shielding && pageHost != null && Uri.TryCreate(going ?? "", UriKind.Absolute, out to) && to.Scheme.StartsWith("http", StringComparison.Ordinal)
+                if (Shielding && SitePerm(pageHost, "pop") != "allow" && pageHost != null && Uri.TryCreate(going ?? "", UriKind.Absolute, out to) && to.Scheme.StartsWith("http", StringComparison.Ordinal)
                     && (((IsAd(going) || PopAd.IsMatch(going)) && (!byYou || JustClickedNothing)) || (JustClickedNothing && SiteOf(to.Host) != SiteOf(pageHost))))
                 {
                     Set(args, "Cancel", true);
@@ -8338,6 +8891,7 @@ public class CapriInternalBrowser : ICapriMod
                     return;
                 }
                 pageHost = Uri.TryCreate(going ?? "", UriKind.Absolute, out to) ? to.Host.ToLowerInvariant() : null;
+                SiteRules();
                 blocked = 0;
                 tracked = 0;
                 Stopped = 0;
@@ -8372,6 +8926,26 @@ public class CapriInternalBrowser : ICapriMod
         private bool JustClickedNothing { get { return (DateTime.UtcNow - plainClick).TotalMilliseconds < 1500; } }
         private bool Shielding { get { return guard != null && guard.Ads && !guard.AllowsAds(pageHost); } }
 
+        // JavaScript and sound for the site it's going to, from its Site settings.
+        private bool siteMuted;
+        private void SiteRules()
+        {
+            if (core == null) return;
+            try
+            {
+                object settings = Get(core, "Settings");
+                bool js = pageHost == null || SitePerm(pageHost, "js") != "block";
+                if ((bool)Get(settings, "IsScriptEnabled") != js) Set(settings, "IsScriptEnabled", js);
+            }
+            catch (Exception) { }
+            try
+            {
+                if (pageHost != null && SitePerm(pageHost, "sound") == "block") { Set(core, "IsMuted", true); siteMuted = true; }
+                else if (siteMuted) { Set(core, "IsMuted", false); siteMuted = false; }
+            }
+            catch (Exception) { }
+        }
+
         private void ShieldNote(string text) { try { if (core != null) Call(core, "ExecuteScriptAsync", "window.__capriToast&&__capriToast(" + Quote(text) + ")"); } catch (Exception) { } }
 
         // The shield on: page parts hidden for this site, and its click guards switched on (or off, for sites they allow).
@@ -8400,7 +8974,7 @@ public class CapriInternalBrowser : ICapriMod
             catch (Exception) { }
             try
             {
-                bool want = look.Ads || look.Track >= 2;
+                bool want = look.Ads || look.Track >= 2 || ImagesBlocked();
                 if (want != filtering) { Call(core, want ? "AddWebResourceRequestedFilter" : "RemoveWebResourceRequestedFilter", "*", 0); filtering = want; }
             }
             catch (Exception) { }
@@ -8651,6 +9225,86 @@ public class CapriInternalBrowser : ICapriMod
             }
             catch (Exception error) { done(Inner(error).Message); }
             return true;
+        }
+
+
+        // Site settings, pushed into Edge's own permission store so an earlier "Allow" doesn't stick around.
+        public override void Permit(int kind, string host, string value)
+        {
+            if (core == null || kind < 0 || host == "*") return;
+            try
+            {
+                object profile = Get(core, "Profile");
+                int state = value == "allow" ? 1 : value == "block" ? 2 : 0;
+                foreach (string origin in SiteOrigins(host, true)) Call(profile, "SetPermissionStateAsync", kind, origin, state);
+            }
+            catch (Exception) { }
+        }
+
+        // How much a site keeps on this PC, and its cookies: "bytes|cookies" (-1 when unknown).
+        public override void SiteData(string host, Action<string> got)
+        {
+            if (core == null) { got(null); return; }
+            try
+            {
+                System.Threading.Tasks.TaskScheduler ui = System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext();
+                List<System.Threading.Tasks.Task<string>> sizes = new List<System.Threading.Tasks.Task<string>>();
+                foreach (string origin in SiteOrigins(host, false)) sizes.Add(Cdp("Storage.getUsageAndQuota", "{\"origin\":\"" + origin + "\"}"));
+                System.Threading.Tasks.Task cookies = (System.Threading.Tasks.Task)Call(Get(core, "CookieManager"), "GetCookiesAsync", "https://" + host);
+                List<System.Threading.Tasks.Task> all = new List<System.Threading.Tasks.Task>();
+                foreach (System.Threading.Tasks.Task<string> one in sizes) all.Add(one);
+                all.Add(cookies);
+                System.Threading.Tasks.Task.Factory.ContinueWhenAll(all.ToArray(), delegate(System.Threading.Tasks.Task[] done)
+                {
+                    long used = -1;
+                    foreach (System.Threading.Tasks.Task<string> one in sizes)
+                    {
+                        if (one.Status != System.Threading.Tasks.TaskStatus.RanToCompletion) continue;
+                        Match m = Regex.Match(one.Result ?? "", "\"usage\":\\s*([0-9.eE+]+)");
+                        double d;
+                        if (m.Success && double.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out d)) used = Math.Max(0, used) + (long)d;
+                    }
+                    int count = -1;
+                    if (cookies.Status == System.Threading.Tasks.TaskStatus.RanToCompletion)
+                    {
+                        System.Collections.ICollection list = Get(cookies, "Result") as System.Collections.ICollection;
+                        if (list != null) count = list.Count;
+                    }
+                    got(used + "|" + count);
+                }, CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None, ui);
+            }
+            catch (Exception) { got(null); }
+        }
+
+        // Deletes one site's cookies, storage and cache, and nothing else.
+        public override void WipeSite(string host, Action<string> done)
+        {
+            if (core == null) { done("the page isn't ready yet"); return; }
+            try
+            {
+                System.Threading.Tasks.TaskScheduler ui = System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext();
+                List<System.Threading.Tasks.Task> work = new List<System.Threading.Tasks.Task>();
+                foreach (string origin in SiteOrigins(host, true)) work.Add(Cdp("Storage.clearDataForOrigin", "{\"origin\":\"" + origin + "\",\"storageTypes\":\"all\"}"));
+                object jar = Get(core, "CookieManager");
+                foreach (string origin in SiteOrigins(host, false))
+                {
+                    System.Threading.Tasks.Task found = (System.Threading.Tasks.Task)Call(jar, "GetCookiesAsync", origin);
+                    work.Add(found.ContinueWith(delegate(System.Threading.Tasks.Task f)
+                    {
+                        if (f.Status != System.Threading.Tasks.TaskStatus.RanToCompletion) return;
+                        System.Collections.ICollection list = Get(f, "Result") as System.Collections.ICollection;
+                        if (list != null) foreach (object cookie in list) try { Call(jar, "DeleteCookie", cookie); } catch (Exception) { }
+                    }, ui));
+                }
+                System.Threading.Tasks.Task.Factory.ContinueWhenAll(work.ToArray(), delegate(System.Threading.Tasks.Task[] finished)
+                {
+                    string failed = null;
+                    int bad = 0;
+                    foreach (System.Threading.Tasks.Task w in finished) if (w.IsFaulted) { bad++; failed = w.Exception.GetBaseException().Message; }
+                    done(bad == finished.Length ? failed : null);
+                }, CancellationToken.None, System.Threading.Tasks.TaskContinuationOptions.None, ui);
+            }
+            catch (Exception error) { done(Inner(error).Message); }
         }
 
         public override void Html(string html) { Run(delegate { Call(core, "NavigateToString", html); }); }
