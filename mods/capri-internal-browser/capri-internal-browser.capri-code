@@ -2358,8 +2358,9 @@ public class CapriInternalBrowser : ICapriMod
             if (!Regex.IsMatch(e, @"^[\d\s.()+\-*/]+$") || !Regex.IsMatch(e, @"\d\s*[+\-*/]\s*[\d(]")) return null;
             try
             {
-                object v = new System.Data.DataTable().Compute(e, "");
-                double d = Convert.ToDouble(v, inv);
+                int at = 0;
+                double d = Sum(e.Replace(" ", ""), ref at);
+                if (at != e.Replace(" ", "").Length) return null;
                 if (double.IsNaN(d) || double.IsInfinity(d)) return "That one breaks maths, choom. You can't divide by zero.";
                 return Answer(d, null);
             }
@@ -2817,6 +2818,39 @@ public class CapriInternalBrowser : ICapriMod
 
     // Every file out of a zip into folder (an extension they picked).
     internal static string UnzipAll(byte[] zip, string folder) { return Untar(zip, folder, null); }
+
+    // Plain maths for quick answers: + - * / and brackets, in the usual order.
+    private static double Sum(string e, ref int i)
+    {
+        double v = Product(e, ref i);
+        while (i < e.Length && (e[i] == '+' || e[i] == '-')) { char op = e[i++]; double r = Product(e, ref i); v = op == '+' ? v + r : v - r; }
+        return v;
+    }
+
+    private static double Product(string e, ref int i)
+    {
+        double v = Single(e, ref i);
+        while (i < e.Length && (e[i] == '*' || e[i] == '/')) { char op = e[i++]; double r = Single(e, ref i); v = op == '*' ? v * r : v / r; }
+        return v;
+    }
+
+    private static double Single(string e, ref int i)
+    {
+        if (i < e.Length && e[i] == '-') { i++; return -Single(e, ref i); }
+        if (i < e.Length && e[i] == '+') { i++; return Single(e, ref i); }
+        if (i < e.Length && e[i] == '(')
+        {
+            i++;
+            double v = Sum(e, ref i);
+            if (i >= e.Length || e[i] != ')') throw new FormatException("bracket");
+            i++;
+            return v;
+        }
+        int start = i;
+        while (i < e.Length && (char.IsDigit(e[i]) || e[i] == '.')) i++;
+        if (i == start) throw new FormatException("number");
+        return double.Parse(e.Substring(start, i - start), System.Globalization.CultureInfo.InvariantCulture);
+    }
 
     // ---- Capri Browser: a page beside her Mainframe ----
 
