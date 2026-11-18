@@ -3,7 +3,7 @@
 // name: Capri Browser
 // version: 2.0.0
 // author: tob7as
-// description: Capri's own web browser, built on Microsoft Edge. Tabs, Speed Dial, a strong ad and tracker blocker, notebooks, custom jobs and private tabs, and Capri can browse, search, skip and play videos for you. Say "open Capri Browser" to start.
+// description: Capri's own web browser, built on Edge. Ad blocker, Noted, bookmarks, extensions, screenshots, custom jobs, and Capri can browse, play and skip videos for you. Say "open Capri Browser".
 // permissions: chat, brain, tools
 
 using System;
