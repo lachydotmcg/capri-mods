@@ -1323,6 +1323,8 @@ public class CapriInternalBrowser : ICapriMod
     // (first) and the web (last).
     // Every "say" line from data/lists.txt, by what it's for.
     internal static Dictionary<string, List<string>> Said = new Dictionary<string, List<string>>();
+    // Setting tips by key or name, from the "tip" lines.
+    internal static Dictionary<string, string> Tips = new Dictionary<string, string>();
 
     // One of her lines for this moment: from data/lists.txt if it has some, else one of the built-in ones.
     internal static string Line(string key, params string[] fallback)
@@ -1376,6 +1378,8 @@ public class CapriInternalBrowser : ICapriMod
         List<string> known = new List<string>();
         List<string[]> badge = new List<string[]>();
         Dictionary<string, List<string>> said = new Dictionary<string, List<string>>();
+        Dictionary<string, string> tips = new Dictionary<string, string>();
+        List<string[]> zones = new List<string[]>();
         foreach (string line in (text ?? "").Replace("\r", "").Split('\n'))
         {
             string[] p = line.Split('\t');
@@ -1383,6 +1387,8 @@ public class CapriInternalBrowser : ICapriMod
             else if (p[0] == "badge" && p.Length == 5 && Regex.IsMatch(p[2], "^[0-9]{1,6}$")) badge.Add(new[] { p[1], p[2], p[3], p[4] });
             else if (p[0] == "say" && p.Length == 3 && p[2].Length > 0) { if (!said.ContainsKey(p[1])) said[p[1]] = new List<string>(); said[p[1]].Add(p[2]); }
             else if (p[0] == "filler" && p.Length == 2) Filler = p[1].Split(' ');
+            else if (p[0] == "tip" && p.Length == 3 && p[1].Length > 0 && p[2].Length > 0 && p[2].Length <= 400) tips[p[1]] = p[2];
+            else if (p[0] == "zone" && p.Length == 3 && Regex.IsMatch(p[1], @"^[a-z ]+(\|[a-z ]+)*$") && Regex.IsMatch(p[2], @"^[A-Za-z .()+-]{3,60}$")) zones.Add(new[] { p[1], p[2] });
             else if (p[0] == "known" && p.Length == 2 && p[1].Contains(".")) known.Add(p[1]);
             else if (p[0] == "engine" && p.Length == 4 && p[3].StartsWith("https://", StringComparison.Ordinal)) eng.Add(new[] { p[1], p[2], p[3] });
         }
@@ -1390,6 +1396,8 @@ public class CapriInternalBrowser : ICapriMod
         if (site.Count >= 2 && site[0][1] == "youtube.com" && site[site.Count - 1][0] == "web") Sites = site.ToArray();
         if (known.Count > 0) Known = known.ToArray();
         Said = said;
+        if (tips.Count > 0) Tips = tips;
+        if (zones.Count > 0) { string[,] z = new string[zones.Count, 2]; for (int i = 0; i < zones.Count; i++) { z[i, 0] = zones[i][0]; z[i, 1] = zones[i][1]; } Zones = z; }
         if (said.ContainsKey("finding")) Finding = said["finding"].ToArray();
         if (said.ContainsKey("lazy")) Lazy = said["lazy"].ToArray();
         if (said.ContainsKey("hoards")) Browser.Hoards = said["hoards"].ToArray();
@@ -2354,9 +2362,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "bde610380007de08beb9b3ecbf9089c424ac6b7d";
+    private const string AddonsCommit = "2051e0d6a955d249e5f867c90ad44263e7ceb2df";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=90a2f3d6543800c7b6f2353cd227d8f00e6b65c7a038032267ff71497670832c;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=60d547f1c9d7a67fd765eff841addf173b77d2d6044c403d0ae906d260a75c7c;pages/pages.css=932da063ed4f1a0b8883397895c5339cac7a67fa92bbb9efbe086e2d6d2fde21;pages/welcome.html=d75b43dbf5aaf5e9f5d3202b0955f0a941e9cf943ee0d957a12a3434f9a28adc;settings.css=8d80521df90d8e0df1e3448c66a395ac9a7342f47f4dcfc028b6827be4e413fa;whats-new.txt=6e6a619d0c9322eab44efeaf40b8ae2a15bc978c965a63516b89e59cf441a283";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=caece2250d908d62de1682b814b809d962af02c67300daeb529b31f060bc0f13;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=f7279afdf5ba444d9028c4672dfaa4f38b8e24713e57d8c866fee4444b6804e1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=60d547f1c9d7a67fd765eff841addf173b77d2d6044c403d0ae906d260a75c7c;pages/pages.css=932da063ed4f1a0b8883397895c5339cac7a67fa92bbb9efbe086e2d6d2fde21;pages/welcome.html=d75b43dbf5aaf5e9f5d3202b0955f0a941e9cf943ee0d957a12a3434f9a28adc;settings.css=b208f29459ae78a7ca903cca3ee5bf5bcbc9d73babcffc6793de1fb27263003f;whats-new.txt=6e6a619d0c9322eab44efeaf40b8ae2a15bc978c965a63516b89e59cf441a283";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -2796,15 +2804,8 @@ public class CapriInternalBrowser : ICapriMod
 
 
     // ---- Quick answers: maths, time around the world and unit changes, right away, no tab ----
-    private static readonly string[,] Zones = {
-        { "london|uk|england|britain|scotland|wales|dublin|ireland", "GMT Standard Time" }, { "paris|france|berlin|germany|madrid|spain|rome|italy|amsterdam|netherlands|brussels|belgium|vienna|austria|stockholm|sweden|oslo|norway|copenhagen|denmark|warsaw|poland|prague|zurich|switzerland", "W. Europe Standard Time" },
-        { "athens|greece|helsinki|finland|kyiv|kiev|ukraine|cairo|egypt|bucharest|romania", "E. Europe Standard Time" }, { "moscow|russia|istanbul|turkey", "Russian Standard Time" },
-        { "dubai|uae|abu dhabi", "Arabian Standard Time" }, { "india|delhi|mumbai|bangalore|kolkata", "India Standard Time" }, { "bangkok|thailand|jakarta|vietnam|hanoi", "SE Asia Standard Time" },
-        { "beijing|china|shanghai|hong kong|singapore|taipei|taiwan|manila|philippines|perth|kuala lumpur|malaysia", "China Standard Time" }, { "tokyo|japan|osaka", "Tokyo Standard Time" }, { "seoul|korea", "Korea Standard Time" },
-        { "sydney|melbourne|canberra", "AUS Eastern Standard Time" }, { "brisbane|queensland", "E. Australia Standard Time" }, { "adelaide", "Cen. Australia Standard Time" }, { "auckland|new zealand|wellington", "New Zealand Standard Time" },
-        { "new york|nyc|boston|miami|toronto|washington|atlanta|east coast", "Eastern Standard Time" }, { "chicago|texas|dallas|houston|mexico city", "Central Standard Time" }, { "denver|colorado|phoenix", "Mountain Standard Time" },
-        { "los angeles|la|california|san francisco|seattle|vancouver|las vegas|west coast", "Pacific Standard Time" }, { "hawaii|honolulu", "Hawaiian Standard Time" }, { "sao paulo|brazil|rio|buenos aires|argentina", "E. South America Standard Time" },
-        { "johannesburg|south africa|cape town", "South Africa Standard Time" }, { "lagos|nigeria", "W. Central Africa Standard Time" } };
+    // Places for "what time is it in ...", from the "zone" lines in data/lists.txt.
+    private static string[,] Zones = new string[0, 2];
     private static readonly Regex TimeIn = new Regex(@"^what(?:'?s|\s+is)\s+the\s+time\s+in\s+(?<place>.+?)(?:\s+right\s+now|\s+now)?\??$|^what\s+time\s+is\s+it\s+in\s+(?<place>.+?)(?:\s+right\s+now|\s+now)?\??$", Plain);
     private static readonly Regex PercentOf = new Regex(@"^(?:what(?:'?s|\s+is)\s+)?(?<p>\d+(?:\.\d+)?)\s*(?:%|percent|per\s+cent)\s+of\s+(?<n>\d+(?:[.,]\d+)?)\??$", Plain);
     private static readonly Regex SumAsk = new Regex(@"^(?:what(?:'?s|\s+is)|calculate|work\s+out|how\s+much\s+is)\s+(?<e>[\d\s.()+\-*/x×÷^]+|.*\d.*\b(?:plus|minus|times|multiplied\s+by|divided\s+by|over|squared|cubed)\b.*)\??$", Plain);
@@ -4433,14 +4434,8 @@ public class CapriInternalBrowser : ICapriMod
 
         private static string SettingsExtraCss(Look look)
         {
-            string[] c = look.Colors;
-            return "<style>.st{max-width:1140px}.nav{width:236px}.nav a{white-space:nowrap}.ic{font-family:'Segoe MDL2 Assets';font-style:normal;font-size:14px;width:28px;display:inline-block;vertical-align:-2px}"
-                + ".nav hr.gp{border:none;border-top:1px solid " + c[6] + ";margin:10px 8px}"
-                + ".sub{font-size:13px;letter-spacing:2px;color:" + c[3] + ";margin:24px 0 2px;font-weight:600}"
-                + ".site{display:flex;align-items:center;padding:12px 6px;border-top:1px solid " + c[6] + ";color:" + c[2] + ";text-decoration:none;transition:background .15s}"
-                + ".site:hover{background:rgba(255,255,255,.04)}.site span{margin-left:auto;color:" + c[3] + ";font-size:13px}.site .ch{width:auto;margin-left:12px;font-size:10px;color:" + c[3] + "}"
-                + ".bk{font-family:'Segoe MDL2 Assets';color:" + c[2] + ";text-decoration:none;margin-right:12px;font-size:13px}.bk:hover{color:" + c[5] + "}"
-                + ".pi{color:" + c[3] + "}.hint{color:" + c[3] + ";font-size:13px;margin:10px 0 14px}</style>" + TipBox(look);
+            // The rest of its styling is in settings.css. Just enough here that a tip stays hidden before that's downloaded.
+            return "<style>.tb{position:fixed;opacity:0;pointer-events:none;animation:none!important}.tb.on{opacity:1}</style>" + TipBox(look);
         }
 
         // The choices for one permission. On a site's page, the first is "whatever every site gets".
@@ -6847,63 +6842,20 @@ public class CapriInternalBrowser : ICapriMod
 
 
         // ---- Settings: hover a setting for a little box saying what it does ----
-        private static readonly string[,] TipList =
-        {
-            { "Wallpaper", "A picture of yours behind Speed Dial. Right-click Speed Dial to change it quickly." },
-            { "control", "A short animation plays when Capri takes the wheel to do something on a page for you." },
-            { "discordmsg", "Capri can send Discord messages for you in the browser. She always asks before anything is sent." },
-            { "skipask", "When an ad, intro or recap can be skipped, Capri asks first, then presses Skip if you say yes." },
-            { "mouse", "When Capri clicks on a page, your real mouse pointer moves there so you can see what she's doing." },
-            { "catchup", "Come back to a tab that changed a lot after 3 minutes or more, and Capri asks if you want to know what's new. Never on video sites." },
-            { "watchalong", "While you watch a video, Capri chimes in with a reaction now and then." },
-            { "watchoften", "Watch-along reactions come more often." },
-            { "autofull", "Videos Capri opens for you start in full screen." },
-            { "react", "When a video finishes, Capri says what she thought of it." },
-            { "askmenu", "Select words on a page, right-click, and pick Ask Capri about this." },
-            { "glitch", "A glitchy flicker over the screen when Capri takes over." },
-            { "hoard", "Capri teases you when more than 20 tabs are open." },
-            { "achieve", "Little pop-ups when you unlock a browser achievement." },
-            { "scam", "Capri warns you when a site looks like a scam or a fake sign-in page." },
-            { "shieldtalk", "When the shield stops a sneaky redirect or pop-up, Capri sometimes says something about it." },
-            { "downloads", "Capri warns you when a download is a program, since programs can change your PC." },
-            { "darkweb", "Turns bright web sites dark, even ones that have no dark mode of their own." },
-            { "timed", "Wiki races get a 3-minute timer." },
-            { "boot", "Capri Browser's start-up animation when it opens." },
-            { "sleep", "Tabs you haven't used for 20 minutes are put to sleep to save memory. They wake up when you open them." },
-            { "autopip", "Switch away from a playing video and it pops out into a small window that stays on top." },
-            { "Capri's hologram when she talks", "Capri's call screen from Holocall, a mod by Issei, shows in the corner of the browser while she talks. Get Holocall from the Capri app's mod browser. Its sounds don't play here." }
-        };
-
-        // What a setting's hover box says: its own line if it has one, otherwise the words under its name.
+        // What a setting's hover box says, from the "tip" lines in data/lists.txt (none until it's downloaded).
         private static string TipFor(string name, string about)
         {
-            string[,] built =
-            {
-                { T(12), "The typeface used on Capri Browser's own pages, like Speed Dial and Settings." },
-                { T(13), "How big the words are on Capri Browser's own pages." },
-                { T(33), "Sites that have a light and a dark look switch along with your screen mode." },
-                { T(21), "Shows each Speed Dial site's name above its tile." },
-                { T(22), "The language Capri Browser's own pages use, and the one Capri answers in." },
-                { T(34), "Where searches from the address bar and Speed Dial go." },
-                { T(36), "Stops sites following you around the web. Strict blocks the most, but may break some sites." },
-                { T(43), "The folder your downloads are saved in." },
-                { T(46), "When Capri Browser opens, the tabs you had open last time come back." }
-            };
-            for (int i = 0; i < built.GetLength(0); i++) if (built[i, 0] == name) return built[i, 1];
-            for (int i = 0; i < TipList.GetLength(0); i++) if (TipList[i, 0] == name) return TipList[i, 1];
-            for (int i = 0; i < ExtraList.GetLength(0); i++)
-                if (ExtraList[i, 1] == name) for (int j = 0; j < TipList.GetLength(0); j++) if (TipList[j, 0] == ExtraList[i, 0]) return TipList[j, 1];
+            string tip;
+            Dictionary<string, string> tips = Tips;
+            if (tips.TryGetValue(name, out tip)) return tip;
+            foreach (KeyValuePair<string, string> one in tips) { int n; if (one.Key.Length > 1 && one.Key[0] == 't' && int.TryParse(one.Key.Substring(1), out n) && n < 200 && T(n) == name) return one.Value; }
+            for (int i = 0; i < ExtraList.GetLength(0); i++) if (ExtraList[i, 1] == name && tips.TryGetValue(ExtraList[i, 0], out tip)) return tip;
             return null;
         }
 
         private static string TipBox(Look look)
         {
-            string[] c = look.Colors;
-            return "<style>.tb{position:fixed;z-index:99;max-width:340px;padding:10px 14px 12px;background:" + c[0] + ";border:1px solid " + c[5] + ";"
-                + "box-shadow:0 0 16px rgba(232,66,70,.3);color:" + c[2] + ";font-size:13px;line-height:1.45;pointer-events:none;animation:none!important;"
-                + "opacity:0;transform:translateY(4px);transition:opacity .15s,transform .15s}.tb.on{opacity:1;transform:none}"
-                + ".tb b{display:block;color:" + c[5] + ";font-size:14px;margin-bottom:4px;font-weight:600}</style>"
-                + "<div id='tb' class='tb'><b></b><span></span></div><script>(function(){var tb=document.getElementById('tb'),t=0,iv=0,cur=null,mx=0,my=0;"
+            return "<div id='tb' class='tb'><b></b><span></span></div><script>(function(){var tb=document.getElementById('tb'),t=0,iv=0,cur=null,mx=0,my=0;"
                 + "function hide(){clearTimeout(t);clearInterval(iv);tb.className='tb';cur=null;}"
                 + "function show(r){clearInterval(iv);iv=setInterval(function(){var e=document.elementFromPoint(mx,my),w=e&&e.closest?e.closest('.r[data-tip]'):null;if(w!==cur||(!on(w.querySelector('b'))&&!on(w.querySelector('i'))))hide();},80);tb.children[0].textContent=r.querySelector('b').textContent;tb.children[1].textContent=r.getAttribute('data-tip');tb.className='tb on';"
                 + "var w=tb.offsetWidth,h=tb.offsetHeight,L=Math.max(8,Math.min(mx+14,innerWidth-w-12)),T=my+20;if(T+h>innerHeight-8)T=my-h-14;"
@@ -9475,6 +9427,10 @@ public class CapriInternalBrowser : ICapriMod
         private string SettingsCss()
         {
             string css = Kept("css-settings");
+            // settings.css from before the tips moved there: fetch the new one quietly.
+            if (css.Length >= 100 && css.IndexOf(".tb{", StringComparison.Ordinal) < 0) GetLook();
+            string[] c = mod.look.Colors;
+            for (int i = 0; i < c.Length; i++) css = css.Replace("%C" + i + "%", c[i]);
             if (css.Length < 100) { GetLook(); return "body{background:#0a0a10;color:#ececf1;font-family:'Segoe UI',sans-serif;padding:20px}.nav a{display:inline-block;margin:0 12px 8px 0;color:#5ef0f6}.card{margin:18px 0;padding:14px;border:1px solid #5c1824}.pre{white-space:pre-wrap;color:#92828c}"; }
             return SafeCss(css) ? css : "body{background:#0a0a10;color:#ececf1;font-family:'Segoe UI',sans-serif;padding:20px}";
         }
