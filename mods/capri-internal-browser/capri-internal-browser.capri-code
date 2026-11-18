@@ -6661,6 +6661,20 @@ public class CapriInternalBrowser : ICapriMod
 
         private Panel shotCard;
 
+        // Now and then (about one block in three, at most once every 2 minutes) she reacts out loud. A setting turns it off.
+        private DateTime lastBlockLine = DateTime.MinValue;
+        private void BlockedLine(string what)
+        {
+            if (!Flag("shieldtalk", true) || (DateTime.Now - lastBlockLine).TotalMinutes < 2 || dice.Next(3) != 0) return;
+            lastBlockLine = DateTime.Now;
+            string line = what == "redirect"
+                ? Line("blockredirect", "Nope. That site tried to yank you off to an ad, choom. Not on my watch.", "Sneaky redirect, blocked. You're welcome, choom.", "Ugh, this site keeps trying to drag you somewhere shady. I've got you.", "That link was a trap, choom. Shut it down.")
+                : what == "popup"
+                ? Line("blockpopup", "Pop-up ad tried to sneak in. Blocked it, choom.", "Another pop-up? Not today, choom.", "Caught a pop-up trying to open behind your back. Gone.", "This site really wants you to see an ad. I said no.")
+                : Line("blocklayer", "There was an invisible ad sitting over your video, choom. Peeled it off.", "Found a see-through ad layer eating your clicks. Removed it.", "Invisible click trap, gone. Try it now, choom.");
+            mod.Tell(line);
+        }
+
         private void ShotCard(Tab t, Bitmap shot, string file)
         {
             if (shotCard != null && !shotCard.IsDisposed) { Controls.Remove(shotCard); shotCard.Dispose(); }
@@ -6880,7 +6894,7 @@ public class CapriInternalBrowser : ICapriMod
         // Settings open as a page of their own.
         internal bool SettingsShown { get { return false; } set { if (value) WebSettings(); } }
 
-        private static readonly string[,] ExtraList = { { "control", "Takeover animation", "1" }, { "discordmsg", "Message via Discord in the browser (asks before sending)", "0" }, { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0" }, { "mouse", "Move the real mouse when Capri does things on a page", "1" }, { "catchup", "Catch me up when I come back to a tab that changed", "1" }, { "watchalong", "Watch-along: Capri reacts now and then during videos", "0" }, { "watchoften", "Watch-along reacts more often", "0" }, { "autofull", "Full screen for videos Capri opens", "1" }, { "react", "Comment when a video ends", "1" }, { "askmenu", "Ask Capri in the right-click menu", "1" }, { "glitch", "Glitch effect on takeover", "1" }, { "hoard", "Too-many-tabs reminder", "1" }, { "achieve", "Achievement notifications", "1" }, { "scam", "Suspicious site warnings", "1" }, { "downloads", "Program download warnings", "1" }, { "darkweb", "Dark mode for all sites", "0" }, { "timed", "3-minute limit on wiki races", "0" }, { "boot", "Start-up animation", "1" }, { "sleep", "Put unused tabs to sleep", "1" }, { "autopip", "Pop videos out when switching tabs", "0" }, { "holo", "Show Capri's hologram when she talks", "0" } };
+        private static readonly string[,] ExtraList = { { "control", "Takeover animation", "1" }, { "discordmsg", "Message via Discord in the browser (asks before sending)", "0" }, { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0" }, { "mouse", "Move the real mouse when Capri does things on a page", "1" }, { "catchup", "Catch me up when I come back to a tab that changed", "1" }, { "watchalong", "Watch-along: Capri reacts now and then during videos", "0" }, { "watchoften", "Watch-along reacts more often", "0" }, { "autofull", "Full screen for videos Capri opens", "1" }, { "react", "Comment when a video ends", "1" }, { "askmenu", "Ask Capri in the right-click menu", "1" }, { "glitch", "Glitch effect on takeover", "1" }, { "hoard", "Too-many-tabs reminder", "1" }, { "achieve", "Achievement notifications", "1" }, { "scam", "Suspicious site warnings", "1" }, { "shieldtalk", "Capri reacts sometimes when she blocks a sneaky redirect or pop-up", "1" }, { "downloads", "Program download warnings", "1" }, { "darkweb", "Dark mode for all sites", "0" }, { "timed", "3-minute limit on wiki races", "0" }, { "boot", "Start-up animation", "1" }, { "sleep", "Put unused tabs to sleep", "1" }, { "autopip", "Pop videos out when switching tabs", "0" }, { "holo", "Show Capri's hologram when she talks", "0" } };
 
 
 
@@ -7407,7 +7421,7 @@ public class CapriInternalBrowser : ICapriMod
             {
                 Post(delegate
                 {
-                    if (what == "layer" || what == "popup" || what == "redirect") { Bump("shielded", 1); if (t == tab) ShowShield(); }
+                    if (what == "layer" || what == "popup" || what == "redirect") { Bump("shielded", 1); if (t == tab) { ShowShield(); BlockedLine(what); } }
                     else if (what == "scam" && t == tab && !t.Private) mod.ScamText();
                     else if (what.StartsWith("skip|", StringComparison.Ordinal) && t == tab) ThreadPool.QueueUserWorkItem(delegate { mod.OfferSkip(what.Substring(5)); });
                 });
@@ -8168,7 +8182,14 @@ public class CapriInternalBrowser : ICapriMod
                     try { clicked = (bool)Get(request, "IsUserInitiated"); } catch (Exception) { }
                     if (!clicked) { Set(request, "Handled", true); return; }
                     Uri popTo;
-                    if (Shielding && Uri.TryCreate(uri ?? "", UriKind.Absolute, out popTo) && (IsAd(uri) || (JustClickedNothing && SiteOf(popTo.Host) != SiteOf(pageHost))))
+                    // Where the click was: the page itself tells us about clicks on it; no word from it means the click
+                    // was inside a frame, like an embedded video player from another site.
+                    bool inFrame = (DateTime.UtcNow - topClick).TotalMilliseconds > 1500;
+                    string frameSite = null;
+                    try { Uri from; object frame = Get(request, "OriginalSourceFrameInfo"); if (frame != null && Uri.TryCreate(Get(frame, "Source") as string ?? "", UriKind.Absolute, out from)) frameSite = SiteOf(from.Host); } catch (Exception) { }
+                    if (Shielding && Uri.TryCreate(uri ?? "", UriKind.Absolute, out popTo) && (IsAd(uri) || PopAd.IsMatch(uri)
+                        || (JustClickedNothing && SiteOf(popTo.Host) != SiteOf(pageHost))
+                        || (inFrame && SiteOf(popTo.Host) != SiteOf(pageHost) && SiteOf(popTo.Host) != frameSite)))
                     {
                         Set(request, "Handled", true);
                         Stopped++;
@@ -8237,8 +8258,8 @@ public class CapriInternalBrowser : ICapriMod
                     {
                         string said = Call(message, "TryGetWebMessageAsString") as string;
                         if (said != null && said.StartsWith("capri-ended|", StringComparison.Ordinal) && Ended != null) Ended(said.Substring(12));
-                        else if (said == "capri-click|plain") plainClick = DateTime.UtcNow;
-                        else if (said == "capri-click|link") plainClick = DateTime.MinValue;
+                        else if (said == "capri-click|plain") { plainClick = DateTime.UtcNow; topClick = DateTime.UtcNow; }
+                        else if (said == "capri-click|link") { plainClick = DateTime.MinValue; topClick = DateTime.UtcNow; }
                         else if (said != null && said.StartsWith("capri-shield|", StringComparison.Ordinal))
                         {
                             string what = said.Substring(13);
@@ -8307,8 +8328,8 @@ public class CapriInternalBrowser : ICapriMod
                 Uri to;
                 bool byYou = true;
                 try { byYou = (bool)Get(args, "IsUserInitiated"); } catch (Exception) { }
-                if (Shielding && !byYou && pageHost != null && Uri.TryCreate(going ?? "", UriKind.Absolute, out to) && to.Scheme.StartsWith("http", StringComparison.Ordinal)
-                    && (IsAd(going) || (JustClickedNothing && SiteOf(to.Host) != SiteOf(pageHost))))
+                if (Shielding && pageHost != null && Uri.TryCreate(going ?? "", UriKind.Absolute, out to) && to.Scheme.StartsWith("http", StringComparison.Ordinal)
+                    && (((IsAd(going) || PopAd.IsMatch(going)) && (!byYou || JustClickedNothing)) || (JustClickedNothing && SiteOf(to.Host) != SiteOf(pageHost))))
                 {
                     Set(args, "Cancel", true);
                     Stopped++;
@@ -8342,7 +8363,10 @@ public class CapriInternalBrowser : ICapriMod
         private bool filtering;
         private string pageHost;
         private int blocked, tracked;
-        private DateTime plainClick = DateTime.MinValue;
+        private DateTime plainClick = DateTime.MinValue, topClick = DateTime.MinValue;
+
+        // How pop-under ad networks' links look, whichever domain they're on this week.
+        private static readonly Regex PopAd = new Regex(@"/afu\.php\b|[?&](?:zoneid|zone_id|pzone)=\d|popunder|pop-under|clickunder|/pop\.php\b|[?&]utm_source=pop", RegexOptions.IgnoreCase);
 
         // A click on nothing in particular (not a link or button) just now: what pop-unders and click redirects ride on.
         private bool JustClickedNothing { get { return (DateTime.UtcNow - plainClick).TotalMilliseconds < 1500; } }
@@ -8403,26 +8427,55 @@ public class CapriInternalBrowser : ICapriMod
         if (!style) { style = document.createElement('style'); (document.head || document.documentElement).appendChild(style); }
         style.textContent = yes ? css : '';
     };
-    var controls = 'a,button,input,select,textarea,label,summary,video,audio,iframe,[role=button],[role=link],[role=tab],[onclick],[contenteditable]';
-    // An invisible box over most of the page that catches clicks: see-through, nothing in it, sitting on top.
-    function layer(el) {
+    // Real controls: a click on one of these is meant. A click on the video, or on nothing, is where pop-ups hide.
+    var controls = 'a[href],button,input,select,textarea,label,summary,[role=button],[role=link],[role=tab],[role=menuitem],[contenteditable]';
+    var media = 'video,audio,canvas,iframe,embed,object,[class*=player],[id*=player],[class*=video],[id*=video]';
+    function seeThrough(c) { var m = /rgba?\(([^)]+)\)/.exec(c || ''); if (c === 'transparent') return true; if (!m) return false; var p = m[1].split(','); return p.length === 4 && parseFloat(p[3]) < 0.08; }
+    function plainBox(n, s) {
+        if (parseFloat(s.opacity) < 0.08 || s.visibility === 'hidden') return true;
+        if (n.tagName === 'IFRAME') return false;
+        return seeThrough(s.backgroundColor) && s.backgroundImage === 'none' && !(n.innerText || '').trim() && !n.querySelector('img,video,canvas,svg,iframe,input,button,select,textarea');
+    }
+    function crossLink(n) { var a = n.closest && n.closest('a[href]'); if (!a) return false; try { return new URL(a.href, location.href).hostname.replace(/^www\./, '') !== location.hostname.replace(/^www\./, ''); } catch (x) { return false; } }
+    // An invisible box on top that catches clicks: see-through, nothing in it, positioned over the page or over the
+    // player (whatever its size), or an invisible link off to another site.
+    function layer(el, x, y) {
+        var big = innerWidth * innerHeight * 0.3;
         for (var n = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
             var s = getComputedStyle(n);
             if (s.position !== 'fixed' && s.position !== 'absolute') continue;
             var r = n.getBoundingClientRect();
-            if (r.width * r.height < innerWidth * innerHeight * 0.3) continue;
-            var clear = parseFloat(s.opacity) < 0.05 || ((s.backgroundColor === 'transparent' || /rgba\([^)]*,\s*0(\.0+)?\)$/.test(s.backgroundColor)) && s.backgroundImage === 'none'
-                && !(n.innerText || '').trim() && !n.querySelector('img,video,canvas,svg,iframe,input,button'));
-            if (clear) return n;
+            if (r.width < 40 || r.height < 30 || !plainBox(n, s)) continue;
+            if (r.width * r.height >= big || crossLink(n)) return n;
+            var under = document.elementsFromPoint(x, y);
+            for (var i = 0; i < under.length; i++) {
+                var u = under[i];
+                if (u === n || n.contains(u)) continue;
+                if (u.matches && u.matches(media) && !u.contains(n)) return n;
+            }
         }
         return null;
+    }
+    // Looks over every video and big frame now and then, and takes off invisible layers sitting on them, before a click.
+    function sweep() {
+        if (!on || !document.body) return;
+        var spots = [];
+        document.querySelectorAll('video,iframe').forEach(function (v) { var r = v.getBoundingClientRect(); if (r.width > 200 && r.height > 120 && r.bottom > 0 && r.top < innerHeight) spots.push([r.left + r.width / 2, r.top + r.height / 2], [r.left + r.width * 0.25, r.top + r.height * 0.75]); });
+        spots.push([innerWidth / 2, innerHeight / 2]);
+        spots.forEach(function (p) {
+            var top = document.elementFromPoint(p[0], p[1]);
+            if (!top || top.matches('video') || top === document.body || top === document.documentElement) return;
+            var cover = layer(top, p[0], p[1]);
+            if (!cover && top.tagName === 'IFRAME') { var s = getComputedStyle(top); if (parseFloat(s.opacity) < 0.08 && (s.position === 'fixed' || s.position === 'absolute')) cover = top; }
+            if (cover) { cover.remove(); tell('capri-shield|layer'); }
+        });
     }
     document.addEventListener('pointerdown', function (e) {
         if (!e.isTrusted) return;
         last = Date.now();
         plain = !(e.target.closest && e.target.closest(controls));
         if (on) {
-            var cover = layer(e.target);
+            var cover = layer(e.target, e.clientX, e.clientY);
             if (cover) {
                 var x = e.clientX, y = e.clientY;
                 cover.remove();
@@ -8432,8 +8485,9 @@ public class CapriInternalBrowser : ICapriMod
                 tell('capri-shield|layer');
                 window.__capriToast('Capri removed an invisible ad layer');
                 var under = document.elementFromPoint(x, y);
-                if (under) setTimeout(function () { under.click(); }, 0);
-                plain = false;
+                // The click goes to what was underneath: a video plays or pauses, anything else gets the click.
+                if (under) setTimeout(function () { var v = under.closest('video') || (under.querySelector && under.querySelector('video')); if (v && v.getBoundingClientRect().width > 100) { if (v.paused) v.play(); else v.pause(); } else under.click(); }, 0);
+                plain = true;
             }
         }
         tell('capri-click|' + (plain ? 'plain' : 'link'));
@@ -8441,7 +8495,9 @@ public class CapriInternalBrowser : ICapriMod
     document.addEventListener('click', function (e) { if (e.isTrusted && Date.now() - swallow < 500) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
     var opener = window.open;
     window.open = function (u) {
-        if (on && plain && Date.now() - last < 1500) { tell('capri-shield|popup'); window.__capriToast('Capri blocked a pop-up'); return null; }
+        var away = true;
+        try { away = new URL(String(u || ''), location.href).hostname.replace(/^www\./, '') !== location.hostname.replace(/^www\./, ''); } catch (x) { }
+        if (on && plain && away && Date.now() - last < 1500) { tell('capri-shield|popup'); window.__capriToast('Capri blocked a pop-up'); return null; }
         return opener.apply(window, arguments);
     };
     // Fake download buttons: big Download / Play now links that go off to an ad site.
@@ -8496,6 +8552,7 @@ public class CapriInternalBrowser : ICapriMod
     setInterval(function () {
         looks++;
         fakes();
+        sweep();
         if (looks < 20) scam();
         skips();
     }, 1500);
