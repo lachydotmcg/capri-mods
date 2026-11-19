@@ -7681,22 +7681,38 @@ public class CapriInternalBrowser : ICapriMod
             ShowReader(tab);
         }
 
+        private const string HistCss = ".hs{position:relative;margin:0 0 14px}.hs input{width:100%;box-sizing:border-box;padding:13px 110px 13px 16px;font:inherit;font-size:1.05em;color:%C2%;background:%C0%;border:1px solid %C6%;outline:none;clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%);transition:border-color .15s}.hs input:focus{border-color:%C5%}.hs b{position:absolute;right:16px;top:50%;transform:translateY(-50%);font-weight:normal;font-size:.85em;color:%C3%}.hist a.v i{font-style:normal}.hist a.v mark{background:none;color:%C4%;font-weight:bold}.hist a.v.sel{border-color:%C5%;box-shadow:inset 3px 0 0 %C5%}.h0{display:none;color:%C3%}";
+        // Filters as they type; every word has to match. Matches are lit by marking the plain text (never as page code).
+        private const string HistScript = @"(function(){var q=document.getElementById('hq'),n=document.getElementById('hn'),none=document.getElementById('h0'),L=[].slice.call(document.querySelectorAll('.hist a.v[data-k]')),sel=-1,shown=L;
+L.forEach(function(a){a.__t=a.querySelector('i').textContent;a.__h=a.querySelector('span').textContent});
+function lit(e,t,w){var on=[],lo=t.toLowerCase();w.forEach(function(x){var i=lo.indexOf(x);while(x&&i>=0){for(var k=i;k<i+x.length;k++)on[k]=1;i=lo.indexOf(x,i+x.length)}});e.textContent='';var run='',m=0;for(var k=0;k<=t.length;k++){var now=k<t.length?!!on[k]:!m;if(k==t.length||now!=!!m){if(run){var p=m?document.createElement('mark'):document.createTextNode('');p.textContent=run;e.appendChild(p)}run='';m=now?1:0}if(k<t.length)run+=t[k]}}
+function pick(i){if(sel>=0&&shown[sel])shown[sel].classList.remove('sel');sel=i;if(sel>=0&&shown[sel]){shown[sel].classList.add('sel');shown[sel].scrollIntoView({block:'nearest',behavior:'smooth'})}}
+function go(){var w=q.value.toLowerCase().trim().split(/\s+/).filter(function(x){return x});pick(-1);shown=[];L.forEach(function(a){var ok=w.every(function(x){return a.getAttribute('data-k').indexOf(x)>=0});a.style.display=ok?'':'none';if(ok){shown.push(a);lit(a.querySelector('i'),a.__t,w);lit(a.querySelector('span'),a.__h,w)}});n.textContent=w.length?shown.length+' of '+L.length:L.length+' pages';none.style.display=shown.length?'none':'block'}
+q.addEventListener('input',go);
+q.addEventListener('keydown',function(e){if(e.key=='ArrowDown'){e.preventDefault();pick(Math.min(shown.length-1,sel+1))}else if(e.key=='ArrowUp'){e.preventDefault();pick(Math.max(-1,sel-1))}else if(e.key=='Enter'){var a=shown[sel>=0?sel:0];if(a&&q.value.trim())location.href=a.href}else if(e.key=='Escape'&&q.value){e.preventDefault();q.value='';go()}});
+document.addEventListener('keydown',function(e){if(e.target!==q&&(e.key=='/'||(e.ctrlKey&&e.key=='f'))){e.preventDefault();q.focus();q.select()}});
+go();q.focus()})();";
+
         private string HistoryPage()
         {
             Look look = mod.look;
             string[] c = look.Colors;
-            StringBuilder html = Start(look, Styled(3, ".hist{max-width:880px;margin:0 auto}.hist a.v{display:block;padding:8px;color:%C2%}", c, null, null));
+            string search = HistCss;
+            for (int i = 0; i < c.Length; i++) search = search.Replace("%C" + i + "%", c[i]);
+            StringBuilder html = Start(look, Styled(3, ".hist{max-width:880px;margin:0 auto}.hist a.v{display:block;padding:8px;color:%C2%}", c, null, null) + search);
             html.Append("<div class=\"hist\"><h1>HISTORY <span>&gt;</span></h1><a class=\"v\" style=\"border-color:" + c[5] + ";color:" + c[5] + ";margin-bottom:16px\" href=\"" + Own + "play?g=pick\">CAPRI'S PICK <span>Something new, based on what you've been reading</span></a>");
             List<string[]> seen = mod.History();
             if (seen.Count == 0) html.Append("<p>Nothing here yet. Private tabs never show up here.</p>");
+            else html.Append("<div class=\"hs\"><input id=\"hq\" type=\"search\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"Search your history: a site, a word from the title, part of the address\"><b id=\"hn\"></b></div><p id=\"h0\" class=\"h0\">Nothing in your history matches that.</p>");
             foreach (string[] one in seen)
             {
                 Uri uri;
-                string host = Uri.TryCreate(one[0], UriKind.Absolute, out uri) ? uri.Host : one[0];
-                html.Append("<a class=\"v\" href=\"").Append(WebUtility.HtmlEncode(one[0])).Append("\">").Append(WebUtility.HtmlEncode(one[1].Length > 0 ? one[1] : host))
-                    .Append("<span>").Append(WebUtility.HtmlEncode(host)).Append("</span></a>");
+                string host = Uri.TryCreate(one[0], UriKind.Absolute, out uri) ? uri.Host : one[0], name = one[1].Length > 0 ? one[1] : host;
+                string find = (name + " " + host + " " + one[0]).ToLowerInvariant();
+                html.Append("<a class=\"v\" data-k=\"").Append(WebUtility.HtmlEncode(find)).Append("\" href=\"").Append(WebUtility.HtmlEncode(one[0])).Append("\"><i>").Append(WebUtility.HtmlEncode(name))
+                    .Append("</i><span>").Append(WebUtility.HtmlEncode(host)).Append("</span></a>");
             }
-            if (seen.Count > 0) html.Append("<p><a class=\"clear\" href=\"").Append(Own).Append("clearhistory\">Clear history</a></p>");
+            if (seen.Count > 0) html.Append("<p><a class=\"clear\" href=\"").Append(Own).Append("clearhistory\">Clear history</a></p><script>").Append(HistScript).Append("</script>");
             return html.Append("</div></body></html>").ToString();
         }
 
