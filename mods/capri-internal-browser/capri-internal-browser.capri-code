@@ -10657,7 +10657,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     else chatType.Interval = 480;
                     bool blink = chatShown < chatFull.Length || DateTime.Now.Millisecond < 500;
                     chatBody.Text = "       " + chatFull.Substring(0, chatShown) + (blink ? "\u2588" : " ");
-                    if ((DateTime.UtcNow - chatShownAt).TotalSeconds > Math.Max(20, 12 + chatFull.Length / 12.0) && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) CloseChatCard();
+                    if ((DateTime.UtcNow - chatShownAt).TotalSeconds > 10 && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) CloseChatCard();
                 };
                 chatType.Start();
                 if (!chatMoves) { chatMoves = true; Resize += delegate { if (chatCard != null && !chatCard.IsDisposed) PlaceChatCard(false); }; }
