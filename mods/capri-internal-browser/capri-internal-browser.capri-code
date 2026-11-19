@@ -3871,6 +3871,7 @@ public class CapriInternalBrowser : ICapriMod
             System.Windows.Forms.Timer watching = new System.Windows.Forms.Timer { Interval = 15000 };
             watching.Tick += delegate
             {
+                if (++autoTicks % 120 == 0) AutoSend(false);
                 foreach (Tab w in tabs)
                 {
                     if (!w.Playing || w.Muted || w.Private) continue;
@@ -6615,6 +6616,7 @@ public class CapriInternalBrowser : ICapriMod
                 Retitle(guessTab, guessTab.Title);
                 if (guessTab == tab) address.Text = guessTab.Address ?? "";
                 if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); Bump("guessbest" + Week(), guessScore, true); } else { guessStreak = 0; guessLives--; }
+                if (guessLives < 1) AutoSend(false);
                 mod.Tell(guessLives < 1 ? "Game over, choom! You got " + guessScore + " right." : right ? (guessStreak > 2 ? guessStreak + " in a row!" : "Got it.") : "Nope. " + guessLives + (guessLives == 1 ? " life" : " lives") + " left.");
                 return;
             }
@@ -6624,6 +6626,7 @@ public class CapriInternalBrowser : ICapriMod
                 int.TryParse(Regex.Match(all, "[&]s=([0-9]+)").Groups[1].Value, out score);
                 Bump("survival", score, true);
                 Bump("survival" + Week(), score, true);
+                AutoSend(false);
                 mod.Tell(score + (score == 1 ? " word" : " words") + " before they got you." + (score > best ? " New best!" : " Your best is " + best + "."));
                 return;
             }
@@ -6636,6 +6639,7 @@ public class CapriInternalBrowser : ICapriMod
                 int.TryParse(Regex.Match(all, "[&]w=([0-9]+)").Groups[1].Value, out wpm);
                 int.TryParse(Regex.Match(all, "[&]a=([0-9]+)").Groups[1].Value, out accuracy);
                 Typed(wpm, accuracy);
+                AutoSend(false);
                 return;
             }
             if (which == "roulette") { Roulette(); return; }
@@ -6908,6 +6912,21 @@ public class CapriInternalBrowser : ICapriMod
                 : "You're " + name + " on the leaderboards now, choom. Press Send my week to put your numbers up.";
         }
 
+        // With a leaderboard name, their week sends itself: after a game, when the Leaderboards tab opens and every half hour.
+        // The same name and six numbers as Send my week, and quiet. At most once every 2.5 minutes (the server allows one per 2).
+        private DateTime autoSent;
+        private int autoTicks;
+        private void AutoSend(bool thenLoad)
+        {
+            if (Kept("lbname").Length == 0 || DateTime.UtcNow - autoSent < TimeSpan.FromMinutes(2.5)) { if (thenLoad) LoadBoards(); return; }
+            autoSent = DateTime.UtcNow;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                SendWeek();
+                Post(delegate { bool shown = thenLoad; foreach (Tab open in tabs) if (open.Special == "boards") shown = true; if (shown) LoadBoards(); });
+            });
+        }
+
         // Sends their name and this week's six numbers, nothing else. Run off the UI thread.
         private string SendWeek()
         {
@@ -6927,7 +6946,7 @@ public class CapriInternalBrowser : ICapriMod
                 + "<div class=\"cr\"><input id=\"lb\" maxlength=\"16\" placeholder=\"Leaderboard name\" value=\"" + Esc(name) + "\"><a class=\"bt\" href=\"#\" onclick=\"location.href='" + Own + "play?g=lbname&n='+encodeURIComponent(document.getElementById('lb').value);return false\">"
                 + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my week</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboards</a></div>"
                 + "<div class=\"s\" style=\"margin-top:10px\">This week: " + n[0] + " h watched &middot; " + n[1] + " videos &middot; " + n[2] + " sites &middot; survival " + n[3] + " &middot; Guess the Site " + n[4] + " &middot; " + n[5] + " WPM</div>"
-                + "<div class=\"s\">Send my week sends just your leaderboard name and those six numbers. No account needed, and nothing else about you is sent.</div></div>";
+                + "<div class=\"s\">Your week sends itself after games and every half hour, or press Send my week. Only your leaderboard name and those six numbers are sent. No account needed.</div></div>";
         }
 
         // ---- The Leaderboards tab ----
@@ -6944,7 +6963,7 @@ public class CapriInternalBrowser : ICapriMod
             foreach (Tab open in tabs) if (open.Special == "boards") have = open;
             if (have != null) Select(have); else { OpenTab(null, null, true); tab.Special = "boards"; have = tab; }
             ShowReader(have);
-            LoadBoards();
+            AutoSend(true);
         }
 
         // Gets the newest boards, off the UI thread, then redraws any Leaderboards tab.
@@ -7049,6 +7068,8 @@ public class CapriInternalBrowser : ICapriMod
             if (which == "lbsend")
             {
                 if (Kept("lbname").Length == 0) { mod.Tell("Pick a leaderboard name first, choom."); return; }
+                if (DateTime.UtcNow - autoSent < TimeSpan.FromMinutes(2)) { mod.Tell("Your week's already up to date on the boards, choom."); LoadBoards(); return; }
+                autoSent = DateTime.UtcNow;
                 ThreadPool.QueueUserWorkItem(delegate { string said = SendWeek(); Post(delegate { mod.Tell(said); LoadBoards(); }); });
                 return;
             }
@@ -11758,7 +11779,7 @@ public class CapriInternalBrowser : ICapriMod
         skips();
     }, 1500);
 })();";
-        private const string EndedScript = "document.addEventListener('ended',function(e){var v=e.target;if(v&&v.tagName=='VIDEO'&&v.duration>45&&window.chrome&&chrome.webview)chrome.webview.postMessage('capri-ended|'+document.title);},true);";
+        private const string EndedScript = "(function(){function f(e){var v=e.target;if(!v||v.tagName!='VIDEO'||!(v.duration>45)||!isFinite(v.duration))return;if(e.type=='timeupdate'&&v.currentTime<v.duration*0.9)return;var k=v.currentSrc||'v';if(v.__capriDone===k)return;v.__capriDone=k;if(window.chrome&&chrome.webview)chrome.webview.postMessage('capri-ended|'+document.title);}document.addEventListener('ended',f,true);document.addEventListener('timeupdate',f,true);})();";
         private System.Threading.Tasks.Task<string> darkId;
 
         // Dark mode for sites that are bright: on now and for every page after, or off again.
