@@ -320,6 +320,14 @@ public class CapriInternalBrowser : ICapriMod
         if (ReadOne(said)) return true;
         if (Flag("browserreact", false) && ThinkAsk.IsMatch(said) && TakeOn(said)) return true;
         if (CloseTabSaid(said)) return true;
+        Match mv = MoveTabAsk.Match(said);
+        if (mv.Success && open != null && !open.IsDisposed)
+        {
+            string w = mv.Groups[1].Value.ToLowerInvariant();
+            w = w == "left" || w == "back" ? "left" : w == "right" || w == "forward" ? "right" : w == "start" || w == "front" || w == "beginning" || w == "first" ? "start" : "end";
+            Tell(InBrowser(delegate(Browser x) { return x.MoveSaid(w); }) ?? "Capri Browser isn't open, choom.");
+            return true;
+        }
         Func<string> todo;
         lock (gate) { todo = pend != null && Now() <= pendUntil ? pend : null; if (todo != null && (Yes.IsMatch(said) || No.IsMatch(said))) pend = null; }
         if (todo != null && Yes.IsMatch(said)) { ThreadPool.QueueUserWorkItem(delegate { capri.Say(todo()); }); return true; }
@@ -736,15 +744,9 @@ public class CapriInternalBrowser : ICapriMod
     // The newest messages in that chat from whoever sent the last one (up to 3), with their name first. 'mine' when it was them.
     private const string DcRead = @"(function(h,most){most=Math.max(1,Math.min(most||3,10));var bare=function(u){var c=u.cloneNode(true);[].forEach.call(c.querySelectorAll('[class*=chiplet],[class*=Chiplet],[class*=clanTag],[class*=guildTag],[class*=Tag],[class*=tag_],[class*=badge],[class*=Badge],img,svg'),function(x){x.remove()});return (c.textContent||'').replace(/\s+/g,' ').trim()};if(location.pathname!==h)return 'wait';var L=[].slice.call(document.querySelectorAll('li[id^=chat-messages-]'));if(!L.length)return 'wait';var au=function(li){for(var x=li;x;x=x.previousElementSibling){var u=x.querySelector&&x.querySelector('[id^=message-username-]');if(u)return bare(u)}return ''},A=au(L[L.length-1]),me=document.querySelector('[class*=panelTitleContainer],section[class*=panels] [class*=nameTag] [class*=title]'),out=[];if(me&&(me.innerText||'').trim().split('\n')[0]===A)return 'mine';for(var i=L.length-1;i>=0&&out.length<most;i--){if(au(L[i])!==A)break;var c=document.getElementById('message-content-'+L[i].id.split('-').pop()),t=c?(c.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(L[i].querySelector('img,video,[class*=attachment],[class*=imageWrapper]')?'[media]':'[other]'))}return A.slice(0,40)+'\n'+out.join('\n')})";
     private const string DcState = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return 'wait';if(/^\/(login|register)/.test(location.pathname))return 'login';return document.querySelector('a[href^=""/channels/@me/""],[data-list-item-id^=guildsnav___]')?'ready':'wait'})()";
-    private const string WaState = @"(function(){if(location.hostname!=='web.whatsapp.com')return 'wait';if(document.getElementById('pane-side'))return 'ready';return document.querySelector('canvas,[data-ref]')?'login':'wait'})()";
     // Where the chat's message box is on the screen (in screen pixels), for the picture of a typed reply.
     private const string BoxRect = @"(function(w){var b=w?document.querySelector('#main footer'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return '';b=w?b:(b.closest('form')||b.parentElement);var r=b.getBoundingClientRect(),d=devicePixelRatio||1,g=document.createRange(),e=w?b.querySelector('[contenteditable=true]')||b:b.querySelector('[role=textbox]')||b;g.selectNodeContents(e);var q=g.getBoundingClientRect(),wd=Math.min(r.width,Math.max(260,q.right-r.left+28));return [r.left,r.top,wd,r.height].map(function(v){return Math.round(v*d)}).join(',')})";
     private const string DcNow = @"(function(){return /(^|\.)discord\.com$/.test(location.hostname)?location.pathname:''})()";
-    // Who's messaged them on WhatsApp: the first unread chat that isn't muted, as name, name and how many.
-    private const string WaUnread = @"(function(){if(location.hostname!=='web.whatsapp.com')return '';var p=document.getElementById('pane-side');if(!p)return '';var R=p.querySelectorAll('[role=listitem]');if(!R.length)R=p.querySelectorAll('[role=row]');for(var i=0;i<R.length;i++){var r=R[i],b=r.querySelector('[aria-label*=unread i]');if(!b)[].some.call(r.querySelectorAll('span'),function(x){var u=getComputedStyle(x.parentElement);if(!x.children.length&&/^\d{1,4}$/.test(x.textContent.trim())&&u.backgroundColor.indexOf('0, 0, 0, 0')<0&&u.borderRadius!=='0px'){b=x;return true}});if(!b||r.querySelector('[data-icon*=muted]'))continue;var t=r.querySelector('span[title]'),name=t?t.getAttribute('title').trim():'';if(name)return name.slice(0,40)+'\t'+name.slice(0,80)+'\t'+(parseInt((b.textContent||'').replace(/\D/g,''),10)||1)}return ''})()";
-    private const string WaOpen = @"(function(q){var p=document.getElementById('pane-side');if(!p)return '';var t=[].filter.call(p.querySelectorAll('span[title]'),function(x){return x.getAttribute('title').trim().slice(0,80)===q})[0];if(!t)return '';var c=t.closest('[role=gridcell]')||t.closest('[role=listitem]')||t.closest('[role=row]')||t;['mousedown','mouseup','click'].forEach(function(k){c.dispatchEvent(new MouseEvent(k,{bubbles:true,cancelable:true,view:window}))});return 'ok'})";
-    private const string WaRead = @"(function(q){var m=document.getElementById('main'),h=m&&m.querySelector('header span[title],header [dir=auto]');if(!h||(h.getAttribute('title')||h.innerText||'').trim().slice(0,80)!==q)return 'wait';var M=[].slice.call(m.querySelectorAll('.message-in,.message-out'));if(!M.length)return 'wait';var out=[],from='';for(var i=M.length-1;i>=0&&out.length<3;i--){var e=M[i];if(e.classList.contains('message-out'))break;var c=e.querySelector('[data-pre-plain-text]'),w=(/\]\s*([^:]{1,40}):\s*$/.exec(c?c.getAttribute('data-pre-plain-text'):'')||[])[1]||'';if(!from)from=w;else if(w&&w!==from)break;var x=e.querySelector('span.selectable-text'),t=x?(x.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(e.querySelector('img,video,audio,[data-icon*=audio],[data-icon*=ptt],[data-icon*=video]')?'[media]':'[other]'))}if(!out.length)return 'mine';return (from||q).slice(0,40)+'\n'+out.join('\n')})";
-    private const string WaNow = @"(function(){var m=document.getElementById('main'),h=m&&m.querySelector('header span[title],header [dir=auto]');return location.hostname==='web.whatsapp.com'&&h?(h.getAttribute('title')||h.innerText||'').trim().slice(0,80):''})()";
     // The chat's message box (w: WhatsApp): 'check' focuses it and says 'empty' or 'busy', 'text' gives what's in it, 'clear' empties it.
     private const string ChatBox = @"(function(w,act){var b=w?document.querySelector('#main footer [contenteditable=true]'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return 'none';var s=w?[]:b.querySelectorAll('[data-slate-string]'),t=s.length?[].map.call(s,function(x){return x.textContent}).join(' '):(b.innerText||'');if(!w&&!s.length)[].forEach.call(b.querySelectorAll('[data-slate-placeholder]'),function(p){t=t.replace(p.innerText,'')});t=t.replace(/[\u200b\ufeff]/g,'').replace(/\s+/g,' ').trim();if(act=='text')return t;b.focus();if(act=='clear'){document.execCommand('selectAll');document.execCommand('delete');return 'ok'}return t?'busy':'empty'})";
 
@@ -764,7 +766,7 @@ public class CapriInternalBrowser : ICapriMod
                 bool any = false, told = false;
                 foreach (string site in new[] { "Discord" })
                 {
-                    if ((only != null && site != only) || !Flag(site == "Discord" ? "readdiscord" : "readwhatsapp", false)) continue;
+                    if ((only != null && site != only) || !Flag("readdiscord", false)) continue;
                     Tab t = null;
                     bool looking = false;
                     InBrowser(delegate(Browser b) { t = b.ChatTab(site); looking = t != null && b.Looking(t); return null; });
@@ -777,14 +779,14 @@ public class CapriInternalBrowser : ICapriMod
                     if (asked)
                     {
                         string state = "wait";
-                        for (int i = 0; i < 30 && state == "wait"; i++) { state = InTab(t, site == "Discord" ? DcState : WaState) ?? "gone"; if (state == "wait") Thread.Sleep(500); }
+                        for (int i = 0; i < 30 && state == "wait"; i++) { state = InTab(t, DcState) ?? "gone"; if (state == "wait") Thread.Sleep(500); }
                         if (state == "login") { Tell("You're not signed in to " + (site == "Discord" ? "Discord" : "WhatsApp Web") + " in Capri Browser yet, choom. Sign in on its tab and ask me again."); told = true; continue; }
                         if (state != "ready") { Tell((site == "Discord" ? "Discord" : "WhatsApp Web") + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
                     }
                     any = true;
                     List<ChatAt> found = new List<ChatAt>();
-                    string unread = InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "";
-                    for (int look = 0; asked && unread.Trim().Length == 0 && look < 3; look++) { Thread.Sleep(1500); unread = InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? ""; }
+                    string unread = InTab(t, DcUnread) ?? "";
+                    for (int look = 0; asked && unread.Trim().Length == 0 && look < 3; look++) { Thread.Sleep(1500); unread = InTab(t, DcUnread) ?? ""; }
                     foreach (string line in unread.Split('\n'))
                     {
                         string[] p = line.Split('\t');
@@ -860,6 +862,7 @@ public class CapriInternalBrowser : ICapriMod
 
     // "Close this tab", "close the tab I'm on", "close the YouTube tab", "close tab 3", "shut this tab".
     private static readonly Regex CloseTab = new Regex(@"^(?:can\s+you\s+|could\s+you\s+)?(?:close|shut|exit|get\s+rid\s+of|kill)\s+(?:(?:this|that|the|my)\s+)?(?:(?:current|open)\s+)?(?:(?<what>[\w .'-]{2,30}?)\s+)?tab(?:\s+(?<n>\d{1,2}))?(?:\s+(?:i'?m|i\s+am|we'?re)\s+(?:on|in|at|looking\s+at))?(?:\s+(?:for\s+me|please|now))*$", Plain);
+    private static readonly Regex MoveTabAsk = new Regex(@"^(?:can\s+you\s+)?(?:move|shift|drag|put)\s+(?:this|the|my)?\s*(?:current\s+)?tab\s+(?:over\s+)?(?:to\s+the\s+|one\s+to\s+the\s+|to\s+)?(left|right|back|forward|start|front|beginning|first|end|last)(?:\s+(?:one|side|end))?$", Plain);
     private bool CloseTabSaid(string said)
     {
         Match m = CloseTab.Match(said);
@@ -991,9 +994,9 @@ public class CapriInternalBrowser : ICapriMod
     private string ReadChat(ChatAt chat)
     {
         bool dc = chat.Site == "Discord";
-        string got = InTab(chat.Tab, (dc ? DcOpen : WaOpen) + "(" + Quote(chat.Id) + ")");
+        string got = InTab(chat.Tab, DcOpen + "(" + Quote(chat.Id) + ")");
         string said = null;
-        for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, dc ? DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")" : WaRead + "(" + Quote(chat.Id) + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
+        for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
         if (said == "mine") { Card(chat, "Looks like you've already answered this one.", ""); return ThenNext("Looks like you've already answered " + chat.Who + ", choom."); }
         if (string.IsNullOrEmpty(said) || said == "wait") { Card(chat, "I couldn't open that chat.", "Click here to see it."); return "I couldn't open that chat, choom. It's in your " + chat.Site + " tab."; }
         string[] lines = said.Split('\n');
@@ -1043,7 +1046,7 @@ public class CapriInternalBrowser : ICapriMod
         bool dc = chat.Site == "Discord";
         hidden = hidden || (chat.Tab != null && chat.Tab.Hidden);
         string w = dc ? "0" : "1", not = "so I didn't type it, choom.", fail = null, typed = "";
-        string now = InTab(chat.Tab, dc ? DcNow : WaNow);
+        string now = InTab(chat.Tab, DcNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, " + not;
         else if (now != chat.Id) fail = "That chat isn't open in your " + chat.Site + " tab any more, " + not;
         else
@@ -1081,7 +1084,7 @@ public class CapriInternalBrowser : ICapriMod
         bool dc = chat.Site == "Discord";
         string w = dc ? "0" : "1", fail = null;
         lock (gate) { typedChat = null; pendNo = null; pendNoFor = null; }
-        string now = InTab(chat.Tab, dc ? DcNow : WaNow);
+        string now = InTab(chat.Tab, DcNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, so I didn't send it, choom.";
         else if (now != chat.Id) fail = "That chat isn't open any more, so I didn't send it, choom.";
         else if (Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() != text) fail = "What's in the box changed, so I left it for you to send, choom.";
@@ -1143,7 +1146,7 @@ public class CapriInternalBrowser : ICapriMod
         lock (gate) { if (typedChat == chat) typedChat = null; }
         bool dc = chat.Site == "Discord";
         string w = dc ? "0" : "1";
-        if (InTab(chat.Tab, dc ? DcNow : WaNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
+        if (InTab(chat.Tab, DcNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
         CardShot(null);
         Card(chat, "Deleted it. Nothing was sent.", "");
         Tidy(chat);
@@ -3029,9 +3032,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "21513a3ae1ef533592ae0f83f098c846a57449b5";
+    private const string AddonsCommit = "27f95aac1d4d12454d48d809fa6547480d17295b";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=e0f806e2b63c1ec9dba1593139cdcd59a330707df472d087ee7eecce7f1f06cd;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=0c9d4f5feccde823f83cc902ab685ff23aeef4f14ff2942cdaa2d2b0cb55a7ba;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -4363,6 +4366,8 @@ public class CapriInternalBrowser : ICapriMod
             buttons.Add(plus);
             chips.Controls.Add(plus);
             strip.Controls.Add(chips);
+            Buffered(strip);
+            Buffered(chips);
         }
 
         private void MakeChip(Tab t)
@@ -4377,6 +4382,25 @@ public class CapriInternalBrowser : ICapriMod
                 else if (e.Button == MouseButtons.Left) Select(t);
                 else if (e.Button == MouseButtons.Right) TabMenu(t).Show(Cursor.Position);
             };
+            // Dragged sideways, the tab moves between the others, like any browser.
+            int downX = 0;
+            bool moved = false;
+            MouseEventHandler down = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { downX = Cursor.Position.X; moved = false; } };
+            MouseEventHandler drag = delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left || t.Chip == null || t.Chip.IsDisposed) return;
+                if (!moved && Math.Abs(Cursor.Position.X - downX) < 8) return;
+                if (!moved) { moved = true; Select(t); }
+                int px = chips.PointToClient(Cursor.Position).X, to = 0;
+                foreach (Tab other in tabs) if (other != t && other.Chip != null && !other.Chip.IsDisposed && other.Chip.Left + other.Chip.Width / 2 < px) to++;
+                MoveTab(t, to);
+            };
+            chip.MouseDown += down;
+            name.MouseDown += down;
+            chip.MouseMove += drag;
+            name.MouseMove += drag;
+            MouseEventHandler pick0 = pick;
+            pick = delegate(object sender, MouseEventArgs e) { if (moved && e.Button == MouseButtons.Left) { moved = false; Remember(); return; } pick0(sender, e); };
             chip.MouseUp += pick;
             name.MouseUp += pick;
             x.Click += delegate { Later(delegate { Close(t); }); };
@@ -4388,6 +4412,7 @@ public class CapriInternalBrowser : ICapriMod
             };
             chip.Controls.Add(name);
             chip.Controls.Add(x);
+            Buffered(chip);
             t.Chip = chip;
             t.Name = name;
             t.Close = x;
@@ -4549,6 +4574,31 @@ public class CapriInternalBrowser : ICapriMod
                 EaseChips(null);
             };
             chipHold.Start();
+        }
+
+        // A tab moved to a new place in the strip.
+        internal void MoveTab(Tab t, int to)
+        {
+            int from = tabs.IndexOf(t);
+            to = Math.Max(0, Math.Min(tabs.Count - 1, to));
+            if (from < 0 || from == to) return;
+            tabs.RemoveAt(from);
+            tabs.Insert(to, t);
+            chips.SuspendLayout();
+            int at = 0;
+            foreach (Tab one in tabs) if (one.Chip != null && !one.Chip.IsDisposed) chips.Controls.SetChildIndex(one.Chip, at++);
+            chips.Controls.SetChildIndex(plus, chips.Controls.Count - 1);
+            chips.ResumeLayout();
+            Slide(true);
+        }
+
+        internal string MoveSaid(string where)
+        {
+            if (tab == null) return "There's no tab open, choom.";
+            int now = tabs.IndexOf(tab);
+            MoveTab(tab, where == "left" ? now - 1 : where == "right" ? now + 1 : where == "start" ? 0 : tabs.Count - 1);
+            Remember();
+            return "Moved it, choom.";
         }
 
         private void Step(int by)
@@ -5069,7 +5119,7 @@ public class CapriInternalBrowser : ICapriMod
         private void SettingsSections(out string[] ids, out string[] titles, out string[] icons)
         {
             ids = new[] { "look", "capri", "video", "privacy", "search", "tabs", "files", "lang", "discord", "keys", "can", "updates", "mods" };
-            titles = new[] { "Appearance", "Capri features", T(15), "Privacy & security", T(34), T(45), T(43), T(22), "Discord", T(23), "What Capri can do", "Updates", "Mods" };
+            titles = new[] { "Appearance", "Capri features", T(15), "Privacy & security", T(34), T(45), T(43), T(22), "Discord", T(23), "What Capri can do", "Updates", "Sounds" };
             icons = new[] { "", "", "", "", "", "", "", "", "", "", "", "", "" };
         }
 
@@ -7820,9 +7870,15 @@ public class CapriInternalBrowser : ICapriMod
             html.Append(Row(T(13), null, "<input type='range' min='70' max='200' step='10' value='" + look.Size + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('size',this.value)\"><span class='v'>" + look.Size + "%</span>"));
             html.Append(Row(T(33), null, Switch("sites", look.Sites))).Append(extras("look"));
             html.Append(Row("Wallpaper", wallText.Text, Btn("wallpaper", T(19), false) + Btn("nowall", T(20), false)));
-            html.Append(Row(T(21), null, Switch("names", look.Names))).Append("</div>");
+            html.Append(Row(T(21), null, Switch("names", look.Names)))
+                .Append(Row("Sidebar", "Choose its icons and add sites like ChatGPT or Twitch. You can also right-click the sidebar.", Btn("sidesetup", "Set up", false))).Append("</div>");
 
-            html.Append(open(1)).Append(extras("capri")).Append("</div>");
+            html.Append(open(1)).Append(extras("capri"))
+                .Append(Row("Capri's hologram when she talks", HolocallThere ? "Her Holocall screen shows in a corner of the browser while she talks (Holocall by Issei)." : "Needs Holocall by Issei, from the Capri app's mod browser.",
+                    HolocallThere ? Switch("x-holo", Flag("holo", false)) : "<span class='v'>Needs Holocall</span>"))
+                .Append(HolocallThere ? Row("Hologram position", null, Pick("holospot", HoloSpots, new[] { "Top left", "Top middle", "Top right", "Middle left", "Middle right", "Bottom left", "Bottom middle", "Bottom right" }, Array.IndexOf(HoloSpots, Kept("holospot")) >= 0 ? Kept("holospot") : "br", false)) : "")
+                .Append(Row("Put Capri's brain first", "Gives Capri's thinking the PC before the browser's pages. Turning it off can slow her down.", Switch("x-brainfirst", Flag("brainfirst", true))))
+                .Append("</div>");
             html.Append(open(2)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : ""))
                 .Append(Row("Anime site", "Where Capri looks when you ask for anime without naming a site.", Pick("animesite", AnimeHosts, AnimeNames, Kept("animesite").Length > 0 ? Kept("animesite") : AnimeHosts[0], false)))
                 .Append(Row("Video site", "Where Capri looks when you ask for a video, show or movie without naming a site.", Pick("videosite", VideoHosts, VideoNames, Kept("videosite").Length > 0 ? Kept("videosite") : VideoHosts[0], false)))
@@ -7860,14 +7916,9 @@ public class CapriInternalBrowser : ICapriMod
             html.Append(open(11)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
             int volume;
             if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
-            html.Append(open(12)).Append(Row("Put Capri's brain first", "Gives Capri's thinking and functions the PC before the browser. Turning it off may slow down Capri's functions.", Switch("x-brainfirst", Flag("brainfirst", true))))
-                .Append(Row("Browser sounds", "Little sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
-                .Append(Row("Typing sounds", "A soft keyboard thock for each key in the address bar and on web pages. Works on its own, with or without browser sounds.", Switch("x-typesounds", Flag("typesounds", false))))
+            html.Append(open(12)).Append(Row("Browser sounds", "Sounds for tabs, menus, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
+                .Append(Row("Typing sounds", "A soft key sound as you type in the address bar and on pages.", Switch("x-typesounds", Flag("typesounds", false))))
                 .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
-                .Append(Row("Capri's hologram when she talks", HolocallThere ? "Uses Holocall by Issei: her call screen shows in the corner of the browser while she talks, without its sounds." : "Download Holocall by Issei for this feature on the Capri app's mod browser.",
-                    HolocallThere ? Switch("x-holo", Flag("holo", false)) : "<span class='v'>Needs Holocall</span>"))
-                .Append(HolocallThere ? Row("Where her hologram shows", null, Pick("holospot", HoloSpots, new[] { "Top left", "Top middle", "Top right", "Middle left", "Middle right", "Bottom left", "Bottom middle", "Bottom right" }, Array.IndexOf(HoloSpots, Kept("holospot")) >= 0 ? Kept("holospot") : "br", false)) : "")
-                .Append(Row("Sidebar setup", "Choose which icons the sidebar shows, and add sites like ChatGPT, WhatsApp or Twitch. You can also right-click the sidebar.", Btn("sidesetup", "Open", false)))
                 .Append("</div>");
             string jump = settingsJump ?? "";
             settingsJump = null;
@@ -11072,8 +11123,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             switch (key)
             {
                 case "readdiscord": return "Tells you when someone messages you directly (not servers or groups) and reads it out on your yes. Ask “any new Discord messages?” any time. She keeps Discord open out of sight for it, so she's quick. You must be logged in to Discord in Capri Browser for this to work.";
-                case "readwhatsapp-gone": return "Tells you who messaged you and reads it out on your yes. Ask “anything on WhatsApp?” any time. Sign in to WhatsApp Web in Capri Browser once.";
-                case "autoread-gone": return "New messages are read straight out, with her box under her hologram, instead of her asking first. Replies still wait for your yes.";
                 case "browserreact": return "She says something now and then when you open a new site, and when you ask what she thinks (“what do you think of this?”, “is this any good?”) she looks at the page and gives you her take. Private tabs, chats, mail and banking are left alone.";
                 case "quietmsg": return "Messages are found and typed out of sight in her own hidden Discord, with no tab at the top, instead of Discord coming to the front. She still shows you the message and asks before sending.";
                 case "discordmsg": return "Say “message Alex on Discord saying ...”. She types it and asks before sending. You must be logged in to Discord in Capri Browser for this to work.";
@@ -11084,16 +11133,16 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         // Key, words, on by default, and the part of Settings it shows in.
         private static readonly string[,] ExtraList =
         {
-            { "control", "Takeover animation", "1", "capri" },
-            { "readdiscord", "Reads new Discord direct messages", "0", "discord" },
-            { "discordmsg", "Sends Discord messages for you", "0", "discord" },
-            { "quietmsg", "Message without opening tab", "0", "discord" },
-            { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0", "video" },
-            { "mouse", "Move the real mouse when Capri does things on a page", "1", "capri" },
-            { "catchup", "Catch me up when I come back to a tab that changed", "1", "tabs" },
-            { "watchalong", "Watch-along: Capri reacts now and then during videos", "0", "capri" },
-            { "watchoften", "Watch-along reacts more often", "0", "capri" },
+            { "readdiscord", "Read new Discord messages", "0", "discord" },
+            { "discordmsg", "Send Discord messages for you", "0", "discord" },
+            { "quietmsg", "Message without opening a tab", "0", "discord" },
+            { "skipask", "Offer to skip ads, intros and recaps", "0", "video" },
+            { "mouse", "Move the mouse when Capri uses a page", "1", "capri" },
+            { "catchup", "Catch-up when a tab has changed", "1", "tabs" },
+            { "watchalong", "Watch-along reactions", "0", "capri" },
+            { "watchoften", "More watch-along reactions", "0", "capri" },
             { "browserreact", "Browser reactions", "0", "capri" },
+            { "control", "Takeover animation", "1", "capri" },
             { "autofull", "Full screen for videos Capri opens", "1", "video" },
             { "react", "Comment when a video ends", "1", "video" },
             { "askmenu", "Ask Capri in the right-click menu", "1", "capri" },
@@ -11101,7 +11150,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             { "hoard", "Too-many-tabs reminder", "1", "tabs" },
             { "achieve", "Achievement notifications", "1", "capri" },
             { "scam", "Suspicious site warnings", "1", "privacy" },
-            { "shieldtalk", "Capri reacts sometimes when she blocks a sneaky redirect or pop-up", "1", "privacy" },
+            { "shieldtalk", "Comment on blocked pop-ups and redirects", "1", "privacy" },
             { "downloads", "Program download warnings", "1", "privacy" },
             { "darkweb", "Dark mode for all sites", "0", "look" },
             { "timed", "3-minute limit on wiki races", "0", "capri" },
@@ -11474,6 +11523,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         {
             if (keyData == (Keys.Control | Keys.T)) { NewTab(); return true; }
             if (keyData == (Keys.Control | Keys.W) || keyData == (Keys.Control | Keys.F4)) { Tab closing = tab; Later(delegate { Close(closing); }); return true; }
+            if (keyData == (Keys.Control | Keys.Shift | Keys.PageDown) && tab != null) { MoveTab(tab, tabs.IndexOf(tab) + 1); Remember(); return true; }
+            if (keyData == (Keys.Control | Keys.Shift | Keys.PageUp) && tab != null) { MoveTab(tab, tabs.IndexOf(tab) - 1); Remember(); return true; }
             if (keyData == (Keys.Control | Keys.Tab) || keyData == (Keys.Control | Keys.PageDown)) { Step(1); return true; }
             if (keyData == (Keys.Control | Keys.Shift | Keys.Tab) || keyData == (Keys.Control | Keys.PageUp)) { Step(-1); return true; }
             if (keyData == (Keys.Control | Keys.L) || keyData == Keys.F6) { address.Focus(); address.SelectAll(); return true; }
