@@ -10256,6 +10256,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     foreach (string inner in Directory.GetDirectories(folder))
                         if (File.Exists(Path.Combine(inner, "manifest.json"))) { folder = inner; break; }
                 if (!File.Exists(Path.Combine(folder, "manifest.json"))) { done("That isn't an extension: there's no manifest.json in it."); return; }
+                string notHere = BrowserOnly(File.ReadAllText(Path.Combine(folder, "manifest.json")));
+                if (notHere != null)
+                {
+                    try { Directory.Delete(made, true); } catch (Exception) { }
+                    done("it changes the browser itself (" + notHere + "), and Capri Browser only takes extensions that change pages.");
+                    return;
+                }
             }
             catch (Exception error) { done(Inner(error).Message); return; }
             try
@@ -10307,6 +10314,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     AddExtension(file, delegate(string failed)
                     {
                         try { File.Delete(file); } catch (Exception) { }
+                        if (failed != null && failed.StartsWith("it changes the browser itself", StringComparison.Ordinal)) { button("Not supported in Capri Browser"); mod.Tell("I can't add that one, choom: " + failed); return; }
                         if (failed != null) { button("Couldn't add it"); mod.Tell("That extension didn't go in, choom: " + failed); return; }
                         Bump("extensions", 1);
                         button("Added to Capri Browser ✓");
@@ -10314,6 +10322,58 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     });
                 });
             });
+        }
+
+        // What, if anything, makes an extension one for the browser rather than for pages. Null when it only changes pages.
+        // Permissions it only asks for later (optional) don't count.
+        private static readonly string[,] BrowserParts =
+        {
+            { "chrome_url_overrides", "it replaces the new tab, history or bookmarks page" },
+            { "chrome_settings_overrides", "it changes the home page or search engine" },
+            { "theme", "it's a browser theme" },
+            { "side_panel", "it adds a side panel" },
+            { "devtools_page", "it adds to the developer tools" },
+            { "omnibox", "it adds to the address bar" },
+            { "tabCapture", "it records tab audio or video" },
+            { "offscreen", "it runs hidden pages to work" },
+            { "desktopCapture", "it records the screen" },
+            { "tabGroups", "it groups the browser's tabs" },
+            { "sidePanel", "it adds a side panel" },
+            { "bookmarks", "it changes bookmarks" },
+            { "history", "it changes history" },
+            { "topSites", "it reads your top sites" },
+            { "sessions", "it restores browser sessions" },
+            { "browsingData", "it clears browser data" },
+            { "downloads", "it manages downloads" },
+            { "proxy", "it changes the connection (proxy or VPN)" },
+            { "privacy", "it changes browser privacy settings" },
+            { "contentSettings", "it changes browser site settings" },
+            { "management", "it manages other extensions" },
+            { "nativeMessaging", "it needs an app installed on your PC" },
+            { "debugger", "it uses the debugger" },
+            { "pageCapture", "it saves whole pages" },
+            { "search", "it changes the search engine" },
+            { "fontSettings", "it changes browser fonts" },
+            { "ttsEngine", "it adds a voice engine" },
+            { "vpnProvider", "it's a VPN" },
+            { "enterprise", "it's for managed work PCs" },
+            { "system", "it reads system information" },
+        };
+
+        internal static string BrowserOnly(string manifest)
+        {
+            string text = manifest ?? "";
+            Match perms = Regex.Match(text, "\"permissions\"\\s*:\\s*\\[([^\\]]*)\\]");
+            string have = perms.Success ? perms.Groups[1].Value : "";
+            for (int i = 0; i < BrowserParts.GetLength(0); i++)
+            {
+                string part = BrowserParts[i, 0];
+                bool key = Regex.IsMatch(text, "\"" + part + "\"\\s*:");
+                bool perm = Regex.IsMatch(have, "\"" + part + "(?:\\.[\\w.]+)?\"");
+                if (key && (part == "chrome_url_overrides" || part == "chrome_settings_overrides" || part == "theme" || part == "side_panel" || part == "devtools_page" || part == "omnibox")) return BrowserParts[i, 1];
+                if (perm) return BrowserParts[i, 1];
+            }
+            return null;
         }
 
         private static void CopyFolder(string from, string to, int depth)
@@ -10494,7 +10554,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     store.Top = y;
                     store.Click += delegate { drop.Close(); OpenTab(null, "https://chromewebstore.google.com/", true); };
                     y += 40;
-                    Label note = new Label { Text = "Open the Chrome Web Store in Capri Browser and press Add to Capri Browser on any extension. You can also add a folder, .zip or .crx. Toolbar popups open as a tab. Extensions can read and change the sites you visit, so only add ones you trust.", Left = 20, Top = y, Width = 320, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 9f) };
+                    Label note = new Label { Text = "Open the Chrome Web Store in Capri Browser and press Add to Capri Browser on an extension, or add a folder, .zip or .crx. Only extensions that change pages work (ad blockers, dark mode, YouTube or Roblox tweaks). Ones that change the browser itself (new tab pages, themes, side panels, tab recorders) aren't supported. Toolbar popups open as a tab. Extensions can read and change the sites you visit, so only add ones you trust.", Left = 20, Top = y, Width = 320, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 9f) };
                     note.Height = TextRenderer.MeasureText(note.Text, note.Font, new Size(320, 0), TextFormatFlags.WordBreak).Height + 4;
                     card.Controls.Add(note);
                     y += note.Height + 14;
@@ -12390,45 +12450,91 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     // Start-up: Capri's name glitching in over scanlines, a load bar, then SYSTEM ONLINE. A click skips it.
     internal sealed class BootScreen : Control
     {
-        private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 30 };
+        private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 16 };
         private readonly DateTime from = DateTime.UtcNow;
         private readonly Random dice = new Random();
+        private static readonly Color Ink = Color.FromArgb(9, 12, 18), Cyan = Color.FromArgb(94, 240, 246), Dim = Color.FromArgb(62, 150, 160), Red = Color.FromArgb(232, 66, 70);
+        private const double Total = 1850;
 
         public BootScreen()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
             Dock = DockStyle.Fill;
-            tick.Tick += delegate { if ((DateTime.UtcNow - from).TotalMilliseconds > 1900) Dispose(); else Invalidate(); };
+            tick.Tick += delegate { if ((DateTime.UtcNow - from).TotalMilliseconds > Total) Dispose(); else Invalidate(); };
             tick.Start();
             Click += delegate { Dispose(); };
         }
 
         protected override void Dispose(bool disposing) { if (disposing) tick.Dispose(); base.Dispose(disposing); }
 
+        // 0..1 of the way from a to b (in ms), eased.
+        private static float Part(double ms, double a, double b) { double t = Math.Max(0, Math.Min(1, (ms - a) / (b - a))); return (float)(1 - Math.Pow(1 - t, 3)); }
+
+        private static Point[] Edge(float x, float y, float w, float h)
+        {
+            int c = (int)Math.Min(14, Math.Min(w, h) / 3);
+            return new[] { new Point((int)x + c, (int)y), new Point((int)(x + w), (int)y), new Point((int)(x + w), (int)(y + h) - c), new Point((int)(x + w) - c, (int)(y + h)), new Point((int)x, (int)(y + h)), new Point((int)x, (int)y + c) };
+        }
+
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
             double ms = (DateTime.UtcNow - from).TotalMilliseconds;
-            float done = (float)Math.Min(1, ms / 1500);
-            g.Clear(Color.FromArgb(10, 10, 16));
-            g.TextRenderingHint = TextRenderingHint.AntiAlias;
-            using (Pen line = new Pen(Color.FromArgb(14, 94, 240, 246))) for (int y = (int)(ms / 25) % 4; y < Height; y += 4) g.DrawLine(line, 0, y, Width, y);
-            using (System.Drawing.Font big = new System.Drawing.Font("Bahnschrift", 34f, FontStyle.Bold)) using (System.Drawing.Font small = new System.Drawing.Font("Consolas", 10.5f))
-            using (SolidBrush hot = new SolidBrush(Color.FromArgb(232, 66, 70)), cyan = new SolidBrush(Color.FromArgb(94, 240, 246)), faint = new SolidBrush(Color.FromArgb(146, 130, 140)))
+            g.Clear(Ink);
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            const float W = 330, H = 140;
+            float cx = Width / 2f, cy = Height / 2f;
+            // The projector line: grows out from the middle, flickering as it catches.
+            float open = Part(ms, 0, 300) * (1 - Part(ms, 1660, 1850));
+            float tall = Part(ms, 260, 600) * (1 - Part(ms, 1480, 1660));
+            bool flick = ms < 260 && dice.Next(3) == 0;
+            float w = W * open, h = Math.Max(1, H * tall);
+            if (w < 2) return;
+            float x = cx - w / 2, y = cy - h / 2;
+            int glow = flick ? 60 : 255;
+            if (tall < 0.02f)
             {
-                string name = "CAPRI BROWSER";
-                SizeF size = g.MeasureString(name, big);
-                float x = (Width - size.Width) / 2, y = Height / 2f - 60;
-                int jump = ms < 1200 && dice.Next(4) == 0 ? dice.Next(-7, 8) : 0;
-                g.DrawString(name, big, cyan, x - 3 + jump, y);
-                g.DrawString(name, big, hot, x + jump / 2, y);
-                float left = (Width - 320) / 2f, top = y + size.Height + 18;
-                using (Pen edge = new Pen(Color.FromArgb(92, 24, 36))) g.DrawRectangle(edge, left, top, 320, 8);
-                g.FillRectangle(hot, left + 2, top + 2, 316 * done, 5);
-                string[] steps = { "> LINKING TO CAPRI", "> LOADING ICE", "> SYNCING TABS" };
-                string say = done >= 1 ? "SYSTEM ONLINE" : steps[Math.Min(2, (int)(done * 3))];
-                SizeF said = g.MeasureString(say, small);
-                g.DrawString(say, small, done >= 1 ? cyan : faint, (Width - said.Width) / 2, top + 22);
+                using (Pen line = new Pen(Color.FromArgb(glow, Cyan), 1.6f)) g.DrawLine(line, x, cy, x + w, cy);
+                using (Pen soft = new Pen(Color.FromArgb(glow / 5, Cyan), 7f)) g.DrawLine(soft, x, cy, x + w, cy);
+                return;
+            }
+            // Her panel: dark glass, faint scan lines inside, a cyan cut-corner edge and the red bar at the left.
+            Point[] shape = Edge(x, y, w, h);
+            using (SolidBrush glass = new SolidBrush(Color.FromArgb(235, 12, 18, 26))) g.FillPolygon(glass, shape);
+            using (System.Drawing.Drawing2D.GraphicsPath clip = new System.Drawing.Drawing2D.GraphicsPath())
+            {
+                clip.AddPolygon(shape);
+                g.SetClip(clip);
+                using (Pen scan = new Pen(Color.FromArgb(16, Cyan))) for (float sy = y + (float)(ms / 30 % 4); sy < y + h; sy += 4) g.DrawLine(scan, x, sy, x + w, sy);
+                g.ResetClip();
+            }
+            using (Pen line = new Pen(Color.FromArgb(220, Cyan), 1.6f)) g.DrawPolygon(line, shape);
+            using (SolidBrush bar = new SolidBrush(Red)) g.FillRectangle(bar, x + 14, y + 22, 3, Math.Max(0, h - 44));
+            if (tall < 0.85f) return;
+            // CAPRI types in a letter at a time, each settling from cyan to her red; BROWSER fades in under it.
+            using (System.Drawing.Font big = new System.Drawing.Font("Bahnschrift SemiBold", 40f, FontStyle.Regular, GraphicsUnit.Pixel))
+            using (System.Drawing.Font small = new System.Drawing.Font("Consolas", 12f, FontStyle.Regular, GraphicsUnit.Pixel))
+            {
+                string name = "CAPRI";
+                float full = 0; foreach (char k in name) full += g.MeasureString(k.ToString(), big, PointF.Empty, StringFormat.GenericTypographic).Width + 6;
+                float tx = cx - (full + 16) / 2 + 6, ty = y + h / 2 - 34, left0 = tx;
+                int shown = Math.Min(name.Length, (int)Math.Max(0, (ms - 620) / 70));
+                for (int i = 0; i < shown; i++)
+                {
+                    double age = ms - 620 - i * 70;
+                    float settle = (float)Math.Max(0, Math.Min(1, age / 160));
+                    Color c = Color.FromArgb((int)(Cyan.R + (Red.R - Cyan.R) * settle), (int)(Cyan.G + (Red.G - Cyan.G) * settle), (int)(Cyan.B + (Red.B - Cyan.B) * settle));
+                    string ch = name[i].ToString();
+                    using (SolidBrush ink = new SolidBrush(c)) g.DrawString(ch, big, ink, tx, ty);
+                    tx += g.MeasureString(ch, big, PointF.Empty, StringFormat.GenericTypographic).Width + 6;
+                }
+                if (shown == name.Length && ms < 1420)
+                    using (SolidBrush caret = new SolidBrush(Color.FromArgb(DateTime.Now.Millisecond < 500 ? 230 : 0, Cyan))) g.FillRectangle(caret, tx + 2, ty + 8, 14, 34);
+                float sub = Part(ms, 1000, 1200) * (1 - Part(ms, 1440, 1520));
+                if (sub > 0)
+                    using (SolidBrush faint = new SolidBrush(Color.FromArgb((int)(220 * sub), Dim)))
+                        g.DrawString("B R O W S E R", small, faint, left0 + 2, ty + 52);
             }
         }
     }
