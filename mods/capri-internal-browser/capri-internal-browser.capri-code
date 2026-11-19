@@ -98,8 +98,7 @@ public class CapriInternalBrowser : ICapriMod
     internal void Note(string line) { if (capri != null) capri.Log(line); }
 
     // Her face for the hologram, and Capri herself to read her voice from (nothing of hers is changed).
-    internal static Func<Bitmap> TestFace;
-    internal Bitmap HoloFace() { try { return capri != null ? capri.Art("face") : TestFace != null ? TestFace() : null; } catch (Exception) { return null; } }
+    internal Bitmap HoloFace() { try { return capri != null ? capri.Art("face") : null; } catch (Exception) { return null; } }
     internal object HostObject { get { return capri; } }
 
     private void Holo(string text, bool talking)
@@ -722,7 +721,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // ---- Message reader ----
-    internal sealed class ChatAt { public string Site, Who, Id, Others; public Tab Tab; public bool Opened; public int Count = 1; }
+    internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; public bool Opened; public int Count = 1; }
     // "Any new Discord messages?", "do I have any DMs", "anything on WhatsApp", "check my Discord", "has anyone messaged me"...
     private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:hey|ok|okay)\s+)?(?:capri\s*,?\s*)?(?:"
         + @"(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got|are\s+there|is\s+there)\s+)?(?:any\s+(?:new\s+|unread\s+)?|new\s+|unread\s+)(?:discord\s+|whats\s?app\s+)?(?:messages?|msgs?|dms?|direct\s+messages?|texts?)"
@@ -8628,7 +8627,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
         private readonly Panel side = new Panel(), notes = new Panel();
         private readonly RichTextBox noteText = new RichTextBox();
-        private ListBox noteList;
         private Panel notePaper;
         private Label[] noteBits = new Label[0];
         private readonly List<Button> sideButtons = new List<Button>();
@@ -11512,7 +11510,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             noteText.ForeColor = look.Shade(2);
             noteText.BackColor = look.Shade(0);
             if (notePaper != null) notePaper.BackColor = look.Shade(0);
-            if (noteList != null) { noteList.BackColor = look.Shade(1); noteList.Invalidate(); }
             foreach (Label l in noteBits) l.ForeColor = look.Shade(3);
             noteTint();
             foreach (Label l in labels) l.ForeColor = "title".Equals(l.Tag) ? look.Shade(5) : look.Shade(3);
