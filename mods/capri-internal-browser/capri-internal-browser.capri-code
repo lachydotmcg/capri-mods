@@ -3763,9 +3763,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "e3471b4aec7926ce75d67c7301d592528a55ad77";
+    private const string AddonsCommit = "852c8e410a4bb0979cff5ad159dbf99749baa834";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=0c0973b6a7f6c04e7339253a3822e88bef25e6164c32c6bc94f6e3697c8e51df;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=51efeb975528807873c3c028e81a398af2605fbee3bd3473c2c3f26baa24e6c7";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=c09e5d381c79443eafc8ffc8ef60701c80cd06422eecaf0013327744d5d7f263;help/ar.txt=0870357473ad406c9605c6262c5c6dc796c0a82ab477769da392e70dd8578433;help/bn.txt=23563913517f06773802acf756670d26e024a7090f0811a95d636beecfb01142;help/de.txt=96dbb74c296b11fd0b5bc00ebf5cc282539f6fe77d2c13028331a2d7ff21b043;help/es.txt=53e29bdffdef55c0963c45f87ee8fba1854b52ebff0214950345ecad2537cefc;help/fil.txt=a52ed31242a55956df9ac9958a121df94803116ec47087f2784ca94a37e6eb69;help/fr.txt=b398408b06b75014d0ef43af0cc353cff4b8dd98b8c39d6cb6555b1e09bc9dbf;help/hi.txt=3704f16d1791f65e00c1998834c9b8be5980a5340c6b979ff78308cba895143f;help/id.txt=34fa412822e70e74059b4510feb3e514a2eda4fef3049f7d36cc8211af459d7b;help/it.txt=1a68b753c82b86b055dd961c27060a0b45cb157eb7a44fe45e2c4012862daa24;help/ja.txt=75a10f6034add469c43077af0edbfee2cb2f5937860239c710af694314158a75;help/ko.txt=603f65d61cb34d75389a4819f0c8fec8846e8424655b11a5f624fa6c5f66887f;help/nl.txt=3c5acb5f0be33d25d5ecea2346149afd618be5373c286adbb258f7f709ad6273;help/pl.txt=a15f17214a148527a604683c9e22a5a673e78926fe61e54a46b297a4617d6eda;help/pt.txt=eb32295902cece1ad3497be9e26e4e27ba6e27249aa7a21596e9c1abe0e27d5d;help/ru.txt=e91d0f2a9897bb359e549a747bc265b146ab04c34bbf1fa89edce5c1bdc10204;help/sv.txt=4a87ceab62a6386699e788f5708ba688c152ad1e0fa80b815b59485042cb850c;help/th.txt=22ced07cb5241f9a031bbfaa759001e0073393ebb4254f4c69dd7dfef24f36ce;help/tr.txt=1a693b60a747585568d6df0d29ed253009e139fcef945c45d217b4a1612d0167;help/uk.txt=ae4b5606c616404cf322e404bb0d3de1f5d47b07cf6cc06809c6006165ab1a4c;help/vi.txt=e9423393a4562dece2a3d420e0986da1f436e3d5c0bfe39a6df3cad8a9cc1a00;help/zh-hans.txt=6f5f3fd19f351f58ffc501364cdda949b04a0348e14425189a73f7f54f99b70e;help/zh-hant.txt=46607503118d31327721ca2e7a781a799c1306567a1bf1c12b37b269a4c89e06;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=51efeb975528807873c3c028e81a398af2605fbee3bd3473c2c3f26baa24e6c7";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -7975,6 +7975,11 @@ public class CapriInternalBrowser : ICapriMod
                     got["css-home"] = get("pages/home.css");
                     got["css-pages"] = get("pages/pages.css");
                     got["lang"] = get("languages.txt");
+                    foreach (string p in AddonHashes.Split(';'))
+                    {
+                        Match h = Regex.Match(p, "^help/([a-z-]+)[.]txt=");
+                        if (h.Success) got["help-" + h.Groups[1].Value] = get("help/" + h.Groups[1].Value + ".txt");
+                    }
                     foreach (string l in (list ?? "").Split('\n'))
                     {
                         string[] g = l.Trim().Split('\t');
@@ -12328,7 +12333,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
         private string Help(int part)
         {
-            string[] h = Kept("help").Replace("\r", "").Split(new[] { "\n%%\n" }, StringSplitOptions.None);
+            string lang = Lang, mine = lang == "en" ? "" : Kept("help-" + lang);
+            if (mine.Length == 0 && lang != "en") GetHelp(lang);
+            string[] h = (mine.Length > 0 ? mine : Kept("help")).Replace("\r", "").Split(new[] { "\n%%\n" }, StringSplitOptions.None);
             if (h.Length > part && h[part].Trim().Length > 0) return h[part].Trim();
             GetLook();
             return "Getting this from Browser addons... If it doesn't show, press Update all below.";
@@ -12354,6 +12361,21 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         private static bool SafeCss(string css) { return !Regex.IsMatch(css, @"[\\<>]|@(?!keyframes\b|media\b)|url|expression|image|src|behavio|binding|javascript", RegexOptions.IgnoreCase); }
 
         // Downloads settings.css and help.txt once, quietly, then redraws Settings.
+        // The help in your language, once, off the UI thread; Settings redraws when it's here.
+        private readonly List<string> helpAsked = new List<string>();
+        private void GetHelp(string lang)
+        {
+            string file = "help/" + lang + ".txt";
+            if (helpAsked.Contains(lang) || !IsPinned(file)) return;
+            helpAsked.Add(lang);
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string got = null;
+                try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = Pinned(web, file); } } catch (Exception) { }
+                if (got != null) Post(delegate { Keep("help-" + lang, got); RefreshSettingsTabs(); });
+            });
+        }
+
         private void GetLook()
         {
             if (lookAsked) return;
