@@ -8909,7 +8909,7 @@ public class CapriInternalBrowser : ICapriMod
                     if (key == "x-brainfirst") { if (on) brainWasFirst = true; BrainFirst(); }
                     return;
             }
-            if (key == "wallpaper" || key == "nowall" || key == "folder" || key == "video" || key == "discord" || key == "search" || key == "track") foreach (Tab open in tabs) if (open.Special == "settings") ShowReader(open);
+            if (key == "wallpaper" || key == "nowall" || key == "folder" || key == "video" || key == "discord" || key == "search" || key == "track" || key == "animesite" || key == "videosite") foreach (Tab open in tabs) if (open.Special == "settings") ShowReader(open);
         }
 
         private void ShowHistory()
