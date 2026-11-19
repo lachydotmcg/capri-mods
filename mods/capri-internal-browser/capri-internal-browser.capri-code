@@ -8364,10 +8364,12 @@ public class CapriInternalBrowser : ICapriMod
         // server, which refuses rude, taken or unbelievable ones. No account needed. LEADERBOARD.md on GitHub is a copy of it.
         private const string BoardData = WorkerUrl + "board.txt";
 
-        // Rude bits caught anywhere in a name, and words only caught on their own (so Sussex, grapes and peacocks are fine).
+        // Rude bits caught anywhere in a name, and words only caught on their own.
         // The same lists are in Browser addons' worker/capri-worker.js, which has the final say.
-        private static readonly string[] RudeBits = { "fuck", "fuk", "fack", "fcker", "phuck", "shit", "cunt", "bitch", "nigg", "niga", "nigr", "fag", "retard", "whore", "slut", "pussy", "penis", "vagina", "porn", "nazi", "hitler", "kkk", "twat", "wanker", "jizz", "killyourself", "tranny", "molest", "pedo", "bastard", "asshole", "dildo", "boob", "titty", "horny", "nude", "naked", "admin", "moderator", "official" };
-        private static readonly string[] RudeWords = { "sex", "rape", "cock", "dick", "cum", "anal", "tits", "spic", "chink", "kike", "coon", "paki", "gook", "dyke", "isis", "kys", "rapist", "wank", "ass", "arse", "hoe", "capri", "tobtas", "lachy", "staff", "system", "null", "everyone", "anthropic" };
+        private static readonly string[] RudeBits = { "fuck", "fuk", "fck", "fcuk", "fack", "fcker", "phuck", "shit", "cunt", "bitch", "biatch", "nigg", "niga", "nigr", "negro", "fag", "retard", "spastic", "whore", "slut", "skank", "pussy", "penis", "vagin", "porn", "nazi", "hitler", "heil", "kkk", "twat", "wank", "jizz", "killyourself", "killurself", "suicide", "tranny", "molest", "pedo", "paedo", "bastard", "asshole", "arsehole", "dumbass", "jackass", "asshat", "asswipe", "dildo", "vibrator", "buttplug", "boob", "titty", "titties", "tits", "nipple", "horny", "nude", "naked", "cock", "dick", "sex", "raper", "sexx", "sexual", "sexting", "cumshot", "cumming", "semen", "sperm", "orgasm", "orgy", "blowjob", "handjob", "rimjob", "boner", "erection", "hentai", "milf", "xxx", "nsfw", "onlyfans", "rapist", "raping", "raped", "chink", "kike", "dyke", "piss", "prick", "bollock", "bellend", "knob", "cocaine", "heroin", "admin", "moderat", "official" };
+        private static readonly string[] RudeWords = { "sex", "rape", "cum", "anal", "anus", "ass", "arse", "hoe", "thot", "shag", "spic", "coon", "paki", "gook", "isis", "kys", "kms", "meth", "capri", "tobtas", "lachy", "staff", "system", "null", "everyone", "anthropic" };
+        // Real words that only look rude, taken out before the check (Sussex, Scunthorpe, peacock, torpedo...).
+        private static readonly string[] RudeAllowed = { "essex", "sussex", "wessex", "middlesex", "scunthorpe", "penistone", "peacock", "hancock", "woodcock", "babcock", "hitchcock", "cockatoo", "cockatiel", "cockpit", "cockney", "cockroach", "shuttlecock", "dickens", "dickinson", "dickson", "torpedo", "speedo", "pedometer", "knobbly", "therapist", "scraper", "scrapper", "draper", "grapes" };
 
         // How names are compared: "Cool_Guy" and "cool guy" are the same name.
         internal static string NameKey(string name) { return Regex.Replace((name ?? "").ToLowerInvariant(), "[ _-]", ""); }
@@ -8384,7 +8386,14 @@ public class CapriInternalBrowser : ICapriMod
                 if ((c >= 'a' && c <= 'z') || c == ' ') plain += c;
             }
             string squashed = Regex.Replace(plain.Replace(" ", ""), @"(.)\1+", "$1"), joined = plain.Replace(" ", "");
-            foreach (string bit in RudeBits) if (squashed.Contains(bit) || joined.Contains(bit)) return "That name won't fly on the board, choom. Pick another?";
+            string cleanJoined = joined, cleanSquashed = squashed;
+            foreach (string ok in RudeAllowed)
+            {
+                string okSquashed = Regex.Replace(ok, @"(.)+", "$1");
+                cleanJoined = cleanJoined.Replace(ok, "").Replace(okSquashed, "");
+                cleanSquashed = cleanSquashed.Replace(ok, "").Replace(okSquashed, "");
+            }
+            foreach (string bit in RudeBits) if (cleanSquashed.Contains(bit) || cleanJoined.Contains(bit)) return "That name won't fly on the board, choom. Pick another?";
             List<string> words = new List<string>(plain.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)) { joined, squashed };
             foreach (string w in words) foreach (string bad in RudeWords) if (w == bad || Regex.Replace(w, @"(.)\1+", "$1") == bad || w == bad + "s") return "That name won't fly on the board, choom. Pick another?";
             return null;
@@ -8409,11 +8418,25 @@ public class CapriInternalBrowser : ICapriMod
             return key;
         }
 
+        // Capri's brain looks at a new name too, for rude words hidden by odd spellings, mixed letters or meanings the lists can't know.
+        // Only a clear yes lets it through. Run off the UI thread.
+        private string NameJudge(string name)
+        {
+            string said = null;
+            ManualResetEvent done = new ManualResetEvent(false);
+            CapriInternalBrowser.Host.Brain.Ask("You check player names for a public game leaderboard that children can see. A name is NOT OK if it is or hides anything rude, sexual, hateful, a slur, about drugs, violence or self-harm, bullying, or pretends to be staff, even when it is misspelt, uses numbers for letters, has letters mixed up or swapped, is backwards, or sounds like a bad word. Ordinary names, nicknames, words and gamer tags are OK. Reply with only the word OK or the word NO.",
+                "The name is: " + name, delegate(string a) { said = a; done.Set(); });
+            done.WaitOne(30000);
+            string verdict = Regex.Replace((said ?? "").Trim().ToUpperInvariant(), "[^A-Z]", "");
+            if (verdict == "OK") return null;
+            return said == null || verdict != "NO" ? "I couldn't check that name just now, choom. Try again in a bit?" : "That name won't fly on the board, choom. Pick another?";
+        }
+
         // Checks their name and claims it on the leaderboards. Run off the UI thread.
         private string SaveBoardName(string name)
         {
             name = (name ?? "").Trim();
-            string why = BadName(name);
+            string why = BadName(name) ?? NameJudge(name);
             if (why != null) return why;
             string[] got = ToWorker("name", "{\"name\":" + Quote(name) + ",\"key\":" + Quote(BoardKey()) + "}");
             if (got != null && got[0] != "ok") return got[1].Length > 0 ? got[1] : "That name didn't work, choom. Try another?";
@@ -8562,7 +8585,7 @@ public class CapriInternalBrowser : ICapriMod
                 bool onTop = false;
                 for (int r = 0; r < list.Count; r++)
                 {
-                    bool mine = me.Length > 0 && NameKey(list[r][0]) == me;
+                    bool mine = me.Length > 0 && (NameKey(list[r][0]) == me || (places.ContainsKey(Boards[i, 0]) && places[Boards[i, 0]][0] == (r + 1).ToString()));
                     if (mine) { placed.Add("#" + (r + 1) + " " + Boards[i, 1].ToLowerInvariant()); onTop = true; }
                     boards.Append("<div class=\"rw").Append(r < 3 ? " r" + (r + 1) : "").Append(mine ? " me" : "").Append("\"><span class=\"rk\">").Append(r + 1).Append("</span><span class=\"nm\">").Append(Esc(list[r][0]))
                         .Append("</span><span class=\"vl\">").Append(list[r][1]).Append(Boards[i, 2]).Append("</span></div>");
