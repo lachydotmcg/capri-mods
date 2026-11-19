@@ -4310,7 +4310,7 @@ public class CapriInternalBrowser : ICapriMod
             Dictionary<Tab, int> from = new Dictionary<Tab, int>();
             foreach (Tab t in tabs) if (t.Chip != null && !t.Chip.IsDisposed) from[t] = t.Chip.Width;
             int was = gone == null ? 0 : gone.Width;
-            Ease(chips, 160, delegate(float e)
+            Ease(chips, 210, delegate(float e)
             {
                 chips.SuspendLayout();
                 if (gone != null && !gone.IsDisposed) gone.Width = Math.Max(0, (int)(was * (1 - e)));
@@ -8382,11 +8382,40 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         // A closed tab shrinks away instead of vanishing.
         private void ShrinkChip(Panel gone, bool settle)
         {
-            gone.Enabled = false;
-            foreach (Control c in gone.Controls) c.Visible = false;
+            gone = Ghost(gone);
             if (settle) { EaseChips(gone); return; }
             int from = gone.Width;
-            Ease(gone, -140, delegate(float e) { gone.Width = Math.Max(0, (int)(from * (1 - e))); }, delegate { chips.Controls.Remove(gone); gone.Dispose(); Slide(false); });
+            Ease(gone, 200, delegate(float e) { gone.Width = Math.Max(0, (int)(from * (1 - e))); }, delegate { chips.Controls.Remove(gone); gone.Dispose(); Slide(false); });
+        }
+
+        // A closed tab's stand-in: a picture of it in its place, fading as it gets narrower. The real tab goes at once.
+        private Panel Ghost(Panel chip)
+        {
+            Bitmap snap = null;
+            try { snap = new Bitmap(Math.Max(1, chip.Width), Math.Max(1, chip.Height)); chip.DrawToBitmap(snap, new Rectangle(0, 0, snap.Width, snap.Height)); }
+            catch (Exception) { if (snap != null) snap.Dispose(); snap = null; }
+            Panel ghost = new Panel { Width = chip.Width, Height = chip.Height, Margin = chip.Margin, BackColor = chips.BackColor, Enabled = false };
+            Buffered(ghost);
+            int full = Math.Max(1, chip.Width);
+            ghost.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                if (snap == null) return;
+                float k = Math.Max(0f, Math.Min(1f, ghost.Width / (float)full));
+                using (ImageAttributes see = new ImageAttributes())
+                {
+                    see.SetColorMatrix(new ColorMatrix { Matrix33 = k * k });
+                    e.Graphics.DrawImage(snap, new Rectangle(0, 0, snap.Width, snap.Height), 0, 0, snap.Width, snap.Height, GraphicsUnit.Pixel, see);
+                }
+            };
+            ghost.Disposed += delegate { if (snap != null) snap.Dispose(); };
+            chips.SuspendLayout();
+            int at = chips.Controls.GetChildIndex(chip, false);
+            chips.Controls.Add(ghost);
+            if (at >= 0) chips.Controls.SetChildIndex(ghost, at);
+            chips.Controls.Remove(chip);
+            chips.ResumeLayout();
+            chip.Dispose();
+            return ghost;
         }
 
         [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] private static extern int SetWindowTheme(IntPtr window, string app, string list);
