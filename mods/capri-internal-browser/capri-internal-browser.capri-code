@@ -306,6 +306,7 @@ public class CapriInternalBrowser : ICapriMod
         if (NoteAnswer(said)) return true;
         if (ShotAnswer(said)) return true;
         if (QuizAnswer(said)) return true;
+        if (ReadOne(said)) return true;
         Func<string> todo;
         lock (gate) { todo = pend != null && Now() <= pendUntil ? pend : null; if (todo != null && (Yes.IsMatch(said) || No.IsMatch(said))) pend = null; }
         if (todo != null && Yes.IsMatch(said)) { ThreadPool.QueueUserWorkItem(delegate { capri.Say(todo()); }); return true; }
@@ -783,15 +784,12 @@ public class CapriInternalBrowser : ICapriMod
                             // Once per new message, not while they're looking at that chat, and each chat at most every 3 minutes.
                             if (!asked && (chatsSeen.Contains(key) || looking || (DateTime.Now - lastAnnounced).TotalSeconds < 20 || (chatAsked.TryGetValue(where, out last) && (DateTime.Now - last).TotalMinutes < 3))) { if (looking) chatsSeen.Add(key); continue; }
                         }
-                        // Asked: everyone else with new messages gets named too.
-                        if (asked)
-                        {
-                            List<string> rest = new List<string>();
-                            foreach (ChatAt other in found) if (other != chat) rest.Add(other.Who + " (" + other.Count + ")");
-                            if (rest.Count > 0) chat.Others = rest.Count == 1 ? rest[0] : string.Join(", ", rest.GetRange(0, rest.Count - 1).ToArray()) + " and " + rest[rest.Count - 1];
-                        }
-                        if (!MessageIn(chat)) continue;
-                        lock (gate) { chatsSeen.Add(key); chatAsked[where] = lastAnnounced = DateTime.Now; }
+                        // Everyone with new messages goes in the one question, this one first.
+                        List<ChatAt> everyone = new List<ChatAt> { chat };
+                        foreach (ChatAt other in found) if (other != chat) everyone.Add(other);
+                        if (!MessageIn(everyone)) continue;
+                        lock (gate) foreach (ChatAt one in everyone) { chatsSeen.Add(site + "|" + one.Id + "|" + one.Count); chatAsked[site + "|" + one.Id] = DateTime.Now; }
+                        lock (gate) lastAnnounced = DateTime.Now;
                         told = true;
                         break;
                     }
@@ -807,16 +805,59 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // Says who it's from and asks, unless she's already waiting on an answer from them.
-    private bool MessageIn(ChatAt chat)
+    private bool MessageIn(List<ChatAt> people)
     {
+        ChatAt chat = people[0];
         lock (gate) if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil) || typedChat != null) return false;
-        // Auto read-out: straight to reading it, with her box showing.
+        lock (gate) { chatQueue.Clear(); chatQueue.AddRange(people.GetRange(1, people.Count - 1)); announced = new List<ChatAt>(people); }
+        // Auto read-out: straight to reading them, one after another, with her box showing.
         if (Flag("autoread", false)) { Card(chat, (chat.Count > 1 ? chat.Count + " new messages" : "New message") + " from " + chat.Who + "...", "Reading it out."); Tell(ReadChat(chat)); return true; }
-        string what = chat.Count > 1 ? chat.Count + " new " + chat.Site + " messages from " + chat.Who : "New " + chat.Site + " message from " + chat.Who;
-        string also = chat.Others == null ? "" : " You've also got new ones from " + chat.Others + ".";
-        string it = chat.Count > 1 ? "them" : "it";
-        Card(chat, what + "." + also + " Want me to read " + it + "?", "Say yes and I'll read " + it + " out.");
-        Tell(Ask(what + ", choom." + also + " Want me to read " + it + "?", delegate { return ReadChat(chat); }));
+        // "Ben left 3 new messages and Sam left 5, should I read them, choom?"
+        List<string> parts = new List<string>();
+        for (int i = 0; i < people.Count; i++)
+        {
+            ChatAt one = people[i];
+            parts.Add(i == 0 ? one.Who + " left " + (one.Count == 1 ? "you a new message" : one.Count + " new messages") : one.Who + " left " + one.Count);
+        }
+        string who = parts.Count == 1 ? parts[0] : string.Join(", ", parts.GetRange(0, parts.Count - 1).ToArray()) + " and " + parts[parts.Count - 1];
+        string it = people.Count > 1 || chat.Count > 1 ? "them" : "it";
+        Card(chat, who + ". Should I read " + it + "?", people.Count > 1 ? "Say yes, or “read " + people[1].Who + "'s” for just one." : "Say yes and I'll read " + it + " out.");
+        Tell(Ask(who + ", should I read " + it + ", choom?", delegate { return ReadChat(chat); }));
+        return true;
+    }
+
+    // Who's still to be read after this one, and who was in the last question (for "read Sam's").
+    private readonly List<ChatAt> chatQueue = new List<ChatAt>();
+    private List<ChatAt> announced;
+
+    // When one person's messages are done with (replied to or not), the next person's are read. Run off the UI thread.
+    private string ThenNext(string said)
+    {
+        ChatAt next = null;
+        lock (gate) if (chatQueue.Count > 0) { next = chatQueue[0]; chatQueue.RemoveAt(0); }
+        return next == null ? said : said + " ... " + ReadChat(next);
+    }
+
+    // "Read Sam's" (or "just Sam's", "only Sam"): only that person's, while she's asking about several.
+    private static readonly Regex ReadWhose = new Regex(@"^(?:(?:just|only)\s+)?(?:read\s+(?:me\s+)?(?:(?:just|only)\s+)?)?(?:the\s+)?(?:ones?\s+from\s+|messages?\s+from\s+|from\s+)?(.{1,40}?)(?:'s|s)?(?:\s+(?:ones?|messages?|first|only))?$", Plain);
+    private bool ReadOne(string said)
+    {
+        List<ChatAt> those;
+        lock (gate) those = announced != null && pend != null && Now() <= pendUntil ? announced : null;
+        if (those == null || those.Count < 2 || Yes.IsMatch(said) || No.IsMatch(said)) return false;
+        Match m = ReadWhose.Match(said);
+        if (!m.Success || !Regex.IsMatch(said, @"\bread\b|\bjust\b|\bonly\b|'s\b", Plain)) return false;
+        string name = Regex.Replace(m.Groups[1].Value.ToLowerInvariant(), "[^a-z0-9]", "");
+        if (name.Length < 2) return false;
+        ChatAt pick = null;
+        foreach (ChatAt one in those)
+        {
+            string k = Regex.Replace(one.Who.ToLowerInvariant(), "[^a-z0-9 ]", "");
+            if (k.Replace(" ", "") == name || k.Split(' ')[0] == name || (name.Length >= 3 && k.Replace(" ", "").StartsWith(name, StringComparison.Ordinal))) { pick = one; break; }
+        }
+        if (pick == null) return false;
+        lock (gate) { pend = null; chatQueue.Clear(); announced = null; }
+        ThreadPool.QueueUserWorkItem(delegate { Tell(ReadChat(pick)); });
         return true;
     }
 
@@ -827,7 +868,7 @@ public class CapriInternalBrowser : ICapriMod
         string got = InTab(chat.Tab, (dc ? DcOpen : WaOpen) + "(" + Quote(chat.Id) + ")");
         string said = null;
         for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, dc ? DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")" : WaRead + "(" + Quote(chat.Id) + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
-        if (said == "mine") { Card(chat, "Looks like you've already answered this one.", ""); return "Looks like you've already answered that one, choom."; }
+        if (said == "mine") { Card(chat, "Looks like you've already answered this one.", ""); return ThenNext("Looks like you've already answered " + chat.Who + ", choom."); }
         if (string.IsNullOrEmpty(said) || said == "wait") { Card(chat, "I couldn't open that chat.", "Click here to see it."); return "I couldn't open that chat, choom. It's in your " + chat.Site + " tab."; }
         string[] lines = said.Split('\n');
         string from = Clean(lines[0], 40);
@@ -840,7 +881,9 @@ public class CapriInternalBrowser : ICapriMod
         if (LoginCode.IsMatch(raw)) { Card(chat, "That one looks like a login code, so I won't read it out.", "Click here to see it in the chat."); return "That one looks like a login code, choom, so I won't read it out. Click the box if you want to see it."; }
         string text = Clip(string.Join(" ... ", parts.ToArray()), 1200);
         Card(chat, from + " says: " + text, "Want to reply? Say yes or no.");
-        return Ask(from + " says: " + text + " ... Want to reply?", delegate { return StartReply(chat); });
+        string ask = Ask(from + " says: " + text + " ... Want to reply?", delegate { return StartReply(chat); });
+        lock (gate) { pendNoFor = pend; pendNo = delegate { Tell(ThenNext("Okay, no reply, choom.")); }; }
+        return ask;
     }
 
     private string StartReply(ChatAt chat)
@@ -856,7 +899,7 @@ public class CapriInternalBrowser : ICapriMod
         ChatAt chat;
         lock (gate) { chat = replying != null && Now() <= replyUntil ? replying : null; replying = null; }
         if (chat == null) return false;
-        if (No.IsMatch(said) || StopReply.IsMatch(said)) { Card(chat, "Okay, no reply.", ""); Tell("Okay, no reply, choom."); return true; }
+        if (No.IsMatch(said) || StopReply.IsMatch(said)) { Card(chat, "Okay, no reply.", ""); ThreadPool.QueueUserWorkItem(delegate { Tell(ThenNext("Okay, no reply, choom.")); }); return true; }
         string text = Regex.Replace(said, @"^(?:say|tell\s+(?:them|him|her)|reply(?:\s+with)?|send|write)\s+(?:that\s+|back\s+)?", "", Plain).Trim();
         if (text.Length == 0) { lock (gate) { replying = chat; replyUntil = Now().AddSeconds(60); } Tell("What should I say, choom?"); return true; }
         text = Clip(Regex.Replace(text, @"\s+", " "), 500);
@@ -900,7 +943,7 @@ public class CapriInternalBrowser : ICapriMod
         lock (gate) { typedChat = chat; typedText = text; typedUntil = Now().AddMinutes(2); }
         Card(chat, "I typed this to " + chat.Who + ". Want me to send it?", "Say yes to send it, or no and I'll delete it.");
         string question = Ask("I've typed \"" + text + "\" to " + chat.Who + ". Want me to send it?", delegate { return PressSend(chat, text); });
-        lock (gate) { pendNoFor = pend; pendNo = delegate { Tell(Untype(chat, text, "Okay, I deleted it. Nothing was sent, choom.")); }; }
+        lock (gate) { pendNoFor = pend; pendNo = delegate { Tell(ThenNext(Untype(chat, text, "Okay, I deleted it. Nothing was sent, choom."))); }; }
         return question;
     }
 
@@ -924,7 +967,7 @@ public class CapriInternalBrowser : ICapriMod
         CardShot(null);
         Card(chat, fail == null ? "Sent it to " + chat.Who + ". \u2713" : "Not sent.", fail == null ? "\u201c" + text + "\u201d" : "");
         Tidy(chat);
-        return fail ?? "Sent it to " + chat.Who + ", choom.";
+        return ThenNext(fail ?? "Sent it to " + chat.Who + ", choom.");
     }
 
     // A Discord tab she opened out of sight to send something is closed again when she's done.
