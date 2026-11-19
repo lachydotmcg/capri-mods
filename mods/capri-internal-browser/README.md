@@ -22,7 +22,14 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "what's new in Capri Browser?" | Tells you the update notes, then asks if you want her to remember them |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
 | "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Browser note (nothing said: the page you're on) |
-| "research this" / "look into ..." / "do some research on ..." | Looks it up, then saves what she found in a new note |
+| "research ..." / "look into ..." / "dig into this" | Capri Research: reads several sites in the background while you carry on, then asks to bring it up, put it in your notes, or both |
+| "what's the best ..." / "what's the best website for ..." | Her top picks with prices and sources, or the best sites for it |
+| "fact check ..." / "is it true that ..." | True, false, partly true or not clear, with sources |
+| "compare my tabs" / "which of these should I buy?" / "what have I got open?" | Compares or sums up your open tabs |
+| "work out my last note" | Works out the newest note in Noted, even a screenshot (Windows reads the text in it) or a text file |
+| "watch this page" / "tell me when the price drops" | Checks up to 5 pages every 20 minutes and tells you when it happens |
+| "fill in this form with ..." | Fills in what you told her (never passwords, card, bank or ID numbers), outlines it, and sends only on your yes |
+| Highlight text, right-click, Let Capri research this | Researches what you highlighted. The right-click menu is in Capri's colours (Settings > Appearance) |
 | "screenshot this and add it to my notes" | Puts a screenshot of the page in a new Browser note |
 | "pause" / "louder" / "next video" | Controls the video |
 | "skip 2 minutes" / "go back 30 seconds" / "skip to 3:20" | Skips or rewinds the video |
