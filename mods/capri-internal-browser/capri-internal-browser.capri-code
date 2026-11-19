@@ -6847,7 +6847,6 @@ public class CapriInternalBrowser : ICapriMod
         // ---- Weekly leaderboards ----
         // They pick a name, and "Send my week" sends only that name and this week's six numbers to Capri Browser's leaderboard
         // server, which refuses rude, taken or unbelievable ones. No account needed. LEADERBOARD.md on GitHub is a copy of it.
-        private const string BoardPage = "https://github.com/tob7as/Browser-addons/blob/main/LEADERBOARD.md";
         private const string BoardData = WorkerUrl + "board.txt";
 
         // Rude bits caught anywhere in a name, and words only caught on their own (so Sussex, grapes and peacocks are fine).
@@ -7022,7 +7021,7 @@ public class CapriInternalBrowser : ICapriMod
             }
             boards.Append("</div>");
 
-            string buttons = "<a class=\"bt\" href=\"" + Own + "play?g=lbrefresh\">" + (boardBusy ? "Refreshing..." : "Refresh") + "</a><a class=\"bt\" href=\"" + Own + "play?g=lbgithub\">Open on GitHub</a>";
+            string buttons = "<a class=\"bt\" href=\"" + Own + "play?g=lbrefresh\">" + (boardBusy ? "Refreshing..." : "Refresh") + "</a>";
             if (me.Length > 0)
                 html.Append("<div class=\"you\"><div><div class=\"s\">YOU'RE ON THE BOARDS AS</div><div class=\"n\">").Append(Esc(Kept("lbname"))).Append("</div></div><div class=\"s\">")
                     .Append(placed.Count > 0 ? string.Join(" &middot; ", placed.ToArray()) : "Not on a top 10 yet. Send your week to put your numbers up.").Append("</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbsend\">Send my week</a>").Append(buttons).Append("</div></div>");
@@ -7046,7 +7045,6 @@ public class CapriInternalBrowser : ICapriMod
         {
             if (which == "lbopen") { ShowBoards(); return; }
             if (which == "lbrefresh") { LoadBoards(); return; }
-            if (which == "lbgithub") { OpenTab(null, BoardPage, true); return; }
             if (which == "lbgames") { ShowGames(); return; }
             if (which == "lbsend")
             {
