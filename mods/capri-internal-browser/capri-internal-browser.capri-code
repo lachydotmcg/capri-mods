@@ -8485,13 +8485,21 @@ public class CapriInternalBrowser : ICapriMod
             if (boardBusy) return;
             boardBusy = true;
             foreach (Tab open in tabs) if (open.Special == "boards") ShowReader(open);
+            string lbName = Kept("lbname"), lbKey = Kept("lbkey");
             ThreadPool.QueueUserWorkItem(delegate
             {
-                string got = null;
+                string got = null, rank = null;
                 try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(BoardData); } } catch (Exception) { }
+                // Their own place on each board: only with a name, and only their own (the worker knows them by their key).
+                if (got != null && lbName.Length > 0 && Regex.IsMatch(lbKey, "^[a-f0-9]{32}$"))
+                {
+                    string[] r = ToWorker("rank", "{\"key\":" + Quote(lbKey) + "}");
+                    if (r != null && r[0] == "ok") rank = r[1];
+                }
                 Post(delegate
                 {
                     boardBusy = false;
+                    if (rank != null) Keep("lb-rank", rank);
                     boardFailed = got == null || got.Length > 200000 || !got.StartsWith("# Capri Browser leaderboards", StringComparison.Ordinal);
                     if (!boardFailed) { Keep("lb-board", got); Keep("lb-got", DateTime.Now.ToString("ddd d MMM, HH:mm", System.Globalization.CultureInfo.InvariantCulture)); }
                     foreach (Tab open in tabs) if (open.Special == "boards") ShowReader(open);
@@ -8521,6 +8529,16 @@ public class CapriInternalBrowser : ICapriMod
                     else if (rows[p[1]].Count < 10) rows[p[1]].Add(new[] { p[2], p[3] });
                 }
             }
+            Dictionary<string, string[]> places = new Dictionary<string, string[]>();
+            int players = 0;
+            if (me.Length > 0)
+                foreach (string part in Kept("lb-rank").Split(';'))
+                {
+                    Match pm = Regex.Match(part, @"^(\w{1,12})=(\d{1,7})(?::(\d{1,8}(?:\.\d)?))?$");
+                    if (!pm.Success) continue;
+                    if (pm.Groups[1].Value == "total") int.TryParse(pm.Groups[2].Value, out players);
+                    else if (rows.ContainsKey(pm.Groups[1].Value) && pm.Groups[3].Success) places[pm.Groups[1].Value] = new[] { pm.Groups[2].Value, pm.Groups[3].Value };
+                }
             DateTime when;
             string changed = DateTime.TryParseExact(updated, "yyyy-MM-dd'T'HH:mm'Z'", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out when) ? when.ToString("ddd d MMM, HH:mm", System.Globalization.CultureInfo.InvariantCulture) : "";
             int left = ((int)DayOfWeek.Monday - (int)DateTime.UtcNow.DayOfWeek + 7) % 7;
@@ -8541,12 +8559,20 @@ public class CapriInternalBrowser : ICapriMod
                 List<string[]> list = rows[Boards[i, 0]];
                 boards.Append("<div class=\"bd\"><h2>").Append(Boards[i, 1]).Append("<span>TOP 10</span></h2>");
                 if (list.Count == 0) boards.Append("<div class=\"none\">Nobody yet. Be the first!</div>");
+                bool onTop = false;
                 for (int r = 0; r < list.Count; r++)
                 {
                     bool mine = me.Length > 0 && NameKey(list[r][0]) == me;
-                    if (mine) placed.Add("#" + (r + 1) + " " + Boards[i, 1].ToLowerInvariant());
+                    if (mine) { placed.Add("#" + (r + 1) + " " + Boards[i, 1].ToLowerInvariant()); onTop = true; }
                     boards.Append("<div class=\"rw").Append(r < 3 ? " r" + (r + 1) : "").Append(mine ? " me" : "").Append("\"><span class=\"rk\">").Append(r + 1).Append("</span><span class=\"nm\">").Append(Esc(list[r][0]))
                         .Append("</span><span class=\"vl\">").Append(list[r][1]).Append(Boards[i, 2]).Append("</span></div>");
+                }
+                string[] at;
+                if (!onTop && places.TryGetValue(Boards[i, 0], out at))
+                {
+                    placed.Add("#" + at[0] + " " + Boards[i, 1].ToLowerInvariant());
+                    boards.Append("<div class=\"none\">&middot; &middot; &middot;</div><div class=\"rw me\"><span class=\"rk\">").Append(at[0]).Append("</span><span class=\"nm\">").Append(Esc(Kept("lbname")))
+                        .Append("</span><span class=\"vl\">").Append(at[1]).Append(Boards[i, 2]).Append("</span></div>");
                 }
                 boards.Append("</div>");
             }
@@ -8555,7 +8581,7 @@ public class CapriInternalBrowser : ICapriMod
             string buttons = "<a class=\"bt\" href=\"" + Own + "play?g=lbrefresh\">" + (boardBusy ? "Refreshing..." : "Refresh") + "</a>";
             if (me.Length > 0)
                 html.Append("<div class=\"you\"><div><div class=\"s\">YOU'RE ON THE BOARDS AS</div><div class=\"n\">").Append(Esc(Kept("lbname"))).Append("</div></div><div class=\"s\">")
-                    .Append(placed.Count > 0 ? string.Join(" &middot; ", placed.ToArray()) : "Not on a top 10 yet. Send your stats to put your numbers up.").Append("</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbsend\">Send my stats</a>").Append(buttons).Append("</div></div>");
+                    .Append(placed.Count > 0 ? string.Join(" &middot; ", placed.ToArray()) + (players > 0 ? " &middot; out of " + players + " player" + (players == 1 ? "" : "s") : "") : "Not on the boards yet. Send your stats to put your numbers up.").Append("</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbsend\">Send my stats</a>").Append(buttons).Append("</div></div>");
             else
                 html.Append("<div class=\"you\"><div class=\"s\">Add a leaderboard name on the Games page to compete. Only your leaderboard name and your numbers show here.</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbgames\">Go to Games</a>").Append(buttons).Append("</div></div>");
             html.Append("<h1>TOP 10s <span>&gt;</span></h1>").Append(boards);
