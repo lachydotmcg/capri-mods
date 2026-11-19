@@ -2451,6 +2451,19 @@ public class CapriInternalBrowser : ICapriMod
         foreach (string want in new[] { host, fallback }) foreach (string[] s in Sites) if (s[1] == want && s.Length <= 5) return s;
         return Sites[0];
     }
+    // Their own site: its search link, and which of its links look like something to watch.
+    private static string[] SiteFrom(string pick, string link, string fallback)
+    {
+        Uri u;
+        link = (link ?? "").Trim();
+        if (pick != "custom" || !Uri.TryCreate(link.Replace("%s", "x"), UriKind.Absolute, out u) || (u.Scheme != "https" && u.Scheme != "http")) return SiteOn(pick == "custom" ? "" : pick, fallback);
+        string host = u.Host.ToLowerInvariant();
+        if (host.StartsWith("www.", StringComparison.Ordinal)) host = host.Substring(4);
+        string home = u.Scheme + "://" + u.Host + "/";
+        string search = link.Contains("%s") ? link : link.EndsWith("=", StringComparison.Ordinal) ? link + "%s" : u.AbsolutePath.Length > 1 || u.Query.Length > 0 ? link : home + "search?q=%s";
+        return new[] { "custom", host, home, search, @"^https?://(?:[\w-]+\.)*" + Regex.Escape(host) + @"/(?!(?:search|login|signin|signup|register|account|user|settings|genre|category|tags?)\b)[^?#]*[\w-]{3,}" };
+    }
+
     private static string SiteName(string[] s) { string w = s[0].Split('|')[0]; w = Regex.Replace(w, @"[^a-z ]", ""); return w == "youtube" ? "youtube" : w.Length > 0 ? w : "youtube"; }
 
     private void PickVideo(string what, string site, string kind, string said)
@@ -2461,7 +2474,7 @@ public class CapriInternalBrowser : ICapriMod
         bool named = false;
         foreach (string[] s in Sites) if (Regex.IsMatch(asked, @"\b(" + s[0] + @")\b")) { at = s; named = true; break; }
         // No site named: their Anime site for anime, their Video site for everything else they watch.
-        string[] animeAt = SiteOn(capri.Store.Get("animesite", "") ?? "", Browser.AnimeHosts[0]), videoAt = SiteOn(capri.Store.Get("videosite", "") ?? "", Browser.VideoHosts[0]);
+        string[] animeAt = SiteFrom(capri.Store.Get("animesite", "") ?? "", capri.Store.Get("animelink", "") ?? "", Browser.AnimeHosts[0]), videoAt = SiteFrom(capri.Store.Get("videosite", "") ?? "", capri.Store.Get("videolink", "") ?? "", Browser.VideoHosts[0]);
         if (!named && kind != "thing") at = Regex.IsMatch(said ?? "", @"\banime\b", Plain) ? animeAt : videoAt;
         string animeName = SiteName(animeAt), videoName = SiteName(videoAt);
         what = Regex.Replace(what ?? "", @"\b(" + at[0] + @")\b", "", Plain).Trim();
@@ -2478,7 +2491,7 @@ public class CapriInternalBrowser : ICapriMod
                 string chosenTitle = null;
                 try
                 {
-                    capri.Brain.Ask("Work out what they want to watch or find. Reply with only: site | search words. site is youtube, tiktok, crunchyroll, netflix, twitch or prime for videos (" + videoName + " if they didn't say), roblox for Roblox games, steam for PC games, itch for indie or free browser games, or web for anything else (products, recipes, places, sites, other games). If they want one you'd pick, choose what you, Capri, would enjoy. The search words go in that site's search box. If it's for them or someone else (a video I'd like, one Sam would like), choose words from what you know about who it's for; if you know nothing, pick something popular and fun. Never shorts. If they asked for an episode or season, keep it in the search words (one piece episode 1). For anime with no site named, use " + animeName + "; for a show or movie with no site named, use " + videoName + ". " +
+                    capri.Brain.Ask("Work out what they want to watch or find. Reply with only: site | search words. site is youtube, tiktok, crunchyroll, netflix, twitch, prime or custom (their own site) for videos (" + videoName + " if they didn't say), roblox for Roblox games, steam for PC games, itch for indie or free browser games, or web for anything else (products, recipes, places, sites, other games). If they want one you'd pick, choose what you, Capri, would enjoy. The search words go in that site's search box. If it's for them or someone else (a video I'd like, one Sam would like), choose words from what you know about who it's for; if you know nothing, pick something popular and fun. Never shorts. If they asked for an episode or season, keep it in the search words (one piece episode 1). For anime with no site named, use " + animeName + "; for a show or movie with no site named, use " + videoName + ". " +
                         "If they ask for a genre, theme or mood instead of a title (an action anime, a scary movie, a funny show, a chill video), think of one real, well-known title that fits it well (vary your picks) and search for that title, not the genre words: find me an action anime -> " + animeName + " | Jujutsu Kaisen. For videos, pick a specific creator, series or video idea that fits. When you picked a title like that, add | picked at the end. If they want the newest or latest, the search words are only who or what it's from (the channel or show), or home if they didn't say. If they didn't name a topic or kind of video (just a good video, something to watch), the search words are: home. Never leave them empty.",
                         "They said: \"" + said + "\"", delegate(string answer)
                         {
@@ -2498,7 +2511,7 @@ public class CapriInternalBrowser : ICapriMod
                 bool thingOnly = at.Length > 5;
                 if (chosenTitle != null) capri.Say("How about " + chosenTitle + ", choom?");
                 if (kind.Length == 0) kind = "something to watch";
-                string url = what.Length == 0 ? at[2] : at[3] + Uri.EscapeDataString(what);
+                string url = what.Length == 0 ? at[2] : at[3].Contains("%s") ? at[3].Replace("%s", Uri.EscapeDataString(what)) : at[3] + Uri.EscapeDataString(what);
                 // Newest: YouTube sorted by upload date, or the channel they're watching, or their subscriptions.
                 if (newest && at == Sites[0])
                 {
@@ -3032,9 +3045,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "27f95aac1d4d12454d48d809fa6547480d17295b";
+    private const string AddonsCommit = "34e4b55d8bb7fd5cc15dfb6f7a4a78df40d357a0";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=0c9d4f5feccde823f83cc902ab685ff23aeef4f14ff2942cdaa2d2b0cb55a7ba;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=02e0d38a3eb7249bded9e4f449022692d2c3ad16e902bd84b651912c08b6a5f6;help.txt=718cc2b665f1e7c8504219c360d543df45d8c8014fac46f30833478d558258d8;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -7823,8 +7836,16 @@ public class CapriInternalBrowser : ICapriMod
 
         private static string Btn(string key, string text, bool main) { return "<button class='" + (main ? "bt m" : "bt") + "' onclick=\"S('" + key + "',1)\">" + Esc(text) + "</button>"; }
 
-        internal static readonly string[] AnimeHosts = { "crunchyroll.com", "youtube.com", "netflix.com", "primevideo.com" }, AnimeNames = { "Crunchyroll", "YouTube", "Netflix", "Prime Video" };
-        internal static readonly string[] VideoHosts = { "youtube.com", "tiktok.com", "twitch.tv", "netflix.com", "primevideo.com" }, VideoNames = { "YouTube", "TikTok", "Twitch", "Netflix", "Prime Video" };
+        internal static readonly string[] AnimeHosts = { "crunchyroll.com", "youtube.com", "netflix.com", "primevideo.com", "custom" }, AnimeNames = { "Crunchyroll", "YouTube", "Netflix", "Prime Video", "Custom link..." };
+        internal static readonly string[] VideoHosts = { "youtube.com", "tiktok.com", "twitch.tv", "netflix.com", "primevideo.com", "custom" }, VideoNames = { "YouTube", "TikTok", "Twitch", "Netflix", "Prime Video", "Custom link..." };
+
+        // The box for a custom site's link, under its choice.
+        private string LinkRow(string key, string title)
+        {
+            if (Kept(key + "site") != "custom") return "";
+            return Row(title, "Paste the site's link. For the best results, search for something on the site and paste that link with %s where the words go.",
+                "<input type='text' spellcheck='false' style='width:260px' placeholder='https://site.com/search?q=%s' value='" + Esc(Kept(key + "link")) + "' onchange=\"S('" + key + "link',this.value)\">");
+        }
 
         private static string Pick(string key, IList<string> values, IList<string> names, string now, bool fonts)
         {
@@ -7881,7 +7902,9 @@ public class CapriInternalBrowser : ICapriMod
                 .Append("</div>");
             html.Append(open(2)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : ""))
                 .Append(Row("Anime site", "Where Capri looks when you ask for anime without naming a site.", Pick("animesite", AnimeHosts, AnimeNames, Kept("animesite").Length > 0 ? Kept("animesite") : AnimeHosts[0], false)))
+                .Append(LinkRow("anime", "Custom anime site"))
                 .Append(Row("Video site", "Where Capri looks when you ask for a video, show or movie without naming a site.", Pick("videosite", VideoHosts, VideoNames, Kept("videosite").Length > 0 ? Kept("videosite") : VideoHosts[0], false)))
+                .Append(LinkRow("video", "Custom video site"))
                 .Append(extras("video")).Append("</div>");
 
             // Privacy & security: tracking, ads, warnings, clearing data, and each site's settings.
@@ -7946,6 +7969,13 @@ public class CapriInternalBrowser : ICapriMod
                 case "font": mod.look.Font = value; Changed(); return;
                 case "animesite": if (Array.IndexOf(AnimeHosts, value) >= 0) Keep("animesite", value); break;
                 case "videosite": if (Array.IndexOf(VideoHosts, value) >= 0) Keep("videosite", value); break;
+                case "animelink": case "videolink":
+                    {
+                        Uri lu;
+                        string link = (value ?? "").Trim();
+                        if (link.Length == 0 || (link.Length < 400 && Uri.TryCreate(link.Replace("%s", "x"), UriKind.Absolute, out lu) && (lu.Scheme == "https" || lu.Scheme == "http"))) Keep(key, link);
+                        break;
+                    }
                 case "size": mod.look.Size = Math.Max(70, Math.Min(200, n / 10 * 10)); Changed(); return;
                 case "sites": mod.look.Sites = on; Changed(); return;
                 case "names": mod.look.Names = on; Changed(); return;
@@ -10247,6 +10277,42 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             catch (Exception error) { done("Edge's engine here can't add extensions yet (" + Inner(error).Message + "). Restart Capri and try again."); }
         }
 
+        private static bool StoreSite(string url)
+        {
+            Uri u;
+            return url != null && Uri.TryCreate(url, UriKind.Absolute, out u) && u.Scheme == "https" && u.Host == "chromewebstore.google.com";
+        }
+
+        private void StoreAdd(Tab t, string from, string what)
+        {
+            if (!StoreSite(from) || t.Private) return;
+            string[] p = (what ?? "").Split(new[] { '|' }, 2);
+            string id = p[0], name = Regex.Replace(p.Length > 1 ? p[1] : "", @"[^\w .-]+", "").Trim();
+            if (!Regex.IsMatch(id, "^[a-p]{32}$")) return;
+            if (name.Length == 0) name = "extension";
+            string url = "https://clients2.google.com/service/update2/crx?response=redirect&prodversion=131.0.0.0&acceptformat=crx2,crx3&x=id%3D" + id + "%26uc";
+            Action<string> button = delegate(string words) { if (!t.Viewer.Control.IsDisposed) t.Viewer.Script("(function(){var b=document.getElementById('capri-ext-add');if(b){b.textContent=" + Quote(words) + ";b.disabled=true}})()"); };
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                byte[] got = DownloadBytes(url, null);
+                string file = null;
+                if (got != null && got.Length > 16 && got[0] == 'C' && got[1] == 'r' && got[2] == '2' && got[3] == '4')
+                    try { file = Path.Combine(Path.GetTempPath(), Regex.Replace(name, @"\s+", "-") + ".crx"); File.WriteAllBytes(file, got); } catch (Exception) { file = null; }
+                Post(delegate
+                {
+                    if (file == null) { button("Couldn't download it"); mod.Tell("I couldn't get that extension from the store, choom."); return; }
+                    AddExtension(file, delegate(string failed)
+                    {
+                        try { File.Delete(file); } catch (Exception) { }
+                        if (failed != null) { button("Couldn't add it"); mod.Tell("That extension didn't go in, choom: " + failed); return; }
+                        Bump("extensions", 1);
+                        button("Added to Capri Browser ✓");
+                        mod.Tell(Line("extadded", "Extension's in, choom. Reload a page to see it work.", "Got it installed, choom. Give the page a reload."));
+                    });
+                });
+            });
+        }
+
         private static void CopyFolder(string from, string to, int depth)
         {
             if (depth > 12) return;
@@ -10420,8 +10486,12 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     addFile.Top = y;
                     addFolder.Click += delegate { pick("folder"); };
                     addFile.Click += delegate { pick("file"); };
+                    y += 36;
+                    Button store = small("Get extensions from the Chrome Web Store", 20);
+                    store.Top = y;
+                    store.Click += delegate { drop.Close(); OpenTab(null, "https://chromewebstore.google.com/", true); };
                     y += 40;
-                    Label note = new Label { Text = "Download an extension as a folder, .zip or .crx (many are on GitHub), then add it here. Store installs don't work in Edge's app engine, and toolbar popups open as a tab. Extensions can read and change the sites you visit, so only add ones you trust.", Left = 20, Top = y, Width = 320, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 9f) };
+                    Label note = new Label { Text = "Open the Chrome Web Store in Capri Browser and press Add to Capri Browser on any extension. You can also add a folder, .zip or .crx. Toolbar popups open as a tab. Extensions can read and change the sites you visit, so only add ones you trust.", Left = 20, Top = y, Width = 320, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 9f) };
                     note.Height = TextRenderer.MeasureText(note.Text, note.Font, new Size(320, 0), TextFormatFlags.WordBreak).Height + 4;
                     card.Controls.Add(note);
                     y += note.Height + 14;
@@ -11789,6 +11859,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             Viewer v = made;
             v.Moved = delegate(string url)
             {
+                if (StoreSite(url)) v.Script(ModernViewer.StoreButton);
                 if (url == null || url.StartsWith(Own, StringComparison.Ordinal)) return;
                 t.OnReader = false;
                 t.Address = url;
@@ -11829,7 +11900,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             v.Sound = delegate(bool playing, bool muted) { if (t.Playing == playing && t.Muted == muted) return; t.Playing = playing; t.Muted = muted; Retitle(t, t.Title); };
             v.Key = delegate(Keys pressed) { return t == tab && Shortcut(pressed); };
             v.FullScreen = delegate(bool on) { if (t == tab) { byKey = false; SetFullScreen(on); } };
-            v.Loaded = delegate { v.Style(mod.look, t.OnReader); if (t.Special == "addon" && t.OnReader && t.Title == "Mystery Choom") v.Script(GameTalk); Race r = race; if (r != null && r.Tab == t) RaceClock(r, false); if (Masked(t)) Guess(t); };
+            v.ExtWanted = delegate(string from, string what) { StoreAdd(t, from, what); };
+            v.Loaded = delegate { if (StoreSite(t.Address)) v.Script(ModernViewer.StoreButton); v.Style(mod.look, t.OnReader); if (t.Special == "addon" && t.OnReader && t.Title == "Mystery Choom") v.Script(GameTalk); Race r = race; if (r != null && r.Tab == t) RaceClock(r, false); if (Masked(t)) Guess(t); };
             v.Ready = delegate { if (Masked(t)) Guess(t); };
             v.Asked = delegate(string picked)
             {
@@ -12471,6 +12543,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         public Action Loaded, Ready;
         // Asked: they picked "Ask Capri about this" on some highlighted words. Ended: a video on the page finished (its title).
         public Action<string> Asked;
+        public Action<string, string> ExtWanted;   // the store page it came from, and "id|name"
         public Action<string, bool> Ended;      // the title, and whether it was over 6 minutes (only those count as finished)
         // LoginSeen: they signed in on the page (where, username, password), for the Passwords list. PasswordBox: the page has a password box.
         public Action<string, string, string> LoginSeen;
@@ -12693,6 +12766,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                         string said = Call(message, "TryGetWebMessageAsString") as string;
                         if (said != null && said.StartsWith("capri-endedL|", StringComparison.Ordinal) && Ended != null) Ended(said.Substring(13), true);
                         else if (said != null && said.StartsWith("capri-ended|", StringComparison.Ordinal) && Ended != null) Ended(said.Substring(12), false);
+                        else if (said != null && said.StartsWith("capri-ext|", StringComparison.Ordinal) && ExtWanted != null) ExtWanted(Get(message, "Source") as string ?? "", said.Substring(10));
                         else if (said != null && said.StartsWith("capri-login|", StringComparison.Ordinal) && LoginSeen != null) { int cut = said.IndexOf('\n'); if (cut > 12) LoginSeen(Get(message, "Source") as string ?? "", said.Substring(12, cut - 12), said.Substring(cut + 1)); }
                         else if (said == "capri-pwbox" && PasswordBox != null) PasswordBox(Get(message, "Source") as string ?? "");
                         else if (said == "capri-click|plain") { plainClick = DateTime.UtcNow; topClick = DateTime.UtcNow; }
@@ -13048,6 +13122,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             + "document.addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target&&e.target.tagName=='INPUT')grab(e.target.form||document)},true);"
             + "var told=0;function box(){if(told)return;var ps=document.querySelectorAll('input[type=password]');for(var i=0;i<ps.length;i++)if(vis(ps[i])){told=1;if(window.chrome&&chrome.webview)chrome.webview.postMessage('capri-pwbox');return}}"
             + "document.addEventListener('DOMContentLoaded',function(){box();var o=new MutationObserver(function(){if(told)o.disconnect();else box()});o.observe(document.documentElement,{childList:true,subtree:true});setTimeout(function(){o.disconnect()},30000)})})();";
+        internal const string StoreButton = @"(function(){if(location.hostname!=='chromewebstore.google.com')return '';function up(){var m=/^\/detail\/(?:[^\/]+\/)?([a-p]{32})/.exec(location.pathname),b=document.getElementById('capri-ext-add');if(!m){if(b)b.style.display='none';return}if(!b){b=document.createElement('button');b.id='capri-ext-add';b.style.cssText='position:fixed;right:24px;bottom:24px;z-index:2147483647;padding:12px 22px;border:0;border-radius:8px;background:#e0313b;color:#fff;font:600 15px Segoe UI,sans-serif;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,.35)';b.onclick=function(){if(b.disabled)return;var h=document.querySelector('h1');b.textContent='Adding...';b.disabled=true;chrome.webview.postMessage('capri-ext|'+b.getAttribute('data-id')+'|'+((h&&h.textContent)||'').trim().slice(0,60))};document.documentElement.appendChild(b)}b.style.display='';if(b.getAttribute('data-id')!==m[1]){b.setAttribute('data-id',m[1]);b.textContent='Add to Capri Browser';b.disabled=false}}up();if(!window.__capriStore){window.__capriStore=1;setInterval(up,800)}return 'ok'})()";
         private const string EndedScript = "(function(){function f(e){var v=e.target;if(!v||v.tagName!='VIDEO'||!(v.duration>45)||!isFinite(v.duration))return;if(e.type=='timeupdate'&&v.currentTime<v.duration*0.9)return;var k=v.currentSrc||'v';if(v.__capriDone===k)return;v.__capriDone=k;if(window.chrome&&chrome.webview)chrome.webview.postMessage((v.duration>360?'capri-endedL|':'capri-ended|')+document.title);}document.addEventListener('ended',f,true);document.addEventListener('timeupdate',f,true);})();";
         private System.Threading.Tasks.Task<string> darkId;
 
