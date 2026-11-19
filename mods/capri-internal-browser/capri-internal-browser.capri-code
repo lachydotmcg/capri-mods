@@ -1086,13 +1086,15 @@ public class CapriInternalBrowser : ICapriMod
         else
         {
             string box = InTab(chat.Tab, ChatBox + "(" + w + ",'check')");
-            if (box == "busy") fail = "There's already something typed in that chat, " + not + " Have a look.";
+            // Something already in the box: cleared, so only what they asked for goes in.
+            if (box == "busy") { InTab(chat.Tab, ChatBox + "(" + w + ",'clear')"); Thread.Sleep(250); box = InTab(chat.Tab, ChatBox + "(" + w + ",'check')"); }
+            if (box == "busy") fail = "There's something in that chat's message box I couldn't clear, " + not + " Have a look.";
             else if (box != "empty") fail = "I can't find the message box in that chat, " + not;
         }
         for (int tries = 0; fail == null && tries < (hidden ? 1 : 2); tries++)
         {
             // A tab that's out of sight may not take typing: the second try brings it to the front first.
-            if (tries == 1) { InBrowser(delegate(Browser b) { b.Show(chat.Tab); return null; }); Thread.Sleep(700); if (InTab(chat.Tab, ChatBox + "(" + w + ",'check')") != "empty") break; }
+            if (tries == 1) { InBrowser(delegate(Browser b) { b.Show(chat.Tab); return null; }); Thread.Sleep(700); InTab(chat.Tab, ChatBox + "(" + w + ",'clear')"); if (InTab(chat.Tab, ChatBox + "(" + w + ",'check')") != "empty") break; }
             TabCdp(chat.Tab, "Input.insertText", "{\"text\":" + DcJson(text) + "}");
             Thread.Sleep(350);
             typed = InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "";
@@ -1778,10 +1780,7 @@ public class CapriInternalBrowser : ICapriMod
                 {
                     InBrowser(delegate(Browser now) { now.Do("show", ""); return null; });
                     Thread.Sleep(300);
-                    keybd_event(0x46, 0, 0, IntPtr.Zero);
-                    Thread.Sleep(40);
-                    keybd_event(0x46, 0, 2, IntPtr.Zero);
-                    Thread.Sleep(1200);
+                    if (PressF()) Thread.Sleep(1200);
                     if (OnPage("(function(){return document.fullscreenElement?'yes':'no';})()", out why) == "yes") return "Pressed F: it's full screen.";
                     return VideoFull();
                 }
@@ -2936,6 +2935,19 @@ public class CapriInternalBrowser : ICapriMod
         lock (gate) { pend = delegate { InBrowser(delegate(Browser b) { return b.Do("close", "this"); }); return "Closed it. Good call, choom."; }; pendUntil = Now().AddMinutes(2); }
     }
 
+    // The site's own F key, pressed for real, only when the page in front has the focus and it's on the video player.
+    // A text box with the focus (a chat, a search box) means no key press: false, and the caller uses the player's button.
+    private bool PressF()
+    {
+        string why, ready = OnPage("(function(){var v=document.querySelector('video');if(!v)return 'no';var p=v.closest('#movie_player,.html5-video-player,[data-a-target=video-player],.video-player')||v;p.setAttribute('tabindex','-1');p.focus();"
+            + "var a=document.activeElement;if(!document.hasFocus()||!a||a.isContentEditable||/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))return 'no';return 'ok';})()", out why);
+        if (ready != "ok") return false;
+        keybd_event(0x46, 0, 0, IntPtr.Zero);
+        Thread.Sleep(40);
+        keybd_event(0x46, 0, 2, IntPtr.Zero);
+        return true;
+    }
+
     private string VideoFull()
     {
         string why;
@@ -3120,10 +3132,7 @@ public class CapriInternalBrowser : ICapriMod
                 OnPage("(function(){var v=document.querySelector('video');var p=v&&(v.closest('#movie_player,.html5-video-player,[data-a-target=video-player],.video-player')||v);if(p){p.setAttribute('tabindex','-1');p.focus();}return 'ok';})()", out why);
                 InBrowser(delegate(Browser b) { b.Do("show", ""); return null; });
                 Thread.Sleep(300);
-                keybd_event(0x46, 0, 0, IntPtr.Zero);
-                Thread.Sleep(40);
-                keybd_event(0x46, 0, 2, IntPtr.Zero);
-                Thread.Sleep(1500);
+                if (PressF()) Thread.Sleep(1500);
                 if (OnPage("(function(){return document.fullscreenElement?'yes':'no';})()", out why) != "yes") VideoFull();
             }
             catch (Exception) { }
