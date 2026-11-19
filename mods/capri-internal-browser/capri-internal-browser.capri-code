@@ -1422,6 +1422,26 @@ public class CapriInternalBrowser : ICapriMod
 
     internal static int Stat(string key) { int n; return Host != null && int.TryParse(Host.Store.Get("stat-" + key, "0"), out n) ? n : 0; }
 
+    // The leaderboards' round: a new one every Monday at 00:00 UTC, or when the boards are reset (board.txt says which).
+    // The six board numbers are also counted per round, so they start from 0 each round. The all-time ones never reset.
+    internal static readonly string[] RoundStats = { "watchall", "videos", "pages", "survival", "guessbest", "typingbest" };
+    internal static int RoundNow()
+    {
+        int known;
+        if (Host == null || !int.TryParse(Host.Store.Get("lb-round", "0"), out known)) known = 0;
+        int first = (int)Math.Floor(((DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalDays + 3) / 7) * 100;
+        return Math.Max(known, first);
+    }
+    internal static string RoundKey(string key) { return key + "-r" + RoundNow(); }
+
+    // A round board.txt names, kept when it's newer than the one they have. Safe off the UI thread, like Bump.
+    internal static void LearnRound(string board)
+    {
+        Match m = Regex.Match(board ?? "", @"^round\t(\d{1,9})$", RegexOptions.Multiline);
+        int r;
+        if (Host != null && m.Success && int.TryParse(m.Groups[1].Value, out r) && r > RoundNow()) Host.Store.Set("lb-round", r.ToString());
+    }
+
     internal static string Week() { DateTime now = DateTime.Now; return now.Year + "w" + System.Globalization.CultureInfo.InvariantCulture.Calendar.GetWeekOfYear(now, System.Globalization.CalendarWeekRule.FirstDay, DayOfWeek.Monday); }
 
     // Adds to a stat (or raises it to a new best), and says so when that unlocks an achievement.
@@ -1431,6 +1451,12 @@ public class CapriInternalBrowser : ICapriMod
         int was, now;
         lock (statGate)
         {
+            if (Array.IndexOf(RoundStats, key) >= 0)
+            {
+                string rk = RoundKey(key);
+                int rw = Stat(rk), rn = best ? Math.Max(rw, by) : rw + by;
+                if (rn != rw) Host.Store.Set("stat-" + rk, rn.ToString());
+            }
             was = Stat(key);
             now = best ? Math.Max(was, by) : was + by;
             if (now == was) return;
@@ -7780,6 +7806,31 @@ public class CapriInternalBrowser : ICapriMod
             mod.Tell(Hoards[dice.Next(Hoards.Length)]);
         }
 
+        // Their all-time stats: never reset, never sent, only shown here.
+        private void ShowAllTime()
+        {
+            foreach (Tab open in tabs) if (open.Special == "alltime") { ShowReader(open); Select(open); return; }
+            OpenTab(null, null, true);
+            tab.Special = "alltime";
+            ShowReader(tab);
+        }
+
+        private string AllTimePage()
+        {
+            Look look = mod.look;
+            string[] c = look.Colors;
+            StringBuilder html = Start(look, Styled(2, ".g{max-width:900px;margin:0 auto}.g .b{display:inline-block;margin:4px;padding:12px;border:1px solid %C6%;color:%C2%}", c, null, null));
+            html.Append("<div class=\"g\"><h1>ALL-TIME STATS <span>&gt;</span></h1><div class=\"s\">Everything since you started. These never reset and are never sent anywhere: only you see them. The leaderboards use this week's numbers instead.</div><div class=\"row\">");
+            string[,] stats = { { Took(Stat("watchall")), "watching videos" }, { Stat("videos").ToString(), "videos finished" }, { Stat("pages").ToString(), "pages visited" },
+                { Stat("typingbest") + " WPM", "best typing speed" }, { Stat("survival").ToString(), "best survival run" }, { Stat("guessbest").ToString(), "best Guess the Site run" },
+                { Stat("guess").ToString(), "sites guessed right" }, { Stat("wiki").ToString(), "Wiki Races finished" }, { Stat("coop").ToString(), "co-op races" },
+                { Stat("roulette").ToString(), "roulette spins" }, { Stat("maxtabs").ToString(), "most tabs at once" }, { Stat("shielded").ToString(), "pop-ups and redirects blocked" },
+                { Stat("shots").ToString(), "screenshots" }, { Stat("notes").ToString(), "notes saved" }, { Stat("extensions").ToString(), "extensions added" } };
+            for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
+            html.Append("</div><div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbgames\">Back to Games</a><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbopen\">Open leaderboards</a></div>");
+            return html.Append("</div></body></html>").ToString();
+        }
+
         private void ShowGames()
         {
             foreach (Tab open in tabs) if (open.Special == "games") { ShowReader(open); Select(open); return; }
@@ -7877,7 +7928,7 @@ public class CapriInternalBrowser : ICapriMod
                         if (!silent) mod.Tell(bad > 0 ? "Downloaded, choom, but " + bad + " files didn't match and were thrown away." : "All downloaded and checked, choom. Every game, language and page is installed.");
                         else if (Catalogue().Count > before) mod.Tell("Capri Browser finished downloading in the background, choom.");
                     }
-                    foreach (Tab open in tabs) if (open.Special == "games" || open.Special == "settings" || open.Special == "welcome" || open.Special == "home" || open.Special == "boards") ShowReader(open);
+                    foreach (Tab open in tabs) if (open.Special == "games" || open.Special == "settings" || open.Special == "welcome" || open.Special == "home" || open.Special == "boards" || open.Special == "alltime") ShowReader(open);
                 });
             });
         }
@@ -8402,8 +8453,8 @@ public class CapriInternalBrowser : ICapriMod
         // Their numbers for the board, all time: hours watched, videos finished, sites visited, best survival, Guess the Site, typing.
         private string[] BoardWeek()
         {
-            return new[] { (Stat("watchall") / 360 / 10.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture), Stat("videos").ToString(), Stat("pages").ToString(),
-                Stat("survival").ToString(), Stat("guessbest").ToString(), Stat("typingbest").ToString() };
+            return new[] { (Stat(RoundKey("watchall")) / 360 / 10.0).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture), Stat(RoundKey("videos")).ToString(), Stat(RoundKey("pages")).ToString(),
+                Stat(RoundKey("survival")).ToString(), Stat(RoundKey("guessbest")).ToString(), Stat(RoundKey("typingbest")).ToString() };
         }
 
         // This copy's random leaderboard key, made once and kept here. The server only keeps its hash; it's what lets only you use your name.
@@ -8445,14 +8496,15 @@ public class CapriInternalBrowser : ICapriMod
                 : "You're " + name + " on the leaderboards now, choom. Press Send my stats to put your numbers up.";
         }
 
-        // With a leaderboard name, their stats send themselves once a week (checked after games, when the Leaderboards tab opens
-        // and every half hour). The same name and six numbers as Send my stats, and quiet.
+        // With a leaderboard name (and only then), this week's stats send themselves every 12 hours and as soon as a new round
+        // starts (checked after games, when the Leaderboards tab opens and every half hour). The same name and six numbers as
+        // Send my stats, and quiet.
         private DateTime autoSent;
         private int autoTicks;
         private void AutoSend(bool thenLoad)
         {
             long last;
-            bool due = !long.TryParse(Kept("lbsent"), out last) || DateTime.UtcNow - new DateTime(last, DateTimeKind.Utc) > TimeSpan.FromDays(7);
+            bool due = !long.TryParse(Kept("lbsent"), out last) || DateTime.UtcNow - new DateTime(last, DateTimeKind.Utc) > TimeSpan.FromHours(12) || Kept("lbsent-round") != RoundNow().ToString();
             if (Kept("lbname").Length == 0 || !due || DateTime.UtcNow - autoSent < TimeSpan.FromMinutes(2.5)) { if (thenLoad) LoadBoards(); return; }
             autoSent = DateTime.UtcNow;
             ThreadPool.QueueUserWorkItem(delegate
@@ -8465,11 +8517,14 @@ public class CapriInternalBrowser : ICapriMod
         // Sends their name and six numbers, nothing else. Run off the UI thread.
         private string SendWeek()
         {
+            // Which round the boards are on first, so a reset or a new week starts their numbers from 0 before they're sent.
+            try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore); LearnRound(web.DownloadString(BoardData)); } } catch (Exception) { }
+            int round = RoundNow();
             string[] n = BoardWeek();
             string[] got = ToWorker("stats", "{\"name\":" + Quote(Kept("lbname")) + ",\"key\":" + Quote(BoardKey()) + ",\"hours\":" + n[0] + ",\"videos\":" + n[1]
-                + ",\"sites\":" + n[2] + ",\"survival\":" + n[3] + ",\"guess\":" + n[4] + ",\"wpm\":" + n[5] + "}");
+                + ",\"sites\":" + n[2] + ",\"survival\":" + n[3] + ",\"guess\":" + n[4] + ",\"wpm\":" + n[5] + ",\"round\":" + round + "}");
             if (got == null) return "I couldn't reach the leaderboards just now, choom. Try again in a bit.";
-            if (got[0] == "ok") Post(delegate { Keep("lbsent", DateTime.UtcNow.Ticks.ToString()); });
+            if (got[0] == "ok") Post(delegate { Keep("lbsent", DateTime.UtcNow.Ticks.ToString()); Keep("lbsent-round", round.ToString()); });
             return got[1].Length > 0 ? got[1] : got[0] == "ok" ? "You're on the boards, choom." : "That didn't go through, choom. Try again in a bit.";
         }
 
@@ -8477,12 +8532,12 @@ public class CapriInternalBrowser : ICapriMod
         {
             string name = Kept("lbname");
             string[] n = BoardWeek();
-            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Top 100s: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown.</div>"
+            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">This week's top 100s: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Everyone starts again from 0 every Monday at 00:00 UTC. Only your leaderboard name and those numbers are shown.</div>"
                 + (name.Length > 0 ? "<div class=\"n\" style=\"margin:12px 0 4px;letter-spacing:3px\">" + Esc(name) + "</div>" : "")
                 + "<div class=\"cr\"><input id=\"lb\" maxlength=\"16\" placeholder=\"Leaderboard name\" value=\"" + Esc(name) + "\"><a class=\"bt\" href=\"#\" onclick=\"location.href='" + Own + "play?g=lbname&n='+encodeURIComponent(document.getElementById('lb').value);return false\">"
-                + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my stats</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboards</a></div>"
-                + "<div class=\"s\" style=\"margin-top:10px\">Your stats: " + n[0] + " h watched &middot; " + n[1] + " videos &middot; " + n[2] + " sites &middot; survival " + n[3] + " &middot; Guess the Site " + n[4] + " &middot; " + n[5] + " WPM</div>"
-                + "<div class=\"s\">Your stats update on the boards by themselves every week, or press Send my stats. Only your leaderboard name and those six numbers are sent. No account needed.</div></div>";
+                + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my stats</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboards</a><a class=\"bt\" href=\"" + Own + "play?g=lballtime\">All-time stats</a></div>"
+                + "<div class=\"s\" style=\"margin-top:10px\">Your stats this week: " + n[0] + " h watched &middot; " + n[1] + " videos &middot; " + n[2] + " sites &middot; survival " + n[3] + " &middot; Guess the Site " + n[4] + " &middot; " + n[5] + " WPM</div>"
+                + "<div class=\"s\">With a leaderboard name, your week's stats send by themselves, or press Send my stats. Only your leaderboard name and those six numbers are sent. No account needed. Your all-time stats never reset and are never sent.</div></div>";
         }
 
         // ---- The Leaderboards tab ----
@@ -8513,6 +8568,7 @@ public class CapriInternalBrowser : ICapriMod
             {
                 string got = null, rank = null;
                 try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(BoardData); } } catch (Exception) { }
+                if (got != null) LearnRound(got);
                 // Their own place on each board: only with a name, and only their own (the worker knows them by their key).
                 if (got != null && lbName.Length > 0 && Regex.IsMatch(lbKey, "^[a-f0-9]{32}$"))
                 {
@@ -8569,7 +8625,7 @@ public class CapriInternalBrowser : ICapriMod
             StringBuilder html = Start(look, Styled(2, ".g{max-width:900px;margin:0 auto}.g .b{display:inline-block;margin:4px;padding:12px;border:1px solid %C6%;color:%C2%}", c, null, null) + Styled(4, BoardsBasic, c, null, null) + ".g .lst{max-height:310px;overflow-y:auto;scrollbar-width:thin;padding-right:4px}");
             html.Replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';style-src 'unsafe-inline';form-action 'none';base-uri 'none'\">", 0, 60);
             html.Append("<div class=\"g\"><div class=\"top\"><h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"wk\">")
-                .Append("UPDATES <b>EVERY WEEK</b> OR WHEN YOU PRESS <b>SEND MY STATS</b></div></div>")
+                .Append("STARTS AGAIN <b>MONDAY 00:00 UTC</b>, IN ").Append(left).Append(left == 1 ? " DAY" : " DAYS").Append("</div></div>")
                 .Append("<div class=\"wk\">").Append(changed.Length > 0 ? "Last change " + changed : "").Append(changed.Length > 0 && Kept("lb-got").Length > 0 ? " &middot; " : "").Append(Kept("lb-got").Length > 0 ? "checked " + Esc(Kept("lb-got")) : "").Append("</div>");
             if (boardBusy && Kept("lb-board").Length == 0) html.Append("<div class=\"warn\">Getting the boards...</div>");
             else if (boardFailed) html.Append("<div class=\"warn\">").Append(Kept("lb-board").Length > 0 ? "Couldn't reach the leaderboards just now, so these are from the last check. Press Refresh to try again." : "Couldn't reach the leaderboards just now. Press Refresh to try again.").Append("</div>");
@@ -8603,13 +8659,13 @@ public class CapriInternalBrowser : ICapriMod
             }
             boards.Append("</div>");
 
-            string buttons = "<a class=\"bt\" href=\"" + Own + "play?g=lbrefresh\">" + (boardBusy ? "Refreshing..." : "Refresh") + "</a>";
+            string buttons = "<a class=\"bt\" href=\"" + Own + "play?g=lbrefresh\">" + (boardBusy ? "Refreshing..." : "Refresh") + "</a><a class=\"bt\" href=\"" + Own + "play?g=lballtime\">All-time stats</a>";
             if (me.Length > 0)
                 html.Append("<div class=\"you\"><div><div class=\"s\">YOU'RE ON THE BOARDS AS</div><div class=\"n\">").Append(Esc(Kept("lbname"))).Append("</div></div><div class=\"s\">")
                     .Append(placed.Count > 0 ? string.Join(" &middot; ", placed.ToArray()) + (players > 0 ? " &middot; out of " + players + " player" + (players == 1 ? "" : "s") : "") : "Not on the boards yet. Send your stats to put your numbers up.").Append("</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbsend\">Send my stats</a>").Append(buttons).Append("</div></div>");
             else
                 html.Append("<div class=\"you\"><div class=\"s\">Add a leaderboard name on the Games page to compete. Only your leaderboard name and your numbers show here.</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbgames\">Go to Games</a>").Append(buttons).Append("</div></div>");
-            html.Append("<h1>TOP 100s <span>&gt;</span></h1>").Append(boards);
+            html.Append("<h1>THIS WEEK'S TOP 100s <span>&gt;</span></h1>").Append(boards);
             if (champs.Count > 0 && false)
             {
                 html.Append("<h1>LAST WEEK'S CHAMPIONS").Append(lastWeek.Length > 0 ? " (WEEK " + lastWeek.Substring(5) + ")" : "").Append(" <span>&gt;</span></h1><div class=\"chs\">");
@@ -8628,6 +8684,7 @@ public class CapriInternalBrowser : ICapriMod
             if (which == "lbopen") { ShowBoards(); return; }
             if (which == "lbrefresh") { LoadBoards(); return; }
             if (which == "lbgames") { ShowGames(); return; }
+            if (which == "lballtime") { ShowAllTime(); return; }
             if (which == "lbsend")
             {
                 if (Kept("lbname").Length == 0) { mod.Tell("Pick a leaderboard name first, choom."); return; }
@@ -8668,9 +8725,10 @@ public class CapriInternalBrowser : ICapriMod
                 .Append(lobby != null ? "<a class=\"bt go\" href=\"" + Own + "play?g=go\">Start 3, 2, 1</a>" : "").Append(lobby != null || race != null ? "<a class=\"bt\" href=\"" + Own + "play?g=cancel\">Cancel race</a>" : "").Append("<a class=\"bt go\" href=\"" + Own + "play?g=level\">Level: " + LevelName(RaceLevel) + "</a>").Append("<a class=\"bt" + (Flag("timed", false) ? " go" : "") + "\" href=\"" + Own + "play?g=timed\">3-minute limit: " + (Flag("timed", false) ? "ON" : "OFF") + "</a>").Append("</div></div>");
             html.Append("</div>").Append(BoardBox());
             html.Append("</div><h1>THIS WEEK <span>&gt;</span></h1><div class=\"row\">");
-            string[,] stats = { { Took(Stat("watch" + Week())), "watching videos" }, { Took(Stat("yt" + Week())), "of that on YouTube" }, { Stat("videos").ToString(), "videos finished, all time" }, { Stat("pages").ToString(), "pages visited, all time" }, { Stat("maxtabs").ToString(), "most tabs at once" }, { Stat("typingbest") + " WPM", "best typing speed" }, { Stat("survival").ToString(), "best survival run" }, { Stat("guessbest").ToString(), "best Guess the Site run" } };
+            string[,] stats = { { Took(Stat(RoundKey("watchall"))), "watching videos" }, { Took(Stat("yt" + Week())), "of it on YouTube" }, { Stat(RoundKey("videos")).ToString(), "videos finished" }, { Stat(RoundKey("pages")).ToString(), "pages visited" }, { Stat(RoundKey("typingbest")) + " WPM", "best typing speed" }, { Stat(RoundKey("survival")).ToString(), "best survival run" }, { Stat(RoundKey("guessbest")).ToString(), "best Guess the Site run" } };
             for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
-            html.Append("</div><h1>ACHIEVEMENTS <span>&gt;</span></h1><div class=\"row\">");
+            html.Append("</div><div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=lballtime\">All-time stats</a></div>");
+            html.Append("<h1>ACHIEVEMENTS <span>&gt;</span></h1><div class=\"row\">");
             for (int i = 0; i < Badges.GetLength(0); i++)
             {
                 int have = Stat(Badges[i, 0]), need = int.Parse(Badges[i, 1]);
@@ -13059,6 +13117,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             {
                 t.Viewer.Html(BoardsPage());
                 Retitle(t, "Leaderboards");
+                if (t == tab) address.Text = "";
+                return;
+            }
+            if (t.Special == "alltime")
+            {
+                t.Viewer.Html(AllTimePage());
+                Retitle(t, "All-time stats");
                 if (t == tab) address.Text = "";
                 return;
             }
