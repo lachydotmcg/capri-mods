@@ -2307,14 +2307,17 @@ public class CapriInternalBrowser : ICapriMod
     // ---- Wiki race help: once a race, she picks a few links on the page that could lead to the goal and lights them up ----
     private const string RaceLinks = "(function(){var seen={},o=[];[].forEach.call(document.querySelectorAll('#mw-content-text a[href*=\"/wiki/\"]'),function(a){if(a.hostname.slice(-13)!='wikipedia.org'||a.pathname.indexOf('/wiki/')!==0)return;var t;try{t=decodeURIComponent(a.pathname.slice(6)).replace(/_/g,' ');}catch(e){return;}"
         + "if(!t||t.indexOf(':')>=0||seen[t]||a.closest('.reference,.mw-references-wrap,.navbox,.hatnote'))return;seen[t]=1;if(o.length<300)o.push(t);});return o.join('\\n');})()";
-    private const string RaceGlow = "(function(w){var n=0,first=null;[].forEach.call(document.querySelectorAll('#mw-content-text a[href*=\"/wiki/\"]'),function(a){if(a.hostname.slice(-13)!='wikipedia.org'||a.pathname.indexOf('/wiki/')!==0)return;var t;try{t=decodeURIComponent(a.pathname.slice(6)).replace(/_/g,' ');}catch(e){return;}"
-        + "if(w.indexOf(t)<0)return;a.style.cssText+=';outline:2px solid #5ef0f6;outline-offset:2px;background:rgba(94,240,246,.18);box-shadow:0 0 14px rgba(94,240,246,.7)';n++;if(!first)first=a;});if(first)first.scrollIntoView({block:'center',behavior:'smooth'});return ''+n;})";
+    private const string RaceGlow = "(function(w){var n=0,first=null,tagged={},D=document;if(!D.getElementById('capri-glow-css')){var st=D.createElement('style');st.id='capri-glow-css';"
+        + "st.textContent='.capri-glow{outline:2px solid #5ef0f6!important;outline-offset:2px;background:rgba(94,240,246,.2)!important;animation:cgP 1s ease-in-out infinite alternate}@keyframes cgP{from{box-shadow:0 0 3px rgba(94,240,246,.35)}to{box-shadow:0 0 18px rgba(94,240,246,.95)}}"
+        + ".capri-tag{display:inline-block;margin-right:5px;padding:0 5px;font:700 10px/16px Bahnschrift,Segoe UI,sans-serif;letter-spacing:1px;color:#0a0a10;background:#5ef0f6;vertical-align:middle;text-decoration:none}';(D.head||D.documentElement).appendChild(st);}"
+        + "[].forEach.call(D.querySelectorAll('.capri-tag'),function(x){x.remove();});[].forEach.call(D.querySelectorAll('.capri-glow'),function(x){x.classList.remove('capri-glow');});[].forEach.call(document.querySelectorAll('#mw-content-text a[href*=\"/wiki/\"]'),function(a){if(a.hostname.slice(-13)!='wikipedia.org'||a.pathname.indexOf('/wiki/')!==0)return;var t;try{t=decodeURIComponent(a.pathname.slice(6)).replace(/_/g,' ');}catch(e){return;}"
+        + "if(w.indexOf(t)<0)return;a.classList.add('capri-glow');if(!tagged[t]){tagged[t]=1;var g=D.createElement('span');g.className='capri-tag';g.textContent='CLICK →';a.parentNode.insertBefore(g,a);}n++;if(!first)first=a;});if(first)first.scrollIntoView({block:'center',behavior:'smooth'});return ''+n;})";
 
-    internal void RaceHint(string goal, Action giveBack)
+    internal string[] RaceHint(string goal)
     {
         string why, list = OnPage(RaceLinks, out why) ?? "";
         List<string> links = new List<string>(list.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries));
-        if (links.Count == 0) { giveBack(); capri.Say("I can't see any links to help with on this page, choom. Your help's still there for later."); return; }
+        if (links.Count == 0) { capri.Say("I can't see any links to help with on this page, choom. Your help's still there for later."); return null; }
         string target = goal.Replace('_', ' ');
         List<string> picks = new List<string>();
         if (capri.Brain.Ready)
@@ -2335,24 +2338,28 @@ public class CapriInternalBrowser : ICapriMod
             foreach (string l in links)
                 foreach (string w in target.ToLowerInvariant().Split(' '))
                     if (w.Length > 3 && picks.Count < 3 && !picks.Contains(l) && (" " + l.ToLowerInvariant() + " ").Contains(" " + w)) picks.Add(l);
-        if (picks.Count == 0) { giveBack(); capri.Say("I'm stumped on this page too, choom. Your help's still there for later."); return; }
+        if (picks.Count == 0) { capri.Say("I'm stumped on this page too, choom. Your help's still there for later."); return null; }
         OnPage(RaceGlow + "(" + "[" + string.Join(",", picks.ConvertAll(Quote).ToArray()) + "])", out why);
-        capri.Say("Your one help, choom: try " + (picks.Count == 1 ? picks[0] : string.Join(", ", picks.GetRange(0, picks.Count - 1).ToArray()) + " or " + picks[picks.Count - 1]) + ". I've lit them up.");
+        capri.Say("Here's my help, choom: try " + (picks.Count == 1 ? picks[0] : string.Join(", ", picks.GetRange(0, picks.Count - 1).ToArray()) + " or " + picks[picks.Count - 1]) + ". I've lit them up.");
+        List<string> parts = new List<string>();
+        for (int i = 0; i < picks.Count; i++) { parts.Add(i == 0 ? "Try " : i == picks.Count - 1 ? " or " : ", "); parts.Add(picks[i]); }
+        parts.Add(". They're lit up on the page."); parts.Add("");
+        return parts.ToArray();
     }
 
     // A race with a checked route: she lights the furthest page on that route that this page links to.
-    internal bool RouteHint(List<string> ahead)
+    internal string[] RouteHint(List<string> ahead)
     {
-        foreach (string step in ahead)
+        for (int k = 0; k < ahead.Count; k++)
         {
-            string[] p = step.Split('|');
+            string[] p = ahead[k].Split('|');
             string why, lit = OnPage(RaceGlow + "([" + Quote(p[0]) + "," + Quote(p[1]) + "])", out why);
             int count;
             if (!int.TryParse(lit ?? "", out count) || count == 0) continue;
-            capri.Say("Your help, choom: click " + p[1] + ". It's on a route I checked to the goal, and I've lit it up.");
-            return true;
+            capri.Say("Your help, choom: click " + p[0] + ". It's on a route I checked to the goal, and I've lit it up.");
+            return k == 0 ? new[] { "Click ", p[0], ". That's the goal!", "" } : new[] { "Click ", p[0], ", then look for ", ahead[k - 1].Split('|')[0] };
         }
-        return false;
+        return null;
     }
 
     // ---- Mystery Choom: she says the game's lines for it ----
@@ -6978,7 +6985,7 @@ public class CapriInternalBrowser : ICapriMod
         private static readonly Random dice = new Random();
         private DateTime hoarded;
 
-        private sealed class Race { public Tab Tab; public string Goal, From, Code, Level; public string[] Route; public DateTime Started, Ended; public int Clicks, Limit, Helps; public bool Cheated; }
+        private sealed class Race { public Tab Tab; public string Goal, From, Code, Level; public string[] Route; public DateTime Started, Ended; public int Clicks, Limit, Helps, HelpUntil; public bool Cheated, Thinking; public string[] HelpText; }
         private Race race;
 
         // Tabs nobody has looked at for 20 minutes are suspended (not while they play sound, race or show her pages); a click wakes them.
@@ -7472,14 +7479,15 @@ public class CapriInternalBrowser : ICapriMod
             BeginRace(from, goal, code, level, route);
         }
 
-        private const string ClockScript = "(function (ms, c, g, done, L, H, lv, fr, best) { var D = document, root = D.body || D.documentElement, d = D.getElementById('capri-race'); if (!D.getElementById('capri-race-css')) { var st = D.createElement('style'); st.id = 'capri-race-css'; st.textContent = '#capri-race{position:fixed;top:14px;right:14px;z-index:2147483647;width:236px;box-sizing:border-box;background:#0a0a10;color:#ececf1;font:600 14px Bahnschrift,\"Segoe UI\",sans-serif;letter-spacing:.4px;padding:10px 14px 12px 17px;box-shadow:inset 3px 0 0 #e84246,inset 0 0 0 1px rgba(232,66,70,.5),0 10px 30px rgba(0,0,0,.5),0 0 18px rgba(232,66,70,.28);clip-path:polygon(0 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);animation:crIn .35s cubic-bezier(.2,.9,.3,1.15);transition:box-shadow .3s}' + '@keyframes crIn{from{opacity:0;transform:translateY(-10px) scale(.97)}}' + '#capri-race .h{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:3px;color:#e84246}' + '#capri-race .h i{font-style:normal;color:#0a0a10;background:#5ef0f6;padding:1px 6px 0;letter-spacing:2px;font-size:10px}' + '#capri-race .x{margin-left:auto;color:#92828c;text-decoration:none;font-size:15px;line-height:1;padding:0 2px;cursor:pointer}#capri-race .x:hover{color:#ececf1}' + '#capri-race .r{display:flex;align-items:baseline;justify-content:space-between;margin:5px 0 3px}' + '#capri-race .t{font-size:30px;color:#5ef0f6;font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(94,240,246,.45)}#capri-race .t.w{color:#e84246;text-shadow:0 0 12px rgba(232,66,70,.6)}' + '#capri-race .k{color:#b9aeb5;font-size:13px}' + '#capri-race .l{font-size:14px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#capri-race .l small{display:inline-block;width:48px;color:#92828c;font-size:10px;letter-spacing:2px}#capri-race .l.d{color:#b9aeb5;font-size:12px}' + '#capri-race .b{display:flex;gap:6px;margin-top:10px}#capri-race .b a{flex:1;text-align:center;padding:6px 0 5px;font-size:11px;letter-spacing:2px;text-decoration:none;border:1px solid #1c545c;color:#5ef0f6;background:#091e21;cursor:pointer;transition:background .15s,border-color .15s}' + '#capri-race .b a:hover{border-color:#5ef0f6;background:#0d2d31}#capri-race .b a.q{border-color:#5a2226;color:#e84246;background:#1a0b0d}#capri-race .b a.q:hover{border-color:#e84246;background:#2a1013}#capri-race .b a.o{opacity:.4;cursor:default;pointer-events:none}' + '#capri-race.m .l,#capri-race.m .b{display:none}#capri-race.m .r{margin:2px 0 0}#capri-race.m .t{font-size:22px}' + '#capri-race.f{box-shadow:inset 3px 0 0 #5ef0f6,inset 0 0 0 1px rgba(94,240,246,.55),0 10px 30px rgba(0,0,0,.5),0 0 22px rgba(94,240,246,.35)}#capri-race.f .h{color:#5ef0f6}' + '#capri-count{position:fixed;inset:0;z-index:2147483647;background:rgba(5,6,10,.88);backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#ececf1;font:600 16px Bahnschrift,\"Segoe UI\",sans-serif;transition:opacity .5s}' + '#capri-count .a{letter-spacing:7px;color:#e84246;font-size:14px}#capri-count .n{font-size:150px;line-height:1.15;color:#5ef0f6;text-shadow:0 0 34px rgba(94,240,246,.6);animation:ccP .9s ease-out}#capri-count .n.g{color:#e84246;text-shadow:0 0 34px rgba(232,66,70,.7)}' + '@keyframes ccP{from{transform:scale(1.6);opacity:0}25%{opacity:1}}#capri-count .s{font-size:19px;color:#b9aeb5;letter-spacing:1px;max-width:80vw;text-align:center}#capri-count .s b{color:#e84246;margin:0 10px}'; (D.head || root).appendChild(st); } if (!d) { d = D.createElement('div'); d.id = 'capri-race'; root.appendChild(d); } clearInterval(window.__cr); var t0 = Date.now() - ms; function e(x) { return String(x).replace(/[&<>\"]/g, function (ch) { return '&#' + ch.charCodeAt(0) + ';'; }); } function mm(x) { x = Math.max(0, x); return Math.floor(x / 60) + ':' + ('0' + x % 60).slice(-2); } function draw() { d.className = (done ? 'f ' : '') + (window.__crMin ? 'm' : ''); d.innerHTML = '<div class=\"h\"><span>' + (done ? 'FINISHED' : 'WIKI RACE') + '</span>' + (lv ? '<i>' + e(lv) + '</i>' : '') + '<a class=\"x\" title=\"' + (window.__crMin ? 'Show more' : 'Make smaller') + '\">' + (window.__crMin ? '+' : '–') + '</a></div>' + '<div class=\"r\"><b class=\"t\"></b><span class=\"k\">' + c + ' click' + (c == 1 ? '' : 's') + '</span></div>' + '<div class=\"l\"><small>GOAL</small>' + e(g) + '</div>' + (fr ? '<div class=\"l d\"><small>FROM</small>' + e(fr) + '</div>' : '') + (done && best ? '<div class=\"l d\"><small>BEST</small>' + best + ' clicks (a route I checked)</div>' : '') + (done ? '' : '<div class=\"b\">' + (H > 0 ? '<a href=\"https://capri.dial/play?g=hint\">HELP · ' + H + ' LEFT</a>' : '<a class=\"o\">NO HELP LEFT</a>') + '<a class=\"q\" href=\"https://capri.dial/play?g=cancel\">GIVE UP</a></div>'); d.querySelector('.x').onclick = function (ev) { ev.preventDefault(); window.__crMin = !window.__crMin; draw(); tick(); }; } function tick() { var el = Date.now() - t0, ov = D.getElementById('capri-count'); if (!done && el < 0) { if (!ov) { ov = D.createElement('div'); ov.id = 'capri-count'; root.appendChild(ov); } var n = Math.ceil(-el / 1000); if (ov.__n !== n) { ov.__n = n; ov.innerHTML = '<div class=\"a\">WIKI RACE' + (lv ? ' · ' + e(lv) : '') + '</div><div class=\"n\">' + n + '</div>' + (fr ? '<div class=\"s\">' + e(fr) + '<b>→</b>' + e(g) + '</div>' : '<div class=\"s\">Get to <b></b>' + e(g) + '</div>'); } } else if (ov && !ov.__go) { ov.__go = 1; ov.innerHTML = '<div class=\"n g\">GO</div>'; ov.style.pointerEvents = 'none'; setTimeout(function () { ov.style.opacity = '0'; }, 350); setTimeout(function () { ov.remove(); }, 900); } var x = Math.floor((done ? ms : Math.max(0, el)) / 1000), shown = L && !done ? Math.max(0, L - x) : x, t = d.querySelector('.t'); if (t) { t.textContent = mm(shown); t.className = 't' + (L && !done && shown < 30 ? ' w' : ''); } } draw(); tick(); if (!done) window.__cr = setInterval(tick, 250); })";
+        private const string ClockScript = "(function (ms, c, g, done, L, H, lv, fr, best, hp, busy) { var D = document, root = D.body || D.documentElement, d = D.getElementById('capri-race'); if (!D.getElementById('capri-race-css')) { var st = D.createElement('style'); st.id = 'capri-race-css'; st.textContent = '#capri-race{position:fixed;top:14px;right:14px;z-index:2147483647;width:236px;box-sizing:border-box;background:#0a0a10;color:#ececf1;font:600 14px Bahnschrift,\"Segoe UI\",sans-serif;letter-spacing:.4px;padding:10px 14px 12px 17px;box-shadow:inset 3px 0 0 #e84246,inset 0 0 0 1px rgba(232,66,70,.5),0 10px 30px rgba(0,0,0,.5),0 0 18px rgba(232,66,70,.28);clip-path:polygon(0 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%);animation:crIn .35s cubic-bezier(.2,.9,.3,1.15);transition:box-shadow .3s}' + '@keyframes crIn{from{opacity:0;transform:translateY(-10px) scale(.97)}}' + '#capri-race .h{display:flex;align-items:center;gap:8px;font-size:11px;letter-spacing:3px;color:#e84246}' + '#capri-race .h i{font-style:normal;color:#0a0a10;background:#5ef0f6;padding:1px 6px 0;letter-spacing:2px;font-size:10px}' + '#capri-race .x{margin-left:auto;color:#92828c;text-decoration:none;font-size:15px;line-height:1;padding:0 2px;cursor:pointer}#capri-race .x:hover{color:#ececf1}' + '#capri-race .r{display:flex;align-items:baseline;justify-content:space-between;margin:5px 0 3px}' + '#capri-race .t{font-size:30px;color:#5ef0f6;font-variant-numeric:tabular-nums;text-shadow:0 0 12px rgba(94,240,246,.45)}#capri-race .t.w{color:#e84246;text-shadow:0 0 12px rgba(232,66,70,.6)}' + '#capri-race .k{color:#b9aeb5;font-size:13px}' + '#capri-race .l{font-size:14px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#capri-race .l small{display:inline-block;width:48px;color:#92828c;font-size:10px;letter-spacing:2px}#capri-race .l.d{color:#b9aeb5;font-size:12px}' + '#capri-race .b{display:flex;gap:6px;margin-top:10px}#capri-race .b a{flex:1;text-align:center;padding:6px 0 5px;font-size:11px;letter-spacing:2px;text-decoration:none;border:1px solid #1c545c;color:#5ef0f6;background:#091e21;cursor:pointer;transition:background .15s,border-color .15s}' + '#capri-race .b a:hover{border-color:#5ef0f6;background:#0d2d31}#capri-race .b a.q{border-color:#5a2226;color:#e84246;background:#1a0b0d}#capri-race .b a.q:hover{border-color:#e84246;background:#2a1013}#capri-race .b a.o{opacity:.4;cursor:default;pointer-events:none}' + '#capri-race .hp{margin-top:9px;padding:6px 8px 5px;background:#091e21;box-shadow:inset 2px 0 0 #5ef0f6;font-size:12px;line-height:1.4;color:#b9aeb5;white-space:normal;animation:crIn .35s}#capri-race .hp b{color:#5ef0f6}#capri-race .hp small{display:block;font-size:9px;letter-spacing:2px;color:#5ef0f6;margin-bottom:1px}' + '#capri-race .b a.th{opacity:1;animation:crTh .8s ease-in-out infinite alternate}@keyframes crTh{to{opacity:.45}}' + '#capri-race.m .l,#capri-race.m .b,#capri-race.m .hp{display:none}#capri-race.m .r{margin:2px 0 0}#capri-race.m .t{font-size:22px}' + '#capri-race.f{box-shadow:inset 3px 0 0 #5ef0f6,inset 0 0 0 1px rgba(94,240,246,.55),0 10px 30px rgba(0,0,0,.5),0 0 22px rgba(94,240,246,.35)}#capri-race.f .h{color:#5ef0f6}' + '#capri-count{position:fixed;inset:0;z-index:2147483647;background:rgba(5,6,10,.88);backdrop-filter:blur(6px);display:flex;flex-direction:column;align-items:center;justify-content:center;color:#ececf1;font:600 16px Bahnschrift,\"Segoe UI\",sans-serif;transition:opacity .5s}' + '#capri-count .a{letter-spacing:7px;color:#e84246;font-size:14px}#capri-count .n{font-size:150px;line-height:1.15;color:#5ef0f6;text-shadow:0 0 34px rgba(94,240,246,.6);animation:ccP .9s ease-out}#capri-count .n.g{color:#e84246;text-shadow:0 0 34px rgba(232,66,70,.7)}' + '@keyframes ccP{from{transform:scale(1.6);opacity:0}25%{opacity:1}}#capri-count .s{font-size:19px;color:#b9aeb5;letter-spacing:1px;max-width:80vw;text-align:center}#capri-count .s b{color:#e84246;margin:0 10px}'; (D.head || root).appendChild(st); } if (!d) { d = D.createElement('div'); d.id = 'capri-race'; root.appendChild(d); } clearInterval(window.__cr); var t0 = Date.now() - ms; function e(x) { return String(x).replace(/[&<>\"]/g, function (ch) { return '&#' + ch.charCodeAt(0) + ';'; }); } function mm(x) { x = Math.max(0, x); return Math.floor(x / 60) + ':' + ('0' + x % 60).slice(-2); } function draw() { d.className = (done ? 'f ' : '') + (window.__crMin ? 'm' : ''); d.innerHTML = '<div class=\"h\"><span>' + (done ? 'FINISHED' : 'WIKI RACE') + '</span>' + (lv ? '<i>' + e(lv) + '</i>' : '') + '<a class=\"x\" title=\"' + (window.__crMin ? 'Show more' : 'Make smaller') + '\">' + (window.__crMin ? '+' : '–') + '</a></div>' + '<div class=\"r\"><b class=\"t\"></b><span class=\"k\">' + c + ' click' + (c == 1 ? '' : 's') + '</span></div>' + '<div class=\"l\"><small>GOAL</small>' + e(g) + '</div>' + (fr ? '<div class=\"l d\"><small>FROM</small>' + e(fr) + '</div>' : '') + (done && best ? '<div class=\"l d\"><small>BEST</small>' + best + ' clicks (a route I checked)</div>' : '') + (!done && hp && hp.length ? '<div class=\"hp\"><small>HELP</small>' + hp.map(function (x, i) { return i % 2 ? '<b>' + e(x) + '</b>' : e(x); }).join('') + '</div>' : '') + (done ? '' : '<div class=\"b\">' + (busy ? '<a class=\"o th\">THINKING…</a>' : H > 0 ? '<a href=\"https://capri.dial/play?g=hint\">HELP · ' + H + ' LEFT</a>' : '<a class=\"o\">NO HELP LEFT</a>') + '<a class=\"q\" href=\"https://capri.dial/play?g=cancel\">GIVE UP</a></div>'); d.querySelector('.x').onclick = function (ev) { ev.preventDefault(); window.__crMin = !window.__crMin; draw(); tick(); }; } function tick() { var el = Date.now() - t0, ov = D.getElementById('capri-count'); if (!done && el < 0) { if (!ov) { ov = D.createElement('div'); ov.id = 'capri-count'; root.appendChild(ov); } var n = Math.ceil(-el / 1000); if (ov.__n !== n) { ov.__n = n; ov.innerHTML = '<div class=\"a\">WIKI RACE' + (lv ? ' · ' + e(lv) : '') + '</div><div class=\"n\">' + n + '</div>' + (fr ? '<div class=\"s\">' + e(fr) + '<b>→</b>' + e(g) + '</div>' : '<div class=\"s\">Get to <b></b>' + e(g) + '</div>'); } } else if (ov && !ov.__go) { ov.__go = 1; ov.innerHTML = '<div class=\"n g\">GO</div>'; ov.style.pointerEvents = 'none'; setTimeout(function () { ov.style.opacity = '0'; }, 350); setTimeout(function () { ov.remove(); }, 900); } var x = Math.floor((done ? ms : Math.max(0, el)) / 1000), shown = L && !done ? Math.max(0, L - x) : x, t = d.querySelector('.t'); if (t) { t.textContent = mm(shown); t.className = 't' + (L && !done && shown < 30 ? ' w' : ''); } } draw(); tick(); if (!done) window.__cr = setInterval(tick, 250); })";
 
         // The race clock in the top corner of the page: time, clicks and the goal (frozen once they finish).
         private void RaceClock(Race r, bool done)
         {
             if (r == null || r.Tab == null || r.Tab.Viewer == null) return;
             long ms = (long)((done ? r.Ended : DateTime.UtcNow) - r.Started).TotalMilliseconds;
-            try { r.Tab.Viewer.Script(ClockScript + "(" + ms + "," + Math.Max(0, r.Clicks) + "," + Quote(r.Goal.Replace('_', ' ')) + "," + (done ? "true" : "false") + "," + r.Limit + "," + r.Helps + "," + Quote(r.Level == null ? "" : LevelName(r.Level).ToUpperInvariant()) + "," + Quote(r.From == null ? "" : r.From.Replace('_', ' ')) + "," + (r.Route == null ? 0 : r.Route.Length - 1) + ")"); if (!done) r.Tab.Viewer.Script(RaceGuard); } catch (Exception) { }
+            string help = r.HelpText != null && r.Clicks < r.HelpUntil ? "[" + string.Join(",", new List<string>(r.HelpText).ConvertAll(Quote).ToArray()) + "]" : "[]";
+            try { r.Tab.Viewer.Script(ClockScript + "(" + ms + "," + Math.Max(0, r.Clicks) + "," + Quote(r.Goal.Replace('_', ' ')) + "," + (done ? "true" : "false") + "," + r.Limit + "," + r.Helps + "," + Quote(r.Level == null ? "" : LevelName(r.Level).ToUpperInvariant()) + "," + Quote(r.From == null ? "" : r.From.Replace('_', ' ')) + "," + (r.Route == null ? 0 : r.Route.Length - 1) + "," + help + "," + (r.Thinking ? "true" : "false") + ")"); if (!done) r.Tab.Viewer.Script(RaceGuard); } catch (Exception) { }
         }
 
         // The page's title says they're there, even if the address was a redirect.
@@ -7520,24 +7528,41 @@ public class CapriInternalBrowser : ICapriMod
             if (r == null) { mod.Tell("There's no race going, choom."); return; }
             if (DateTime.UtcNow < r.Started) { mod.Tell("Wait for the go, choom."); return; }
             if (r.Helps <= 0) { mod.Tell("No help left this race, choom. You've got this."); return; }
+            if (r.Thinking) return;
             r.Helps--;
+            r.Thinking = true;
             if (tabs.Contains(r.Tab)) Select(r.Tab);
             RaceClock(r, false);
             string goal = r.Goal;
             // The checked route's pages still ahead of them, furthest first, so the help skips them as far along as it can.
             List<string> ahead = new List<string>();
+            string via = null;
             if (r.Route != null)
             {
                 string here = Regex.Replace(r.Tab.Title ?? "", @"\s+-\s+Wikipedia$", "").Trim();
                 int at = -1;
                 for (int i = 0; i < r.Route.Length; i++) if (string.Equals(StepPage(r.Route[i]), here, StringComparison.OrdinalIgnoreCase)) at = i;
                 for (int i = r.Route.Length - 1; i > at && i >= 1; i--) ahead.Add(LinkOf(r.Route[i]) + "|" + StepPage(r.Route[i]));
+                if (at < 0 && r.Route.Length > 2) { List<string> mid = new List<string>(); for (int i = 1; i < r.Route.Length - 1; i++) mid.Add(StepPage(r.Route[i])); via = string.Join(" → ", mid.ToArray()); }
             }
-            Action giveBack = delegate { Post(delegate { if (race == r) { r.Helps++; RaceClock(r, false); } }); };
             ThreadPool.QueueUserWorkItem(delegate
             {
-                try { if (!mod.RouteHint(ahead)) mod.RaceHint(goal, giveBack); }
+                string[] got = null;
+                int keep = 2;
+                try
+                {
+                    got = mod.RouteHint(ahead);
+                    if (got == null) { keep = 1; got = mod.RaceHint(goal); }
+                    if (got != null && via != null) { List<string> more = new List<string>(got); more.Add(" You're off my checked route, it goes via "); more.Add(via); got = more.ToArray(); }
+                }
                 catch (Exception) { }
+                Post(delegate
+                {
+                    r.Thinking = false;
+                    if (got == null) r.Helps++;
+                    else { r.HelpText = got; r.HelpUntil = Math.Max(0, r.Clicks) + keep; }
+                    if (race == r) RaceClock(r, false);
+                });
             });
         }
 
