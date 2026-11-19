@@ -1967,7 +1967,7 @@ public class CapriInternalBrowser : ICapriMod
     // Capri Browser's own server on Cloudflare (Browser addons' worker/): the leaderboards and the bug/idea box, no account needed.
     internal const string WorkerUrl = "https://capri-browser.tobiasprojects77.workers.dev/";
 
-    // Posts JSON to the worker. Gives { "ok" or "no", what it said }, or null when it couldn't be reached.
+    // Posts JSON to the worker. Gives { "ok", "no" or "full", what it said }, or null when it couldn't be reached.
     internal static string[] ToWorker(string path, string json)
     {
         string got = null;
@@ -1991,7 +1991,7 @@ public class CapriInternalBrowser : ICapriMod
         Match say = Regex.Match(got, "\"(?:message|why)\":\"((?:[^\"\\\\]|\\\\.){1,400})\"");
         string text = "";
         try { text = say.Success ? Regex.Unescape(say.Groups[1].Value) : ""; } catch (Exception) { }
-        return new[] { got.StartsWith("{\"ok\":true", StringComparison.Ordinal) ? "ok" : "no", Regex.Replace(text, "[\\x00-\\x1f<>]", " ").Trim() };
+        return new[] { got.StartsWith("{\"ok\":true", StringComparison.Ordinal) ? "ok" : got.Contains("\"full\":true") ? "full" : "no", Regex.Replace(text, "[\\x00-\\x1f<>]", " ").Trim() };
     }
 
     internal static string FeedbackUrl(bool bug) { return FeedbackUrl(bug, "", null); }
@@ -10760,12 +10760,12 @@ public class CapriInternalBrowser : ICapriMod
                     if (said.Length > 2000) said = said.Substring(0, 2000);
                     ThreadPool.QueueUserWorkItem(delegate
                     {
-                        string[] got = ToWorker("feedback", "{\"kind\":\"" + (bug ? "bug" : "idea") + "\",\"title\":" + Quote(title) + ",\"text\":" + Quote(said) + ",\"version\":\"2.0.0\",\"windows\":" + Quote(WindowsName()) + "}");
+                        string[] got = ToWorker("feedback", "{\"kind\":\"" + (bug ? "bug" : "idea") + "\",\"title\":" + Quote(title) + ",\"text\":" + Quote(said) + ",\"version\":\"2.0.0\",\"windows\":" + Quote(WindowsName()) + ",\"key\":" + Quote(BoardKey()) + "}");
                         Post(delegate
                         {
                             if (got != null && got[0] == "ok") { t.Viewer.Script("(function(){var f=document.querySelector('form.fb');if(f)f.reset();return 1})()"); mod.Tell("Sent, choom. Thanks! It went straight to the Capri Browser team."); }
-                            else if (got != null) mod.Tell(got[1].Length > 0 ? got[1] : "That didn't send, choom. Try again in a bit.");
-                            else { OpenTab(null, FeedbackUrl(bug, title, said), true); mod.Tell("I couldn't reach the bug box, so here it is on GitHub instead. Press Submit there to send it."); }
+                            else if (got != null && got[0] == "no") mod.Tell(got[1].Length > 0 ? got[1] : "That didn't send, choom. Try again in a bit.");
+                            else { OpenTab(null, FeedbackUrl(bug, title, said), true); mod.Tell((got == null ? "I couldn't reach the bug box" : "The bug box is full for today") + ", so here it is on GitHub instead. Press Submit there to send it."); }
                         });
                     });
                 }
