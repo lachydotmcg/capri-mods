@@ -11540,7 +11540,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             v.PasswordBox = delegate(string from) { OfferFill(t, from); };
             v.Ended = delegate(string title) { if (!t.Private) { Bump("videos", 1); Bump("videos" + Week(), 1); } if (!t.Private && Flag("react", true)) mod.React(title); };
             v.Opening = delegate(string url) { Later(delegate { OpenTab(null, url, true); }); };
-            v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea|send&k=(bug|idea)&t=[^&#]{0,600}&m=[^&#]{0,12000})$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
+            v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea|donate|send&k=(bug|idea)&t=[^&#]{0,600}&m=[^&#]{0,12000})$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
             v.Blocked = delegate(string url)
             {
                 t.OnReader = true;
