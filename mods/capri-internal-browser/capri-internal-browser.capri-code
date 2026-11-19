@@ -185,6 +185,13 @@ public class CapriInternalBrowser : ICapriMod
     private ChatAt replying;
     // A reply she's typed and is waiting on a yes for (deleted on no, or after 2 minutes), and what a "no" undoes.
     private ChatAt typedChat;
+    // When she last opened, typed in or sent to a chat in her Discord.
+    private DateTime chatUsed = DateTime.MinValue;
+    // Done with the chats: nothing being read, replied to or waiting to send, for 15 seconds.
+    private bool ChatIdle()
+    {
+        lock (gate) return typedChat == null && (replying == null || Now() > replyUntil) && (pend == null || Now() > pendUntil) && (DateTime.Now - chatUsed).TotalSeconds > 15;
+    }
     private string typedText;
     private DateTime typedUntil;
     private Func<string> pendNoFor;
@@ -818,6 +825,11 @@ public class CapriInternalBrowser : ICapriMod
                         if (state != "ready") { Tell("Discord" + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
                     }
                     any = true;
+                    if (t.Hidden && ChatIdle())
+                    {
+                        string at = InTab(t, DcNow) ?? "";
+                        if (at.StartsWith("/channels/", StringComparison.Ordinal) && at != "/channels/@me") { InTab(t, DcOpen + "(" + Quote("/channels/@me") + ")"); Thread.Sleep(800); }
+                    }
                     List<ChatAt> found = new List<ChatAt>();
                     string unread = InTab(t, DcUnread) ?? "";
                     for (int look = 0; asked && unread.Trim().Length == 0 && look < 3; look++) { Thread.Sleep(1500); unread = InTab(t, DcUnread) ?? ""; }
@@ -1027,6 +1039,7 @@ public class CapriInternalBrowser : ICapriMod
     // On their yes: opens that chat in its own tab and reads the newest message out, then asks if they want to reply.
     private string ReadChat(ChatAt chat)
     {
+        chatUsed = DateTime.Now;
         string got = InTab(chat.Tab, DcOpen + "(" + Quote(chat.Id) + ")");
         string said = null;
         for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
@@ -1077,6 +1090,7 @@ public class CapriInternalBrowser : ICapriMod
     private string TypeReply(ChatAt chat, string text, bool hidden)
     {
         hidden = hidden || (chat.Tab != null && chat.Tab.Hidden);
+        chatUsed = DateTime.Now;
         string not = "so I didn't type it, choom.", fail = null, typed = "";
         string now = InTab(chat.Tab, DcNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, " + not;
@@ -1128,6 +1142,7 @@ public class CapriInternalBrowser : ICapriMod
             Thread.Sleep(1200);
             if ((InTab(chat.Tab, ChatBox + "('text')") ?? "").Length > 0) fail = "I pressed send, but it's still sitting in the box. Have a look, choom.";
         }
+        chatUsed = DateTime.Now;
         CardShot(null);
         Card(chat, fail == null ? "Sent it to " + chat.Who + ". \u2713" : "Not sent.", fail == null ? "\u201c" + text + "\u201d" : "");
         Tidy(chat);
@@ -1177,6 +1192,7 @@ public class CapriInternalBrowser : ICapriMod
     private string Untype(ChatAt chat, string text, string line)
     {
         lock (gate) { if (typedChat == chat) typedChat = null; }
+        chatUsed = DateTime.Now;
         if (InTab(chat.Tab, DcNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "('text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "('clear')");
         CardShot(null);
         Card(chat, "Deleted it. Nothing was sent.", "");
@@ -5009,8 +5025,8 @@ public class CapriInternalBrowser : ICapriMod
             System.Windows.Forms.Timer dozing = new System.Windows.Forms.Timer { Interval = 120000 }, later = new System.Windows.Forms.Timer { Interval = 6000 };
             dozing.Tick += delegate { Doze(); };
             dozing.Start();
-            // Every 8 seconds, a look for new Discord messages (only when that reader's on in Settings).
-            System.Windows.Forms.Timer chatting = new System.Windows.Forms.Timer { Interval = 8000 };
+            // Every 5 seconds, a look for new Discord messages (only when that reader's on in Settings).
+            System.Windows.Forms.Timer chatting = new System.Windows.Forms.Timer { Interval = 5000 };
             chatting.Tick += delegate { if (Flag("readdiscord", false)) mod.CheckMessages(false); else if (!Flag("quietmsg", false)) DropHiddenDiscord(); };
             chatting.Start();
             later.Tick += delegate { later.Dispose(); Wrap(false); };
