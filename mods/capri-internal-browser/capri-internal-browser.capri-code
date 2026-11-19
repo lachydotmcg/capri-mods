@@ -3766,9 +3766,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "852c8e410a4bb0979cff5ad159dbf99749baa834";
+    private const string AddonsCommit = "fb19f16aa605d36a29fbd253e87d3a48aa309da4";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=c09e5d381c79443eafc8ffc8ef60701c80cd06422eecaf0013327744d5d7f263;help/ar.txt=0870357473ad406c9605c6262c5c6dc796c0a82ab477769da392e70dd8578433;help/bn.txt=23563913517f06773802acf756670d26e024a7090f0811a95d636beecfb01142;help/de.txt=96dbb74c296b11fd0b5bc00ebf5cc282539f6fe77d2c13028331a2d7ff21b043;help/es.txt=53e29bdffdef55c0963c45f87ee8fba1854b52ebff0214950345ecad2537cefc;help/fil.txt=a52ed31242a55956df9ac9958a121df94803116ec47087f2784ca94a37e6eb69;help/fr.txt=b398408b06b75014d0ef43af0cc353cff4b8dd98b8c39d6cb6555b1e09bc9dbf;help/hi.txt=3704f16d1791f65e00c1998834c9b8be5980a5340c6b979ff78308cba895143f;help/id.txt=34fa412822e70e74059b4510feb3e514a2eda4fef3049f7d36cc8211af459d7b;help/it.txt=1a68b753c82b86b055dd961c27060a0b45cb157eb7a44fe45e2c4012862daa24;help/ja.txt=75a10f6034add469c43077af0edbfee2cb2f5937860239c710af694314158a75;help/ko.txt=603f65d61cb34d75389a4819f0c8fec8846e8424655b11a5f624fa6c5f66887f;help/nl.txt=3c5acb5f0be33d25d5ecea2346149afd618be5373c286adbb258f7f709ad6273;help/pl.txt=a15f17214a148527a604683c9e22a5a673e78926fe61e54a46b297a4617d6eda;help/pt.txt=eb32295902cece1ad3497be9e26e4e27ba6e27249aa7a21596e9c1abe0e27d5d;help/ru.txt=e91d0f2a9897bb359e549a747bc265b146ab04c34bbf1fa89edce5c1bdc10204;help/sv.txt=4a87ceab62a6386699e788f5708ba688c152ad1e0fa80b815b59485042cb850c;help/th.txt=22ced07cb5241f9a031bbfaa759001e0073393ebb4254f4c69dd7dfef24f36ce;help/tr.txt=1a693b60a747585568d6df0d29ed253009e139fcef945c45d217b4a1612d0167;help/uk.txt=ae4b5606c616404cf322e404bb0d3de1f5d47b07cf6cc06809c6006165ab1a4c;help/vi.txt=e9423393a4562dece2a3d420e0986da1f436e3d5c0bfe39a6df3cad8a9cc1a00;help/zh-hans.txt=6f5f3fd19f351f58ffc501364cdda949b04a0348e14425189a73f7f54f99b70e;help/zh-hant.txt=46607503118d31327721ca2e7a781a799c1306567a1bf1c12b37b269a4c89e06;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=51efeb975528807873c3c028e81a398af2605fbee3bd3473c2c3f26baa24e6c7";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=c09e5d381c79443eafc8ffc8ef60701c80cd06422eecaf0013327744d5d7f263;help/ar.txt=0870357473ad406c9605c6262c5c6dc796c0a82ab477769da392e70dd8578433;help/bn.txt=23563913517f06773802acf756670d26e024a7090f0811a95d636beecfb01142;help/de.txt=96dbb74c296b11fd0b5bc00ebf5cc282539f6fe77d2c13028331a2d7ff21b043;help/es.txt=53e29bdffdef55c0963c45f87ee8fba1854b52ebff0214950345ecad2537cefc;help/fil.txt=a52ed31242a55956df9ac9958a121df94803116ec47087f2784ca94a37e6eb69;help/fr.txt=b398408b06b75014d0ef43af0cc353cff4b8dd98b8c39d6cb6555b1e09bc9dbf;help/hi.txt=3704f16d1791f65e00c1998834c9b8be5980a5340c6b979ff78308cba895143f;help/id.txt=34fa412822e70e74059b4510feb3e514a2eda4fef3049f7d36cc8211af459d7b;help/it.txt=1a68b753c82b86b055dd961c27060a0b45cb157eb7a44fe45e2c4012862daa24;help/ja.txt=75a10f6034add469c43077af0edbfee2cb2f5937860239c710af694314158a75;help/ko.txt=603f65d61cb34d75389a4819f0c8fec8846e8424655b11a5f624fa6c5f66887f;help/nl.txt=3c5acb5f0be33d25d5ecea2346149afd618be5373c286adbb258f7f709ad6273;help/pl.txt=a15f17214a148527a604683c9e22a5a673e78926fe61e54a46b297a4617d6eda;help/pt.txt=eb32295902cece1ad3497be9e26e4e27ba6e27249aa7a21596e9c1abe0e27d5d;help/ru.txt=e91d0f2a9897bb359e549a747bc265b146ab04c34bbf1fa89edce5c1bdc10204;help/sv.txt=4a87ceab62a6386699e788f5708ba688c152ad1e0fa80b815b59485042cb850c;help/th.txt=22ced07cb5241f9a031bbfaa759001e0073393ebb4254f4c69dd7dfef24f36ce;help/tr.txt=1a693b60a747585568d6df0d29ed253009e139fcef945c45d217b4a1612d0167;help/uk.txt=ae4b5606c616404cf322e404bb0d3de1f5d47b07cf6cc06809c6006165ab1a4c;help/vi.txt=e9423393a4562dece2a3d420e0986da1f436e3d5c0bfe39a6df3cad8a9cc1a00;help/zh-hans.txt=6f5f3fd19f351f58ffc501364cdda949b04a0348e14425189a73f7f54f99b70e;help/zh-hant.txt=46607503118d31327721ca2e7a781a799c1306567a1bf1c12b37b269a4c89e06;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=3fadc6c05149202f0eaf393906194b67f6f6b95db429b22c1618e125bdbd8d14";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -7768,7 +7768,7 @@ public class CapriInternalBrowser : ICapriMod
         }
 
         // Guess the Site: a popular site opens blurred, with four names to pick from.
-        private const string GuessScript = "(function(C,A,L,S){var h=document.documentElement,O='https://capri.dial/play?g=';h.style.filter='';if(document.getElementById('capri-guess'))return;var s=document.createElement('style');s.textContent='body{filter:blur(18px)!important;pointer-events:none!important}#capri-guess button{margin:4px;padding:10px 18px;background:#091e21;color:#5ef0f6;border:1px solid #1c545c;font:600 14px Bahnschrift,Segoe UI,sans-serif;letter-spacing:1px;cursor:pointer;clip-path:polygon(0 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%)}#capri-guess button:hover{border-color:#5ef0f6;background:#0d2d31}#capri-guess .m{background:#e84246;border-color:#e84246;color:#fff}#capri-guess .m:hover{background:#ff5a5e}';h.appendChild(s);var d=document.createElement('div');d.id='capri-guess';d.style.cssText='position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:2147483647;background:#0a0a10;box-shadow:inset 0 0 0 1px #e84246,0 0 26px rgba(232,66,70,.45);padding:18px 24px 16px;font:600 16px Bahnschrift,Segoe UI,sans-serif;color:#ececf1;text-align:center;white-space:nowrap;clip-path:polygon(0 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%)';var q=document.createElement('div');q.style.cssText='letter-spacing:4px;color:#e84246;margin-bottom:6px';q.textContent='GUESS THE SITE';d.appendChild(q);var l=document.createElement('div');l.style.cssText='color:#92828c;font-size:13px;letter-spacing:2px;margin-bottom:10px';function H(){l.innerHTML='<span style=color:#e84246>'+Array(L+1).join('\\u2665 ')+'</span>'+Array(4-L).join('\\u2661 ')+' &middot; '+S+' RIGHT';}H();d.appendChild(l);function B(t,c,f){var b=document.createElement('button');b.textContent=t;if(c)b.className=c;b.onclick=f;d.appendChild(b);}C.forEach(function(c,k){B(c,'',function(){var ok=k==A;if(ok)S++;else L--;H();[].slice.call(d.querySelectorAll('button')).forEach(function(x){x.remove()});s.textContent=s.textContent.replace(/body[^}]*}/,'');q.textContent=L<1?'GAME OVER':ok?'CORRECT':'IT WAS '+C[A].toUpperCase();q.style.color=ok?'#5ef0f6':'#e84246';q.style.textShadow='0 0 12px '+q.style.color;B(L<1?'PLAY AGAIN':'NEXT SITE','m',function(){location.href=O+'guess'});B('CLOSE','',function(){d.remove()});location.href=O+'guessed&r='+(ok?1:0);});});h.appendChild(d);})";
+        private const string GuessScript = "(function(C,A,L,S){if(window.capriGuess){window.capriGuess();return;}var O='https://capri.dial/play?g=',done=false,closed=false;function root(){return document.documentElement;}function blur(on){var h=root(),b=document.body;if(!h)return;if(b){h.style.removeProperty('filter');if(on){b.style.setProperty('filter','blur(18px)','important');b.style.setProperty('pointer-events','none','important');}else{b.style.removeProperty('filter');b.style.removeProperty('pointer-events');}}else if(on)h.style.setProperty('filter','blur(18px)','important');}function el(t,css,txt){var e=document.createElement(t);if(css)e.style.cssText=css;if(txt!=null)e.textContent=txt;return e;}var cut=';clip-path:polygon(0 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%)',bs='all:initial;display:inline-block;margin:4px;padding:10px 18px;background:#091e21;color:#5ef0f6;border:1px solid #1c545c;font:600 14px Bahnschrift,Segoe UI,sans-serif;letter-spacing:1px;cursor:pointer'+cut,ms=bs.replace('background:#091e21;color:#5ef0f6;border:1px solid #1c545c','background:#e84246;color:#fff;border:1px solid #e84246');var d=el('div','all:initial;position:fixed;left:50%;bottom:40px;transform:translateX(-50%);z-index:2147483647;display:block;background:#0a0a10;box-shadow:inset 0 0 0 1px #e84246,0 0 26px rgba(232,66,70,.45);padding:18px 24px 16px;font:600 16px Bahnschrift,Segoe UI,sans-serif;color:#ececf1;text-align:center;white-space:nowrap;filter:none;pointer-events:auto;clip-path:polygon(0 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%)');d.id='capri-guess';var q=el('div','letter-spacing:4px;color:#e84246;margin-bottom:6px','GUESS THE SITE'),l=el('div','color:#92828c;font-size:13px;letter-spacing:2px;margin-bottom:10px');d.appendChild(q);d.appendChild(l);function H(){l.textContent='';l.appendChild(el('span','color:#e84246',Array(L+1).join('\\u2665 ')));l.appendChild(document.createTextNode(Array(4-L).join('\\u2661 ')+' \\u00b7 '+S+' RIGHT'));}H();function B(t,m,f){var b=el('button',m?ms:bs,t);b.type='button';b.onmouseenter=function(){b.style.background=m?'#ff5a5e':'#0d2d31';b.style.borderColor=m?'#ff5a5e':'#5ef0f6';};b.onmouseleave=function(){b.style.cssText=m?ms:bs;};b.onclick=function(e){e.preventDefault();e.stopPropagation();f();};d.appendChild(b);}C.forEach(function(c,k){B(c,0,function(){if(done)return;done=true;var ok=k==A;if(ok)S++;else L--;H();[].slice.call(d.querySelectorAll('button')).forEach(function(x){x.remove();});blur(false);q.textContent=L<1?'GAME OVER':ok?'CORRECT':'IT WAS '+C[A].toUpperCase();q.style.color=ok?'#5ef0f6':'#e84246';q.style.textShadow='0 0 12px '+q.style.color;B(L<1?'PLAY AGAIN':'NEXT SITE',1,function(){location.href=O+'guess';});B('CLOSE',0,function(){closed=true;d.remove();});location.href=O+'guessed&r='+(ok?1:0);});});function check(){if(!done)blur(true);var h=root();if(!closed&&h&&!d.isConnected)h.appendChild(d);}window.capriGuess=check;check();setInterval(check,700);})";
         private Tab guessTab;
         private string[] guessing;
         private int guessAnswer, guessStreak, guessLives = 3, guessScore;
@@ -8120,8 +8120,10 @@ public class CapriInternalBrowser : ICapriMod
                 guessing = new string[4];
                 for (int i = 0; i < 4; i++) guessing[i] = sites[pick[i]][0];
                 guessAnswer = pick.IndexOf(answer);
-                if (guessTab != null && tabs.Contains(guessTab)) { Select(guessTab); guessTab.Viewer.Go(sites[answer][1]); }
-                else { OpenTab(null, sites[answer][1], true); guessTab = tab; }
+                if (guessTab == null || !tabs.Contains(guessTab)) { OpenTab(null, null, true); guessTab = tab; }
+                Select(guessTab);
+                guessTab.Viewer.Blurred(true);
+                guessTab.Viewer.Go(sites[answer][1]);
                 address.Text = Mask;
                 Retitle(guessTab, guessTab.Title);
                 return;
@@ -8131,6 +8133,7 @@ public class CapriInternalBrowser : ICapriMod
                 if (guessing == null) return;
                 bool right = all.Contains("r=1");
                 guessing = null;
+                guessTab.Viewer.Blurred(false);
                 Retitle(guessTab, guessTab.Title);
                 if (guessTab == tab) address.Text = guessTab.Address ?? "";
                 if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); } else { guessStreak = 0; guessLives--; }
@@ -13836,6 +13839,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         public Action<string, string, string> LoginSeen;
         public Action<string> PasswordBox;
         public virtual void Dark(bool on) { }
+        public virtual void Blurred(bool on) { }
         public virtual void Downloads() { }
         // Sound: the page started or stopped making sound, or was muted (playing, muted).
         public Action<bool, bool> Sound;
@@ -14176,6 +14180,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 });
                 if (guard != null) Privacy(guard);
                 if (styled != null) Scheme(styled);
+                if (wantBlur) Blurred(true);
                 Action run = waiting;
                 waiting = null;
                 if (run != null) run();
@@ -14533,6 +14538,35 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
         // Dark mode for sites that are bright: on now and for every page after, or off again.
         public override bool Sleep() { if (core == null) return false; try { Call(core, "TrySuspendAsync"); return true; } catch (Exception) { return false; } }
+
+        // Guess the Site: every page this tab opens starts blurred, before anything shows. Waits for Edge if it isn't ready.
+        private const string BlurScript = "(function(){function b(){var h=document.documentElement;if(h)h.style.setProperty('filter','blur(18px)','important');return !!h;}if(!b())new MutationObserver(function(m,o){if(b())o.disconnect();}).observe(document,{childList:true});})()";
+        private Task<string> blurId;
+        private bool wantBlur;
+        public override void Blurred(bool on)
+        {
+            wantBlur = on;
+            if (core == null) return;
+            try
+            {
+                if (on && blurId == null) { blurId = Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", BlurScript) as Task<string>; Call(core, "ExecuteScriptAsync", BlurScript); }
+                else if (!on && blurId != null)
+                {
+                    Task<string> id = blurId;
+                    blurId = null;
+                    if (id.Status == TaskStatus.RanToCompletion) { Call(core, "RemoveScriptToExecuteOnDocumentCreated", id.Result); return; }
+                    System.Windows.Forms.Timer wait = new System.Windows.Forms.Timer { Interval = 300 };
+                    wait.Tick += delegate
+                    {
+                        if (!id.IsCompleted) return;
+                        wait.Dispose();
+                        try { if (core != null && id.Status == TaskStatus.RanToCompletion) Call(core, "RemoveScriptToExecuteOnDocumentCreated", id.Result); } catch (Exception) { }
+                    };
+                    wait.Start();
+                }
+            }
+            catch (Exception) { }
+        }
 
         public override void Dark(bool on)
         {
