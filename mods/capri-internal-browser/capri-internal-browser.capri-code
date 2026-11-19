@@ -187,7 +187,7 @@ public class CapriInternalBrowser : ICapriMod
     private ChatAt typedChat;
     // When she last opened, typed in or sent to a chat in her Discord.
     private DateTime chatUsed = DateTime.MinValue;
-    // Done with the chats: nothing being read, replied to or waiting to send, for 15 seconds.
+    // Done with the chats: nothing being read, replied to or waiting to send, for 8 seconds.
     private bool ChatIdle()
     {
         lock (gate) return typedChat == null && (replying == null || Now() > replyUntil) && (pend == null || Now() > pendUntil) && (DateTime.Now - chatUsed).TotalSeconds > 15;
@@ -842,6 +842,12 @@ public class CapriInternalBrowser : ICapriMod
                         if (one.Who.Length == 0 || (site == "Discord" && !Regex.IsMatch(one.Id, @"^/channels/@me/\d{5,25}$"))) continue;
                         found.Add(one);
                     }
+                    // Chats that aren't unread any more (read here or elsewhere) are forgotten, so their next message counts as new.
+                    lock (gate)
+                        chatsSeen.RemoveWhere(delegate(string k)
+                        {
+                            return k.StartsWith(site + "|", StringComparison.Ordinal) && !found.Exists(delegate(ChatAt c) { return k.StartsWith(site + "|" + c.Id + "|", StringComparison.Ordinal); });
+                        });
                     if (site == "Discord")
                         foreach (ChatAt one in found)
                         {
@@ -1040,6 +1046,7 @@ public class CapriInternalBrowser : ICapriMod
     private string ReadChat(ChatAt chat)
     {
         chatUsed = DateTime.Now;
+        lock (gate) chatAsked.Remove(chat.Site + "|" + chat.Id);
         string got = InTab(chat.Tab, DcOpen + "(" + Quote(chat.Id) + ")");
         string said = null;
         for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
