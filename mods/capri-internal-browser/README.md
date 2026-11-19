@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** (about 476 KB of readable code, under the 1 MB code mod limit) and the Microsoft Edge WebView2 engine (built into Windows 11)
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 1,014 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
