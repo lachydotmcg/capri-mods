@@ -724,7 +724,7 @@ public class CapriInternalBrowser : ICapriMod
     private static readonly Regex StopReply = new Regex(@"^(?:cancel|stop|forget\s+(?:it|that)|don'?t\s+(?:reply|send)|no\s+reply)\b", Plain);
 
     // Who's messaged them on Discord: an unread DM in the list, as name, chat address and how many.
-    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var bare=function(u){var c=u.cloneNode(true);[].forEach.call(c.querySelectorAll('[class*=chiplet],[class*=Chiplet],[class*=clanTag],[class*=guildTag],[class*=Tag],[class*=tag_],[class*=badge],[class*=Badge],img,svg'),function(x){x.remove()});return (c.textContent||'').replace(/\s+/g,' ').trim()};var seen={},out=[],lab=function(e){return (e&&e.getAttribute&&e.getAttribute('aria-label'))||''};var nm=function(l){return l.replace(/^\d+\s+(?:mentions?|unread\s+messages?|unread),\s*/i,'').replace(/,\s*\d+\s+(?:mentions?|unread\s+messages?|unread)\s*$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()};var num=function(box,l){var n=NaN;[].some.call(box.querySelectorAll('[class*=numberBadge],[class*=mentionsBadge],[class*=lowerBadge]'),function(b){var v=parseInt((b.textContent||'').replace(/\D/g,''),10);if(v>0){n=v;return true}});if(!(n>0))n=parseInt((/(\d+)\s+(?:mentions?|unread)/i.exec(l)||[])[1],10);return n>0?n:0};var add=function(name,h,n){if(seen[h]||out.length>=6)return;seen[h]=1;out.push((name||'someone').slice(0,40)+'\t'+h+'\t'+Math.min(n,99))};var G='[data-list-item-id^=guildsnav___]',sep=document.querySelector('[class*=guildSeparator]');[].forEach.call(document.querySelectorAll(G),function(e){var id=(/^guildsnav___\D*(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1];if(!id)return;if(sep?!(sep.compareDocumentPosition(e)&2):!!e.closest('[data-dnd-name]'))return;var box=e;for(var k=0;k<7;k++){var p=box.parentElement;if(!p||p.tagName=='NAV'||p.querySelectorAll(G).length>1||p.contains(sep))break;box=p}var l=lab(e),all=[l];[].forEach.call(box.querySelectorAll('[aria-label]'),function(x){all.push(lab(x))});var any=all.join(' ');if(/\bgroup\b|\d+\s+members?/i.test(any))return;var n=num(box,any)||1;var name='';all.some(function(x){x=nm(x);if(x&&!/^(direct messages|home|servers)$/i.test(x)){name=x;return true}});if(!name){var d=box.querySelector('[data-dnd-name]')||e.closest('[data-dnd-name]'),im=box.querySelector('img[alt]');name=d?d.getAttribute('data-dnd-name'):im?im.getAttribute('alt'):''}add((name||'').trim(),'/channels/@me/'+id,n)});[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),n=num(box,l);if(!(n>0))return;if(/\bgroup\b|\d+\s+members?/i.test(l+' '+(box.innerText||'')))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=t?bare(t):(a.innerText||'').split('\n')[0].trim()}add(name,h,n)});return out.join('\n')})()";
+    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var bare=function(u){var c=u.cloneNode(true);[].forEach.call(c.querySelectorAll('[class*=chiplet],[class*=Chiplet],[class*=clanTag],[class*=guildTag],[class*=Tag],[class*=tag_],[class*=badge],[class*=Badge],img,svg'),function(x){x.remove()});return (c.textContent||'').replace(/\s+/g,' ').trim()};var seen={},out=[],lab=function(e){return (e&&e.getAttribute&&e.getAttribute('aria-label'))||''};var nm=function(l){return l.replace(/^\d+\s+(?:mentions?|unread\s+messages?|unread),\s*/i,'').replace(/,\s*\d+\s+(?:mentions?|unread\s+messages?|unread)\s*$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()};var num=function(box,l){var n=NaN;[].some.call(box.querySelectorAll('[class*=numberBadge],[class*=mentionsBadge],[class*=lowerBadge]'),function(b){var v=parseInt((b.textContent||'').replace(/\D/g,''),10);if(v>0){n=v;return true}});if(!(n>0))n=parseInt((/(\d+)\s+(?:mentions?|unread)/i.exec(l)||[])[1],10);return n>0?n:0};var add=function(name,h,n){if(seen[h]||out.length>=6)return;seen[h]=1;out.push((name||'someone').slice(0,40)+'\t'+h+'\t'+Math.min(n,99))};var G='[data-list-item-id^=guildsnav___]',sep=document.querySelector('[class*=guildSeparator]');[].forEach.call(document.querySelectorAll(G),function(e){var id=(/^guildsnav___\D*(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1];if(!id)return;if(sep?!(sep.compareDocumentPosition(e)&2):!!e.closest('[data-dnd-name]'))return;var box=e;for(var k=0;k<7;k++){var p=box.parentElement;if(!p||p.tagName=='NAV'||p.querySelectorAll(G).length>1||p.contains(sep))break;box=p}var l=lab(e),all=[l];[].forEach.call(box.querySelectorAll('[aria-label]'),function(x){all.push(lab(x))});var any=all.join(' ');if(/\bgroup\b|\d+\s+members?/i.test(any))return;var n=num(box,any)||1;var name='';all.some(function(x){x=nm(x);if(x&&!/^(direct messages|home|servers)$/i.test(x)){name=x;return true}});if(!name){var d=box.querySelector('[data-dnd-name]')||e.closest('[data-dnd-name]'),im=box.querySelector('img[alt]');name=d?d.getAttribute('data-dnd-name'):im?im.getAttribute('alt'):''}if(!name){var dl=document.querySelector('a[href=""/channels/@me/'+id+'""]');if(dl){var dn=dl.querySelector('[class*=name]');name=dn?bare(dn):((dl.innerText||'').split('\n')[0]||'').trim()}}add((name||'').trim(),'/channels/@me/'+id,n)});[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),n=num(box,l);if(!(n>0))return;if(/\bgroup\b|\d+\s+members?/i.test(l+' '+(box.innerText||'')))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=t?bare(t):(a.innerText||'').split('\n')[0].trim()}add(name,h,n)});return out.join('\n')})()";
     private const string DcShape = @"(function(){var c=function(e){return e&&e.className&&e.className.baseVal===undefined?String(e.className).split(' ').map(function(x){return x.split('_')[0]}).join('.').slice(0,60):(e?e.tagName:'-')},x=function(t){return (t||'').replace(/[^\d\s,()]/g,'x').slice(0,40)},o=[],sep=document.querySelector('[class*=guildSeparator]'),G=document.querySelectorAll('[data-list-item-id^=guildsnav___]');o.push('path '+location.pathname.replace(/\d+/g,'N')+' | separator '+(sep?c(sep):'none')+' | items '+G.length);[].slice.call(G,0,6).forEach(function(e){var up=[],p=e;for(var k=0;k<6&&p;k++){up.push(c(p)+(p.querySelectorAll?'['+p.querySelectorAll('[data-list-item-id^=guildsnav___]').length+']':''));p=p.parentElement}var b=[].map.call(e.parentElement&&e.parentElement.parentElement?e.parentElement.parentElement.querySelectorAll('[class*=adge]'):[],function(q){return c(q)+'='+(q.textContent||'').replace(/\D/g,'')}).slice(0,4);o.push((e.getAttribute('data-list-item-id')||'').replace(/\d/g,'N')+' above '+(sep?!!(sep.compareDocumentPosition(e)&2):'?')+' label '+x(e.getAttribute('aria-label'))+' dnd '+!!e.closest('[data-dnd-name]')+' | up '+up.join(' < ')+' | badges '+b.join(' '))});[].slice.call(document.querySelectorAll('[class*=numberBadge],[class*=mentionsBadge]'),0,6).forEach(function(q){var up=[],p=q;for(var k=0;k<7&&p;k++){up.push(c(p)+(p.getAttribute&&p.getAttribute('data-list-item-id')?'#'+p.getAttribute('data-list-item-id').replace(/\d/g,'N'):''));p=p.parentElement}o.push('badge '+(q.textContent||'').replace(/\D/g,'')+' | '+up.join(' < '))});return o.join('\n')})()";
     private const string DcOpen = @"(function(h){var a=document.querySelector('a[href=""'+h+'""]')||document.querySelector('[data-list-item-id=""guildsnav___'+h.split('/').pop()+'""]');if(a){a.click();return 'ok'}history.pushState(null,'',h);dispatchEvent(new PopStateEvent('popstate'));return 'ok'})";
     // The newest messages in that chat from whoever sent the last one (up to 3), with their name first. 'mine' when it was them.
@@ -777,7 +777,9 @@ public class CapriInternalBrowser : ICapriMod
                     }
                     any = true;
                     List<ChatAt> found = new List<ChatAt>();
-                    foreach (string line in (InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "").Split('\n'))
+                    string unread = InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "";
+                    for (int look = 0; asked && unread.Trim().Length == 0 && look < 3; look++) { Thread.Sleep(1500); unread = InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? ""; }
+                    foreach (string line in unread.Split('\n'))
                     {
                         string[] p = line.Split('\t');
                         int count;
@@ -799,7 +801,7 @@ public class CapriInternalBrowser : ICapriMod
                         // Everyone with new messages goes in the one question, this one first.
                         List<ChatAt> everyone = new List<ChatAt> { chat };
                         foreach (ChatAt other in found) if (other != chat) everyone.Add(other);
-                        if (!MessageIn(everyone)) continue;
+                        if (!MessageIn(everyone, asked)) continue;
                         lock (gate) foreach (ChatAt one in everyone) { chatsSeen.Add(site + "|" + one.Id + "|" + one.Count); chatAsked[site + "|" + one.Id] = DateTime.Now; }
                         lock (gate) lastAnnounced = DateTime.Now;
                         told = true;
@@ -817,19 +819,23 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // Says who it's from and asks, unless she's already waiting on an answer from them.
-    private bool MessageIn(List<ChatAt> people)
+    private bool MessageIn(List<ChatAt> people, bool asked)
     {
         ChatAt chat = people[0];
-        lock (gate) if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil) || typedChat != null) return false;
+        lock (gate)
+        {
+            // They just asked: that wins over an older question (a typed, unsent reply still waits for its answer).
+            if (asked && typedChat == null) { pend = null; replying = null; }
+            if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil) || typedChat != null) return false;
+        }
         lock (gate) { chatQueue.Clear(); chatQueue.AddRange(people.GetRange(1, people.Count - 1)); announced = new List<ChatAt>(people); }
-        // Auto read-out: straight to reading them, one after another, with her box showing.
-        if (Flag("autoread", false)) { Card(chat, (chat.Count > 1 ? chat.Count + " new messages" : "New message") + " from " + chat.Who + "...", "Reading it out."); Tell(ReadChat(chat)); return true; }
         // "Ben left 3 new messages and Sam left 5, should I read them, choom?"
         List<string> parts = new List<string>();
         for (int i = 0; i < people.Count; i++)
         {
             ChatAt one = people[i];
-            parts.Add(i == 0 ? one.Who + " left " + (one.Count == 1 ? "you a new message" : one.Count + " new messages") : one.Who + " left " + one.Count);
+            string nm = one.Who == "someone" ? (i == 0 ? "Someone" : "someone else") : one.Who;
+            parts.Add(i == 0 ? nm + " left " + (one.Count == 1 ? "you a new message" : one.Count + " new messages") : nm + " left " + one.Count);
         }
         string who = parts.Count == 1 ? parts[0] : string.Join(", ", parts.GetRange(0, parts.Count - 1).ToArray()) + " and " + parts[parts.Count - 1];
         string it = people.Count > 1 || chat.Count > 1 ? "them" : "it";
@@ -944,6 +950,8 @@ public class CapriInternalBrowser : ICapriMod
         string from = Clean(lines[0], 40);
         if (from.Length == 0 || Regex.IsMatch(from, @"^[+\d\s()-]+$")) from = chat.Who;
         // A server tag that still came along ("Bob ABC"): the name on their picture is just "Bob".
+        // No name from the picture or the list: the chat says who it is.
+        if (chat.Who == "someone" && from.Length > 0) chat.Who = from;
         if (chat.Who.Length > 0 && chat.Who != "someone" && from.Length > chat.Who.Length && from.StartsWith(chat.Who, StringComparison.OrdinalIgnoreCase)) from = chat.Who;
         List<string> parts = new List<string>();
         string raw = "";
@@ -10938,7 +10946,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             {
                 case "readdiscord": return "Tells you when someone messages you directly (not servers or groups) and reads it out on your yes. Ask “any new Discord messages?” any time. She keeps Discord open out of sight for it, so she's quick. You must be logged in to Discord in Capri Browser for this to work.";
                 case "readwhatsapp-gone": return "Tells you who messaged you and reads it out on your yes. Ask “anything on WhatsApp?” any time. Sign in to WhatsApp Web in Capri Browser once.";
-                case "autoread": return "New messages are read straight out, with her box under her hologram, instead of her asking first. Replies still wait for your yes.";
+                case "autoread-gone": return "New messages are read straight out, with her box under her hologram, instead of her asking first. Replies still wait for your yes.";
                 case "browserreact": return "She says something now and then when you open a new site, and when you ask what she thinks (“what do you think of this?”, “is this any good?”) she looks at the page and gives you her take. Private tabs, chats, mail and banking are left alone.";
                 case "quietmsg": return "Messages are found and typed out of sight in her own hidden Discord, with no tab at the top, instead of Discord coming to the front. She still shows you the message and asks before sending.";
                 case "discordmsg": return "Say “message Alex on Discord saying ...”. She types it and asks before sending. You must be logged in to Discord in Capri Browser for this to work.";
@@ -10951,7 +10959,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         {
             { "control", "Takeover animation", "1", "capri" },
             { "readdiscord", "Reads new Discord direct messages", "0", "discord" },
-            { "autoread", "Auto read-out messages", "0", "discord" },
             { "discordmsg", "Sends Discord messages for you", "0", "discord" },
             { "quietmsg", "Message without opening tab", "0", "discord" },
             { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0", "video" },
