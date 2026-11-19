@@ -165,6 +165,12 @@ public class CapriInternalBrowser : ICapriMod
     private bool confirmed;
     // The message reader: the chat whose reply they're saying, until when their next words count as it, what's been asked about.
     private ChatAt replying;
+    // A reply she's typed and is waiting on a yes for (deleted on no, or after 2 minutes), and what a "no" undoes.
+    private ChatAt typedChat;
+    private string typedText;
+    private DateTime typedUntil;
+    private Func<string> pendNoFor;
+    private Action pendNo;
     private DateTime replyUntil, lastAnnounced = DateTime.MinValue;
     private readonly HashSet<string> chatsSeen = new HashSet<string>();
     private readonly Dictionary<string, DateTime> chatAsked = new Dictionary<string, DateTime>();
@@ -303,7 +309,14 @@ public class CapriInternalBrowser : ICapriMod
         Func<string> todo;
         lock (gate) { todo = pend != null && Now() <= pendUntil ? pend : null; if (todo != null && (Yes.IsMatch(said) || No.IsMatch(said))) pend = null; }
         if (todo != null && Yes.IsMatch(said)) { ThreadPool.QueueUserWorkItem(delegate { capri.Say(todo()); }); return true; }
-        if (todo != null && No.IsMatch(said)) { capri.Say("Okay, I won't, choom."); return true; }
+        if (todo != null && No.IsMatch(said))
+        {
+            Action undo = null;
+            lock (gate) { if (pendNoFor == todo) undo = pendNo; pendNo = null; pendNoFor = null; }
+            if (undo != null) { ThreadPool.QueueUserWorkItem(delegate { undo(); }); return true; }
+            capri.Say("Okay, I won't, choom.");
+            return true;
+        }
         Page page;
         lock (gate)
         {
@@ -331,7 +344,14 @@ public class CapriInternalBrowser : ICapriMod
             return true;
         }
         if (NotedAsk.IsMatch(said)) { WithBrowser(delegate(Browser now) { now.ShowNoted(); return null; }); capri.Say("Here's Noted, choom."); return true; }
-        if ((Flag("readdiscord", false) || Flag("readwhatsapp", false)) && MessagesAsk.IsMatch(said)) { CheckMessages(true); return true; }
+        if (MessagesAsk.IsMatch(said))
+        {
+            string only = Regex.IsMatch(said, @"whats\s?app", Plain) ? "WhatsApp" : Regex.IsMatch(said, "discord", Plain) ? "Discord" : null;
+            bool dc = Flag("readdiscord", false), wa = Flag("readwhatsapp", false);
+            if (only == "Discord" ? !dc : only == "WhatsApp" ? !wa : !dc && !wa) { Tell("Turn on \"Reads new " + (only == "WhatsApp" ? "WhatsApp messages" : "Discord direct messages") + "\" in Settings, under Discord & WhatsApp, and I'll check for you, choom."); return true; }
+            CheckMessages(true, only);
+            return true;
+        }
         if (Flag("discordmsg", false) && (DiscordAsk.IsMatch(said) || DiscordMore.IsMatch(said) && (InBrowser(delegate(Browser b) { return b.Here(); }) ?? "").Contains("discord.com")) && DiscordHeard(said)) return true;
         Match noted = NoteAsk.Match(said);
         bool shot = NoteShot.IsMatch(said);
@@ -679,15 +699,24 @@ public class CapriInternalBrowser : ICapriMod
 
     // ---- Message reader ----
     internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; }
-    private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got\s+any|any)\s+(?:new\s+|unread\s+)?(?:messages?|dms?|texts?)|(?:read|check)\s+(?:me\s+)?(?:my|the)\s+(?:new\s+|unread\s+|latest\s+|last\s+)?(?:messages?|dms?|texts?)|who\s+(?:messaged|texted|dm'?d)\s+me)\b", Plain);
+    // "Any new Discord messages?", "do I have any DMs", "anything on WhatsApp", "check my Discord", "has anyone messaged me"...
+    private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:hey|ok|okay)\s+)?(?:capri\s*,?\s*)?(?:"
+        + @"(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got|are\s+there|is\s+there)\s+)?(?:any\s+(?:new\s+|unread\s+)?|new\s+|unread\s+)(?:discord\s+|whats\s?app\s+)?(?:messages?|msgs?|dms?|direct\s+messages?|texts?)"
+        + @"|(?:is\s+there\s+)?any(?:thing)?\s+(?:new\s+)?(?:on|from|in)\s+(?:discord|whats\s?app)"
+        + @"|(?:check|read|show|look\s+at|go\s+through)\s+(?:me\s+)?(?:my\s+|the\s+)?(?:new\s+|unread\s+|latest\s+|last\s+)?(?:discord|whats\s?app|messages?|dms?|texts?)"
+        + @"|(?:who|has\s+any(?:one|body)|did\s+any(?:one|body)|any(?:one|body))\s+(?:messaged|texted|dm'?d|pinged|message|text|dm)\s+me)\b", Plain);
     private static readonly Regex LoginCode = new Regex(@"\b(?:code|otp|passcode|password|pin|verify|verification|2fa|security)\b[^\n]{0,40}?\b\d{4,8}\b|\b\d{4,8}\b[^\n]{0,40}?\b(?:code|otp|passcode|verification)\b", RegexOptions.IgnoreCase);
     private static readonly Regex StopReply = new Regex(@"^(?:cancel|stop|forget\s+(?:it|that)|don'?t\s+(?:reply|send)|no\s+reply)\b", Plain);
 
     // Who's messaged them on Discord: an unread DM in the list, as name, chat address and how many.
-    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var seen={},out='',lab=function(e){return e.getAttribute('aria-label')||''},nm=function(l){return l.replace(/^\d+\s+mentions?,\s*/i,'').replace(/,\s*\d+\s+mentions?$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()};[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){if(out)return;var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;seen[h]=1;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),b=box.querySelector('[class*=numberBadge],[class*=mentionsBadge]'),n=b?parseInt(b.textContent,10):parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(!(n>0))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=((t||a).innerText||'').split('\n')[0].trim()}if(name)out=name.slice(0,40)+'\t'+h+'\t'+n});if(out)return out;[].forEach.call(document.querySelectorAll('[data-list-item-id^=guildsnav___]'),function(e){if(out||e.closest('[data-dnd-name]'))return;var id=(/^guildsnav___(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1],l=lab(e),n=parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(id&&n>0&&nm(l))out=nm(l).slice(0,40)+'\t/channels/@me/'+id+'\t'+n});return out})()";
+    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var seen={},out='',lab=function(e){return e.getAttribute('aria-label')||''},nm=function(l){return l.replace(/^\d+\s+mentions?,\s*/i,'').replace(/,\s*\d+\s+mentions?$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()};[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){if(out)return;var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;seen[h]=1;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),b=box.querySelector('[class*=numberBadge],[class*=mentionsBadge]'),n=b?parseInt(b.textContent,10):parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(!(n>0))return;if(/\bgroup\b|\d+\s+members?/i.test(l+' '+(box.innerText||'')))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=((t||a).innerText||'').split('\n')[0].trim()}if(name)out=name.slice(0,40)+'\t'+h+'\t'+n});if(out)return out;[].forEach.call(document.querySelectorAll('[data-list-item-id^=guildsnav___]'),function(e){if(out||e.closest('[data-dnd-name]'))return;var id=(/^guildsnav___(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1],l=lab(e),n=parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(id&&n>0&&nm(l)&&!/\bgroup\b/i.test(l))out=nm(l).slice(0,40)+'\t/channels/@me/'+id+'\t'+n});return out})()";
     private const string DcOpen = @"(function(h){var a=document.querySelector('a[href=""'+h+'""]')||document.querySelector('[data-list-item-id=""guildsnav___'+h.split('/').pop()+'""]');if(a){a.click();return 'ok'}history.pushState(null,'',h);dispatchEvent(new PopStateEvent('popstate'));return 'ok'})";
     // The newest messages in that chat from whoever sent the last one (up to 3), with their name first. 'mine' when it was them.
     private const string DcRead = @"(function(h){if(location.pathname!==h)return 'wait';var L=[].slice.call(document.querySelectorAll('li[id^=chat-messages-]'));if(!L.length)return 'wait';var au=function(li){for(var x=li;x;x=x.previousElementSibling){var u=x.querySelector&&x.querySelector('[id^=message-username-]');if(u)return (u.innerText||'').trim()}return ''},A=au(L[L.length-1]),me=document.querySelector('[class*=panelTitleContainer],section[class*=panels] [class*=nameTag] [class*=title]'),out=[];if(me&&(me.innerText||'').trim().split('\n')[0]===A)return 'mine';for(var i=L.length-1;i>=0&&out.length<3;i--){if(au(L[i])!==A)break;var c=document.getElementById('message-content-'+L[i].id.split('-').pop()),t=c?(c.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(L[i].querySelector('img,video,[class*=attachment],[class*=imageWrapper]')?'[media]':'[other]'))}return A.slice(0,40)+'\n'+out.join('\n')})";
+    private const string DcState = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return 'wait';if(/^\/(login|register)/.test(location.pathname))return 'login';return document.querySelector('a[href^=""/channels/@me/""],[data-list-item-id^=guildsnav___]')?'ready':'wait'})()";
+    private const string WaState = @"(function(){if(location.hostname!=='web.whatsapp.com')return 'wait';if(document.getElementById('pane-side'))return 'ready';return document.querySelector('canvas,[data-ref]')?'login':'wait'})()";
+    // Where the chat's message box is on the screen (in screen pixels), for the picture of a typed reply.
+    private const string BoxRect = @"(function(w){var b=w?document.querySelector('#main footer'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return '';b=w?b:(b.closest('form')||b.parentElement);var r=b.getBoundingClientRect(),d=devicePixelRatio||1,g=document.createRange(),e=w?b.querySelector('[contenteditable=true]')||b:b.querySelector('[role=textbox]')||b;g.selectNodeContents(e);var q=g.getBoundingClientRect(),wd=Math.min(r.width,Math.max(260,q.right-r.left+28));return [r.left,r.top,wd,r.height].map(function(v){return Math.round(v*d)}).join(',')})";
     private const string DcNow = @"(function(){return /(^|\.)discord\.com$/.test(location.hostname)?location.pathname:''})()";
     // Who's messaged them on WhatsApp: the first unread chat that isn't muted, as name, name and how many.
     private const string WaUnread = @"(function(){if(location.hostname!=='web.whatsapp.com')return '';var p=document.getElementById('pane-side');if(!p)return '';var R=p.querySelectorAll('[role=listitem]');if(!R.length)R=p.querySelectorAll('[role=row]');for(var i=0;i<R.length;i++){var r=R[i],b=r.querySelector('[aria-label*=unread i]');if(!b)[].some.call(r.querySelectorAll('span'),function(x){var u=getComputedStyle(x.parentElement);if(!x.children.length&&/^\d{1,4}$/.test(x.textContent.trim())&&u.backgroundColor.indexOf('0, 0, 0, 0')<0&&u.borderRadius!=='0px'){b=x;return true}});if(!b||r.querySelector('[data-icon*=muted]'))continue;var t=r.querySelector('span[title]'),name=t?t.getAttribute('title').trim():'';if(name)return name.slice(0,40)+'\t'+name.slice(0,80)+'\t'+(parseInt((b.textContent||'').replace(/\D/g,''),10)||1)}return ''})()";
@@ -698,8 +727,12 @@ public class CapriInternalBrowser : ICapriMod
     private const string ChatBox = @"(function(w,act){var b=w?document.querySelector('#main footer [contenteditable=true]'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return 'none';var s=w?[]:b.querySelectorAll('[data-slate-string]'),t=s.length?[].map.call(s,function(x){return x.textContent}).join(' '):(b.innerText||'');if(!w&&!s.length)[].forEach.call(b.querySelectorAll('[data-slate-placeholder]'),function(p){t=t.replace(p.innerText,'')});t=t.replace(/[\u200b\ufeff]/g,'').replace(/\s+/g,' ').trim();if(act=='text')return t;b.focus();if(act=='clear'){document.execCommand('selectAll');document.execCommand('delete');return 'ok'}return t?'busy':'empty'})";
 
     // Every few seconds (and when they ask): anything new in their Discord or WhatsApp tab they haven't been asked about?
-    internal void CheckMessages(bool asked)
+    internal void CheckMessages(bool asked) { CheckMessages(asked, null); }
+
+    // When asked and the site isn't open, it opens out of sight and she waits for it to load (or finds they're signed out).
+    internal void CheckMessages(bool asked, string only)
     {
+        ExpireTyped();
         if (checking) return;
         checking = true;
         ThreadPool.QueueUserWorkItem(delegate
@@ -709,10 +742,23 @@ public class CapriInternalBrowser : ICapriMod
                 bool any = false, told = false;
                 foreach (string site in new[] { "Discord", "WhatsApp" })
                 {
+                    if ((only != null && site != only) || !Flag(site == "Discord" ? "readdiscord" : "readwhatsapp", false)) continue;
                     Tab t = null;
                     bool looking = false;
                     InBrowser(delegate(Browser b) { t = b.ChatTab(site); looking = t != null && b.Looking(t); return null; });
+                    if (t == null && asked)
+                    {
+                        InBrowser(delegate(Browser b) { b.OpenTab(null, site == "Discord" ? "https://discord.com/channels/@me" : "https://web.whatsapp.com/", false); return null; });
+                        for (int i = 0; t == null && i < 20; i++) { Thread.Sleep(500); InBrowser(delegate(Browser b) { t = b.ChatTab(site); return null; }); }
+                    }
                     if (t == null) continue;
+                    if (asked)
+                    {
+                        string state = "wait";
+                        for (int i = 0; i < 30 && state == "wait"; i++) { state = InTab(t, site == "Discord" ? DcState : WaState) ?? "gone"; if (state == "wait") Thread.Sleep(500); }
+                        if (state == "login") { Tell("You're not signed in to " + (site == "Discord" ? "Discord" : "WhatsApp Web") + " in Capri Browser yet, choom. Sign in on its tab and ask me again."); told = true; continue; }
+                        if (state != "ready") { Tell((site == "Discord" ? "Discord" : "WhatsApp Web") + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
+                    }
                     any = true;
                     string[] p = (InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "").Split('\t');
                     if (p.Length != 3) continue;
@@ -731,7 +777,7 @@ public class CapriInternalBrowser : ICapriMod
                     told = true;
                     break;
                 }
-                if (asked && !told) Tell(any ? "No new messages, choom." : "Open Discord or WhatsApp Web in Capri Browser and sign in there, and I'll keep an eye on it for you.");
+                if (asked && !told) Tell(any ? (only == "Discord" ? "No new Discord messages, choom." : only == "WhatsApp" ? "No new WhatsApp messages, choom." : "No new messages, choom.") : "Open Discord or WhatsApp Web in Capri Browser and sign in there, and I'll keep an eye on it for you.");
             }
             catch (Exception error) { Note("messages: " + error.Message); }
             finally { checking = false; }
@@ -741,8 +787,10 @@ public class CapriInternalBrowser : ICapriMod
     // Says who it's from and asks, unless she's already waiting on an answer from them.
     private bool MessageIn(ChatAt chat)
     {
-        lock (gate) if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil)) return false;
-        Card(chat, "", "Say yes and I'll read it out.");
+        lock (gate) if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil) || typedChat != null) return false;
+        // Auto read-out: straight to reading it, with her box showing.
+        if (Flag("autoread", false)) { Card(chat, "New message from " + chat.Who + "...", "Reading it out."); Tell(ReadChat(chat)); return true; }
+        Card(chat, "New " + chat.Site + " message from " + chat.Who + ". Want me to read it?", "Say yes and I'll read it out.");
         Tell(Ask("New " + chat.Site + " message from " + chat.Who + ", choom. Want me to read it?", delegate { return ReadChat(chat); }));
         return true;
     }
@@ -754,24 +802,24 @@ public class CapriInternalBrowser : ICapriMod
         string got = InTab(chat.Tab, (dc ? DcOpen : WaOpen) + "(" + Quote(chat.Id) + ")");
         string said = null;
         for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, (dc ? DcRead : WaRead) + "(" + Quote(chat.Id) + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
-        if (said == "mine") { Card(chat, "", "You've already answered this one."); return "Looks like you've already answered that one, choom."; }
-        if (string.IsNullOrEmpty(said) || said == "wait") { Card(chat, "", "Couldn't open it. Click here to see the chat."); return "I couldn't open that chat, choom. It's in your " + chat.Site + " tab."; }
+        if (said == "mine") { Card(chat, "Looks like you've already answered this one.", ""); return "Looks like you've already answered that one, choom."; }
+        if (string.IsNullOrEmpty(said) || said == "wait") { Card(chat, "I couldn't open that chat.", "Click here to see it."); return "I couldn't open that chat, choom. It's in your " + chat.Site + " tab."; }
         string[] lines = said.Split('\n');
         string from = Clean(lines[0], 40);
         if (from.Length == 0 || Regex.IsMatch(from, @"^[+\d\s()-]+$")) from = chat.Who;
         List<string> parts = new List<string>();
         string raw = "";
         for (int i = 1; i < lines.Length; i++) { raw += lines[i] + "\n"; parts.Add(lines[i] == "[media]" ? "(sent a picture, video or voice note)" : lines[i] == "[other]" ? "(sent something I can't read out)" : Clip(Regex.Replace(Regex.Replace(lines[i], @"https?://\S+|www\.\S+", "(a link)"), @"\s+", " ").Trim(), 300)); }
-        if (LoginCode.IsMatch(raw)) { Card(chat, "(Hidden: it looks like a login code.)", "Click here to see it in the chat."); return "That one looks like a login code, choom, so I won't read it out. Click the box if you want to see it."; }
+        if (LoginCode.IsMatch(raw)) { Card(chat, "That one looks like a login code, so I won't read it out.", "Click here to see it in the chat."); return "That one looks like a login code, choom, so I won't read it out. Click the box if you want to see it."; }
         string text = Clip(string.Join(" ", parts.ToArray()), 450);
-        Card(chat, text, "Want to reply? Say yes or no.");
+        Card(chat, from + " says: " + text, "Want to reply? Say yes or no.");
         return Ask(from + " says: " + text + " ... Want to reply?", delegate { return StartReply(chat); });
     }
 
     private string StartReply(ChatAt chat)
     {
         lock (gate) { replying = chat; replyUntil = Now().AddSeconds(60); }
-        Card(chat, null, "Listening for your reply...");
+        Card(chat, "What do you want to say to " + chat.Who + "?", "Listening for your reply...");
         return "What do you want to say to " + chat.Who + "?";
     }
 
@@ -781,20 +829,21 @@ public class CapriInternalBrowser : ICapriMod
         ChatAt chat;
         lock (gate) { chat = replying != null && Now() <= replyUntil ? replying : null; replying = null; }
         if (chat == null) return false;
-        if (No.IsMatch(said) || StopReply.IsMatch(said)) { Card(chat, null, "No reply sent."); Tell("Okay, no reply, choom."); return true; }
+        if (No.IsMatch(said) || StopReply.IsMatch(said)) { Card(chat, "Okay, no reply.", ""); Tell("Okay, no reply, choom."); return true; }
         string text = Regex.Replace(said, @"^(?:say|tell\s+(?:them|him|her)|reply(?:\s+with)?|send|write)\s+(?:that\s+|back\s+)?", "", Plain).Trim();
         if (text.Length == 0) { lock (gate) { replying = chat; replyUntil = Now().AddSeconds(60); } Tell("What should I say, choom?"); return true; }
         text = Clip(Regex.Replace(text, @"\s+", " "), 500);
-        Card(chat, null, "Say yes to send: \u201c" + text + "\u201d");
-        Tell(Ask("I'll send \"" + text + "\" to " + chat.Who + " on " + chat.Site + ". Say yes to send it, or no to cancel.", delegate { return SendReply(chat, text); }));
+        Card(chat, "Typing it to " + chat.Who + "...", "\u201c" + text + "\u201d");
+        ThreadPool.QueueUserWorkItem(delegate { Tell(TypeReply(chat, text)); });
         return true;
     }
 
-    // Types it into that same chat and presses Enter, only if the chat's still open there and its message box was empty.
-    private string SendReply(ChatAt chat, string text)
+    // Types it into that same chat (only if the chat's still open there and its box was empty), shows a picture of it in her
+    // box and asks before sending. Nothing is sent here.
+    private string TypeReply(ChatAt chat, string text)
     {
         bool dc = chat.Site == "Discord";
-        string w = dc ? "0" : "1", not = "so I didn't send it, choom.", fail = null, typed = "";
+        string w = dc ? "0" : "1", not = "so I didn't type it, choom.", fail = null, typed = "";
         string now = InTab(chat.Tab, dc ? DcNow : WaNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, " + not;
         else if (now != chat.Id) fail = "That chat isn't open in your " + chat.Site + " tab any more, " + not;
@@ -818,6 +867,25 @@ public class CapriInternalBrowser : ICapriMod
             if (typed.Length > 0) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
             fail = "It didn't type in right, " + not;
         }
+        if (fail != null) { Card(chat, "I couldn't type that.", "Nothing was sent."); return fail; }
+        CardShot(BoxShot(chat) ?? DrawnBox(text, dc));
+        lock (gate) { typedChat = chat; typedText = text; typedUntil = Now().AddMinutes(2); }
+        Card(chat, "I typed this to " + chat.Who + ". Want me to send it?", "Say yes to send it, or no and I'll delete it.");
+        string question = Ask("I've typed \"" + text + "\" to " + chat.Who + ". Want me to send it?", delegate { return PressSend(chat, text); });
+        lock (gate) { pendNoFor = pend; pendNo = delegate { Tell(Untype(chat, text, "Okay, I deleted it. Nothing was sent, choom.")); }; }
+        return question;
+    }
+
+    // On their yes: presses Enter, only if it's the same chat and the box still holds exactly what she typed.
+    private string PressSend(ChatAt chat, string text)
+    {
+        bool dc = chat.Site == "Discord";
+        string w = dc ? "0" : "1", fail = null;
+        lock (gate) { typedChat = null; pendNo = null; pendNoFor = null; }
+        string now = InTab(chat.Tab, dc ? DcNow : WaNow);
+        if (now == null) fail = "Your " + chat.Site + " tab's closed, so I didn't send it, choom.";
+        else if (now != chat.Id) fail = "That chat isn't open any more, so I didn't send it, choom.";
+        else if (Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() != text) fail = "What's in the box changed, so I left it for you to send, choom.";
         if (fail == null)
         {
             TabCdp(chat.Tab, "Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"text\":\"\\r\"}");
@@ -825,8 +893,91 @@ public class CapriInternalBrowser : ICapriMod
             Thread.Sleep(1200);
             if ((InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "").Length > 0) fail = "I pressed send, but it's still sitting in the box. Have a look, choom.";
         }
-        Card(chat, null, fail == null ? "Sent \u2713  \u201c" + text + "\u201d" : "Not sent.");
+        CardShot(null);
+        Card(chat, fail == null ? "Sent it to " + chat.Who + ". \u2713" : "Not sent.", fail == null ? "\u201c" + text + "\u201d" : "");
         return fail ?? "Sent it to " + chat.Who + ", choom.";
+    }
+
+    // Deletes a reply she typed (only if the box still holds just that), and the picture of it.
+    private string Untype(ChatAt chat, string text, string line)
+    {
+        lock (gate) { if (typedChat == chat) typedChat = null; }
+        bool dc = chat.Site == "Discord";
+        string w = dc ? "0" : "1";
+        if (InTab(chat.Tab, dc ? DcNow : WaNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
+        CardShot(null);
+        Card(chat, "Deleted it. Nothing was sent.", "");
+        return line;
+    }
+
+    // No answer within 2 minutes: the typed reply is deleted.
+    private void ExpireTyped()
+    {
+        ChatAt chat;
+        string text;
+        lock (gate)
+        {
+            if (typedChat == null || Now() <= typedUntil) return;
+            chat = typedChat; text = typedText; typedChat = null;
+            if (pendNoFor == pend) pend = null;
+            pendNo = null; pendNoFor = null;
+        }
+        ThreadPool.QueueUserWorkItem(delegate { Untype(chat, text, null); });
+    }
+
+    // A picture of the chat's message box with her typing in it, kept only in memory. Null if the page couldn't be pictured.
+    private Bitmap BoxShot(ChatAt chat)
+    {
+        string[] r = (InTab(chat.Tab, BoxRect + "(" + (chat.Site == "Discord" ? "0" : "1") + ")") ?? "").Split(',');
+        int x, y, wide, high;
+        if (r.Length != 4 || !int.TryParse(r[0], out x) || !int.TryParse(r[1], out y) || !int.TryParse(r[2], out wide) || !int.TryParse(r[3], out high) || wide < 40 || high < 10) return null;
+        Bitmap all = null;
+        bool late = false;
+        object hold = new object();
+        using (ManualResetEvent done = new ManualResetEvent(false))
+        {
+            InBrowser(delegate(Browser b) { if (b.Has(chat.Tab) && b.InFront(chat.Tab)) chat.Tab.Viewer.Grab(delegate(Bitmap got) { lock (hold) { if (late) { if (got != null) got.Dispose(); } else { all = got; done.Set(); } } }); else done.Set(); return null; });
+            done.WaitOne(3000);
+            lock (hold) late = true;
+        }
+        if (all == null) return null;
+        try
+        {
+            Rectangle part = Rectangle.Intersect(new Rectangle(x, y, wide, high), new Rectangle(0, 0, all.Width, all.Height));
+            if (part.Width < 40 || part.Height < 10) return null;
+            Bitmap box = all.Clone(part, all.PixelFormat);
+            // A tab out of sight can come back blank: one colour all over isn't worth showing.
+            Color first = box.GetPixel(0, 0);
+            bool flat = true;
+            for (int i = 1; i < 40 && flat; i++) if (box.GetPixel(i * (box.Width - 1) / 40, i * (box.Height - 1) / 40) != first) flat = false;
+            if (flat) { box.Dispose(); return null; }
+            return box;
+        }
+        finally { all.Dispose(); }
+    }
+
+    // A lookalike of the chat's message box with her typing in it, for when the page itself can't be pictured.
+    private static Bitmap DrawnBox(string text, bool dc)
+    {
+        using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 11f))
+        {
+            Size need = TextRenderer.MeasureText(text, font, new Size(330, 400), TextFormatFlags.WordBreak);
+            Bitmap pic = new Bitmap(Math.Max(260, need.Width + 32), Math.Min(220, need.Height + 24));
+            using (Graphics g = Graphics.FromImage(pic))
+            {
+                g.Clear(dc ? Color.FromArgb(49, 51, 56) : Color.FromArgb(17, 27, 33));
+                using (SolidBrush box = new SolidBrush(dc ? Color.FromArgb(56, 58, 64) : Color.FromArgb(42, 57, 66))) g.FillRectangle(box, 4, 4, pic.Width - 8, pic.Height - 8);
+                TextRenderer.DrawText(g, text, font, new Rectangle(16, 12, pic.Width - 28, pic.Height - 16), Color.FromArgb(242, 243, 245), TextFormatFlags.WordBreak);
+            }
+            return pic;
+        }
+    }
+
+    private void CardShot(Image shot)
+    {
+        Browser b = open;
+        if (b != null && !b.IsDisposed && b.IsHandleCreated) b.Post(delegate { b.ChatShot(shot); });
+        else if (shot != null) shot.Dispose();
     }
 
     // Plain words from a page: no control characters, one line, cut short.
@@ -7361,7 +7512,7 @@ public class CapriInternalBrowser : ICapriMod
             {
                 StringBuilder rows = new StringBuilder();
                 for (int i = 0; i < ExtraList.GetLength(0); i++)
-                    if (ExtraList[i, 3] == group) rows.Append(Row(ExtraList[i, 1], null, Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
+                    if (ExtraList[i, 3] == group) rows.Append(Row(ExtraList[i, 1], ExtraAbout(ExtraList[i, 0]), Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
                 return rows.ToString();
             };
 
@@ -9686,70 +9837,130 @@ public class CapriInternalBrowser : ICapriMod
         }
         private bool Watched(Tab t) { return t == ChatTab("Discord") || t == ChatTab("WhatsApp"); }
         internal bool Has(Tab t) { return t != null && tabs.Contains(t) && !t.Private; }
+        internal bool InFront(Tab t) { Form f = FindForm(); return t == tab && f != null && f.Visible && f.WindowState != FormWindowState.Minimized; }
         internal void Show(Tab t) { if (Has(t)) Select(t); }
         internal bool Looking(Tab t) { Form f = FindForm(); return t == tab && f != null && f.Visible && f.WindowState != FormWindowState.Minimized && Form.ActiveForm == f; }
 
         private Panel chatCard;
-        private Label chatHead, chatBody, chatState;
+        private Label chatWho, chatHead, chatBody, chatState;
+        private PictureBox chatShot;
         private ChatAt chatFor;
         private DateTime chatShownAt;
         private bool chatMoves;
+        private string chatFull = "";
+        private int chatShown;
+        private System.Windows.Forms.Timer chatType;
+        private static readonly Color HoloCyan = Color.FromArgb(94, 240, 246), HoloDim = Color.FromArgb(62, 150, 160), HoloRed = Color.FromArgb(232, 66, 70), HoloInk = Color.FromArgb(9, 12, 18);
+        private const int ChatWide = 340;
 
-        // The small live box at the top left of the page: who, what they said once she's read it, and where the reply's at.
-        // A click on it brings that chat's tab to the front. It goes after a minute without news.
+        // Her box's outline: cut corners top left and bottom right, like Holocall's.
+        private static Point[] HoloEdge(int w, int h) { return new[] { new Point(12, 0), new Point(w - 1, 0), new Point(w - 1, h - 13), new Point(w - 13, h - 1), new Point(0, h - 1), new Point(0, 12) }; }
+
+        // Her box under her hologram: who it's about, then "CAPRI: ..." typed out in cyan with a blinking block, a picture of a
+        // typed reply when there is one, and where things are at. A click brings that chat's tab to the front.
         internal void ChatCard(ChatAt chat, string text, string state)
         {
-            Look look = mod.look;
             chatFor = chat;
             chatShownAt = DateTime.UtcNow;
             if (chatCard == null || chatCard.IsDisposed)
             {
-                Panel c = new Panel { Width = 300, Height = 64, BackColor = look.Shade(1), Cursor = Cursors.Hand };
-                c.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(look.Shade(4))) e.Graphics.DrawRectangle(line, 0, 0, c.Width - 1, c.Height - 1); using (SolidBrush bar = new SolidBrush(look.Shade(5))) e.Graphics.FillRectangle(bar, 0, 0, 3, c.Height); };
-                chatHead = new Label { Left = 14, Top = 10, Width = 246, Height = 20, ForeColor = look.Shade(5), BackColor = look.Shade(1), Font = new System.Drawing.Font(UiBold, 10f), AutoEllipsis = true, UseMnemonic = false };
-                chatBody = new Label { Left = 14, Top = 34, Width = 272, ForeColor = look.Shade(2), BackColor = look.Shade(1), Font = new System.Drawing.Font(Ui, 10f), AutoEllipsis = true, UseMnemonic = false };
-                chatState = new Label { Left = 14, Width = 272, ForeColor = look.Shade(3), BackColor = look.Shade(1), Font = new System.Drawing.Font(Ui, 9f), AutoEllipsis = true, UseMnemonic = false };
-                Label x = new Label { Text = "\uE711", Left = 268, Top = 10, Width = 22, Height = 22, ForeColor = look.Shade(3), BackColor = look.Shade(1), Font = new System.Drawing.Font("Segoe MDL2 Assets", 9f), Cursor = Cursors.Hand };
-                foreach (Control part in new Control[] { c, chatHead, chatBody, chatState }) part.Click += delegate { if (chatFor != null) Show(chatFor.Tab); CloseChatCard(); };
+                Panel c = new Panel { Width = ChatWide, Height = 90, BackColor = HoloInk, Cursor = Cursors.Hand };
+                c.Paint += delegate(object sender, PaintEventArgs e)
+                {
+                    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (Pen line = new Pen(HoloCyan, 1.6f)) e.Graphics.DrawPolygon(line, HoloEdge(c.Width, c.Height));
+                    using (SolidBrush bar = new SolidBrush(HoloRed)) e.Graphics.FillRectangle(bar, 12, 30, 3, c.Height - 44);
+                };
+                c.Resize += delegate { using (System.Drawing.Drawing2D.GraphicsPath shape = new System.Drawing.Drawing2D.GraphicsPath()) { Point[] p = HoloEdge(c.Width + 1, c.Height + 1); shape.AddPolygon(p); c.Region = new Region(shape); } c.Invalidate(); };
+                System.Drawing.Font mono = new System.Drawing.Font("Consolas", 10.5f), small = new System.Drawing.Font("Consolas", 8.5f);
+                chatWho = new Label { Left = 22, Top = 9, Width = ChatWide - 60, Height = 16, ForeColor = HoloDim, BackColor = HoloInk, Font = small, AutoEllipsis = true, UseMnemonic = false };
+                chatHead = new Label { Text = "CAPRI:", Left = 24, Top = 30, AutoSize = true, Padding = Padding.Empty, Margin = Padding.Empty, ForeColor = HoloRed, BackColor = HoloInk, Font = new System.Drawing.Font("Consolas", 10.5f, FontStyle.Bold), UseMnemonic = false };
+                chatBody = new Label { Left = 24, Top = 30, Width = ChatWide - 44, ForeColor = HoloCyan, BackColor = HoloInk, Font = mono, UseMnemonic = false };
+                chatShot = new PictureBox { Left = 24, Width = ChatWide - 44, Height = 0, SizeMode = PictureBoxSizeMode.Zoom, BackColor = HoloInk, Visible = false };
+                chatState = new Label { Left = 24, Width = ChatWide - 44, ForeColor = HoloDim, BackColor = HoloInk, Font = small, UseMnemonic = false };
+                Label x = new Label { Text = "\uE711", Left = ChatWide - 32, Top = 7, Width = 20, Height = 20, ForeColor = HoloDim, BackColor = HoloInk, Font = new System.Drawing.Font("Segoe MDL2 Assets", 8f), Cursor = Cursors.Hand };
+                foreach (Control part in new Control[] { c, chatWho, chatHead, chatBody, chatState, chatShot }) part.Click += delegate { if (chatFor != null) Show(chatFor.Tab); CloseChatCard(); };
                 x.Click += delegate { CloseChatCard(); };
-                c.Controls.AddRange(new Control[] { chatHead, chatBody, chatState, x });
+                c.Controls.AddRange(new Control[] { x, chatHead, chatWho, chatBody, chatShot, chatState });
                 chatCard = c;
                 Controls.Add(c);
                 c.BringToFront();
-                Point at = ChatSpot();
-                c.Top = at.Y;
-                c.Left = at.X - 30;
-                Ease(c, 220, delegate(float e) { c.Left = at.X - 30 + (int)(30 * e); }, null);
-                System.Windows.Forms.Timer away = new System.Windows.Forms.Timer { Interval = 2000 };
-                away.Tick += delegate
+                // Typed out a couple of letters at a time, then the block blinks.
+                chatType = new System.Windows.Forms.Timer { Interval = 22 };
+                chatType.Tick += delegate
                 {
-                    if (c.IsDisposed || chatCard != c) { away.Dispose(); return; }
-                    if ((DateTime.UtcNow - chatShownAt).TotalSeconds > 60 && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) { away.Dispose(); CloseChatCard(); }
+                    if (c.IsDisposed || chatCard != c) { chatType.Dispose(); return; }
+                    if (chatShown < chatFull.Length) chatShown = Math.Min(chatFull.Length, chatShown + 2);
+                    else chatType.Interval = 480;
+                    bool blink = chatShown < chatFull.Length || DateTime.Now.Millisecond < 500;
+                    chatBody.Text = "       " + chatFull.Substring(0, chatShown) + (blink ? "\u2588" : " ");
+                    if ((DateTime.UtcNow - chatShownAt).TotalSeconds > 150 && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) CloseChatCard();
                 };
-                away.Start();
-                if (!chatMoves) { chatMoves = true; Resize += delegate { if (chatCard != null && !chatCard.IsDisposed) { Point p = ChatSpot(); chatCard.Left = p.X; chatCard.Top = p.Y; } }; }
+                chatType.Start();
+                if (!chatMoves) { chatMoves = true; Resize += delegate { if (chatCard != null && !chatCard.IsDisposed) PlaceChatCard(false); }; }
+                PlaceChatCard(true);
             }
-            chatHead.Text = chat.Site.ToUpperInvariant() + "  \u00b7  " + chat.Who;
-            if (text != null) chatBody.Text = text;
+            chatWho.Text = (chat.Site + "  \u00b7  " + chat.Who).ToUpperInvariant();
+            if (text != null && text != chatFull) { chatFull = text; chatShown = 0; chatType.Interval = 22; }
             if (state != null) chatState.Text = state;
-            chatBody.Visible = chatBody.Text.Length > 0;
-            chatBody.Height = chatBody.Visible ? Math.Min(120, TextRenderer.MeasureText(chatBody.Text, chatBody.Font, new Size(chatBody.Width, 1000), TextFormatFlags.WordBreak).Height + 2) : 0;
-            chatState.Top = chatBody.Visible ? chatBody.Bottom + 6 : 34;
-            chatState.Height = Math.Min(54, TextRenderer.MeasureText(chatState.Text.Length == 0 ? " " : chatState.Text, chatState.Font, new Size(chatState.Width, 1000), TextFormatFlags.WordBreak).Height + 2);
-            chatCard.Height = chatState.Bottom + 10;
-            chatCard.Invalidate();
-            chatCard.BringToFront();
+            LayOutChatCard();
         }
 
-        private Point ChatSpot() { Point at = PointToClient(holder.PointToScreen(Point.Empty)); return new Point(at.X + (side.Visible && side.Parent == holder ? side.Width : 0) + 14, at.Y + 14); }
+        // A picture of a typed reply in her box, or none. The old picture is thrown away.
+        internal void ChatShot(Image shot)
+        {
+            if (chatShot == null || chatShot.IsDisposed) { if (shot != null) shot.Dispose(); return; }
+            Image old = chatShot.Image;
+            chatShot.Image = shot;
+            chatShot.Visible = shot != null;
+            int wide = shot == null ? ChatWide : 440;
+            if (chatCard.Width != wide) { chatCard.Width = wide; foreach (Control part in new Control[] { chatWho, chatBody, chatState, chatShot }) part.Width = wide - (part == chatWho ? 60 : 44); foreach (Control part in chatCard.Controls) if (part.Text == "") part.Left = wide - 32; }
+            chatShot.Height = shot == null ? 0 : Math.Min(200, Math.Max(28, (int)(shot.Height * Math.Min(1.7f, chatShot.Width / (float)Math.Max(1, shot.Width)))));
+            if (old != null) old.Dispose();
+            LayOutChatCard();
+        }
+
+        private void LayOutChatCard()
+        {
+            if (chatCard == null || chatCard.IsDisposed) return;
+            int body = TextRenderer.MeasureText("       " + chatFull + "\u2588", chatBody.Font, new Size(chatBody.Width, 1000), TextFormatFlags.WordBreak).Height + 2;
+            chatBody.Height = Math.Min(160, body);
+            chatShot.Top = chatBody.Bottom + 6;
+            chatState.Visible = chatState.Text.Length > 0;
+            chatState.Top = (chatShot.Visible ? chatShot.Bottom : chatBody.Bottom) + 6;
+            chatState.Height = chatState.Visible ? Math.Min(48, TextRenderer.MeasureText(chatState.Text, chatState.Font, new Size(chatState.Width, 1000), TextFormatFlags.WordBreak).Height + 2) : 0;
+            chatCard.Height = (chatState.Visible ? chatState.Bottom : chatShot.Visible ? chatShot.Bottom : chatBody.Bottom) + 14;
+            chatCard.Invalidate();
+            chatCard.BringToFront();
+            PlaceChatCard(false);
+        }
+
+        // Under her hologram (wherever Settings puts it), or just above it when it's at the bottom. Always inside the page.
+        private void PlaceChatCard(bool slide)
+        {
+            Panel c = chatCard;
+            if (c == null || c.IsDisposed) return;
+            Point holo = PointToClient(HoloSpot()), page = PointToClient(holder.PointToScreen(Point.Empty));
+            int hw = holoWide > 0 ? holoWide : 260, hh = holoHigh > 0 ? holoHigh : 200;
+            string at = holoAt ?? Kept("holospot");
+            int left = page.X + (side.Visible && side.Parent == holder ? side.Width : 0) + 10, right = page.X + holder.Width - c.Width - 10;
+            int x = Math.Max(left, Math.Min(right, holo.X + (hw - c.Width) / 2));
+            int y = at.StartsWith("b", StringComparison.Ordinal) ? holo.Y - c.Height - 10 : holo.Y + hh + 10;
+            y = Math.Max(page.Y + 10, Math.Min(page.Y + holder.Height - c.Height - 10, y));
+            c.Left = x;
+            if (!slide) { c.Top = y; return; }
+            c.Top = y + 16;
+            Ease(c, 220, delegate(float e) { c.Top = y + 16 - (int)(16 * e); }, null);
+        }
 
         private void CloseChatCard()
         {
             Panel c = chatCard;
             chatCard = null;
             if (c == null || c.IsDisposed) return;
-            int from = c.Left;
-            Ease(c, -160, delegate(float e) { c.Left = from - (int)((c.Width + from + 10) * e); }, delegate { Controls.Remove(c); c.Dispose(); });
+            if (chatShot != null && chatShot.Image != null) { Image old = chatShot.Image; chatShot.Image = null; old.Dispose(); }
+            int from = c.Top;
+            Ease(c, -160, delegate(float e) { c.Top = from + (int)(16 * e); }, delegate { Controls.Remove(c); c.Dispose(); });
         }
 
         // Now and then (about one block in three, at most once every 2 minutes) she reacts out loud. A setting turns it off.
@@ -10000,13 +10211,27 @@ public class CapriInternalBrowser : ICapriMod
         // Settings open as a page of their own.
         internal bool SettingsShown { get { return false; } set { if (value) WebSettings(); } }
 
+        // The line under a setting saying what it does, for the ones that need one.
+        private static string ExtraAbout(string key)
+        {
+            switch (key)
+            {
+                case "readdiscord": return "Tells you when someone messages you directly (not servers or groups) and reads it out on your yes. Ask “any new Discord messages?” any time. Sign in to Discord in Capri Browser once.";
+                case "readwhatsapp": return "Tells you who messaged you and reads it out on your yes. Ask “anything on WhatsApp?” any time. Sign in to WhatsApp Web in Capri Browser once.";
+                case "autoread": return "New messages are read straight out, with her box under her hologram, instead of her asking first. Replies still wait for your yes.";
+                case "discordmsg": return "Say “message Alex on Discord saying ...”. She types it and asks before sending.";
+                default: return null;
+            }
+        }
+
         // Key, words, on by default, and the part of Settings it shows in.
         private static readonly string[,] ExtraList =
         {
             { "control", "Takeover animation", "1", "capri" },
-            { "discordmsg", "Message via Discord in the browser (asks before sending)", "0", "discord" },
-            { "readdiscord", "New Discord messages: tell me, and read them out on my yes (Discord open in a tab here)", "0", "discord" },
-            { "readwhatsapp", "New WhatsApp messages: tell me, and read them out on my yes (WhatsApp Web open in a tab here)", "0", "discord" },
+            { "readdiscord", "Reads new Discord direct messages", "0", "discord" },
+            { "readwhatsapp", "Reads new WhatsApp messages", "0", "discord" },
+            { "autoread", "Auto read-out messages", "0", "discord" },
+            { "discordmsg", "Sends Discord messages for you", "0", "discord" },
             { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0", "video" },
             { "mouse", "Move the real mouse when Capri does things on a page", "1", "capri" },
             { "catchup", "Catch me up when I come back to a tab that changed", "1", "tabs" },
@@ -11358,6 +11583,7 @@ public class CapriInternalBrowser : ICapriMod
         public virtual System.Threading.Tasks.Task<string> Cdp(string method, string json) { return null; }
         public virtual object Core { get { return null; } }
         public virtual void Shot(string file, Action<string> done) { done("that needs Edge's engine"); }
+        public virtual void Grab(Action<Bitmap> done) { done(null); }
         public virtual bool Muted { get { return false; } set { } }
         public virtual void Privacy(Look look) { }
         // False when there's nothing to clear with; otherwise done gets null or why it failed.
@@ -11974,6 +12200,25 @@ public class CapriInternalBrowser : ICapriMod
         {
             get { return core != null && (bool)Get(core, "IsMuted"); }
             set { if (core != null) Set(core, "IsMuted", value); }
+        }
+
+        // The visible page as a picture, only in memory (never saved).
+        public override void Grab(Action<Bitmap> done)
+        {
+            if (core == null) { done(null); return; }
+            try
+            {
+                MemoryStream saved = new MemoryStream();
+                System.Threading.Tasks.Task run = (System.Threading.Tasks.Task)Call(core, "CapturePreviewAsync", 0, saved);
+                run.ContinueWith(delegate(System.Threading.Tasks.Task finished)
+                {
+                    Bitmap got = null;
+                    try { if (!finished.IsFaulted) { saved.Position = 0; using (Image raw = Image.FromStream(saved)) got = new Bitmap(raw); } } catch (Exception) { }
+                    saved.Dispose();
+                    done(got);
+                });
+            }
+            catch (Exception) { done(null); }
         }
 
         public override void Shot(string file, Action<string> done)
