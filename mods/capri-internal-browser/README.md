@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 1,014 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 1,027 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -112,6 +112,7 @@ The mod itself (not the pages you visit) contacts:
 | raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | The ad blocker lists, voice commands in other languages, games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
 | en.wikipedia.org (or your language's Wikipedia), search.brave.com, www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
 | www.google.com/s2/favicons, github.githubassets.com, and each Speed Dial site | Little site icons for Speed Dial and the sidebar |
+| capri-browser.tobiasprojects77.workers.dev (tob7as's own Cloudflare worker) | Gets the weekly leaderboards and the Featured boxes on the Games page (plain text, shown escaped, and not pinned, since they change without a mod update). Only if you pick a leaderboard name: that name, then your weekly game and browsing counts every 12 hours, and your place when you look it up. And whatever you type into the bug and idea box when you press Send. Nothing else; your IP address is never stored (only a salted hash that changes daily, for rate limits), and Featured can be turned off in Settings |
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
 
 Some games you open from the Games page fetch from graphql.anilist.co, en.wikipedia.org and www.gamerpower.com.
