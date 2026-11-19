@@ -1427,7 +1427,7 @@ public class CapriInternalBrowser : ICapriMod
 
     // The leaderboards' round: a new one every Monday at 00:00 UTC, or when the boards are reset (board.txt says which).
     // The six board numbers are also counted per round, so they start from 0 each round. The all-time ones never reset.
-    internal static readonly string[] RoundStats = { "watchall", "videos", "pages", "survival", "guessbest", "typingbest" };
+    internal static readonly string[] RoundStats = { "watchall", "videos", "pages", "survival", "guessbest", "typingbest", "yt" };
     internal static int RoundNow()
     {
         int known;
@@ -5051,11 +5051,11 @@ public class CapriInternalBrowser : ICapriMod
                 foreach (Tab w in tabs)
                 {
                     if (!w.Playing || w.Muted || w.Private) continue;
-                    Bump("watch" + Week(), 15);
                     Bump("watchall", 15);
-                    if ((w.Address ?? "").Contains("youtube.com")) Bump("yt" + Week(), 15);
+                    if ((w.Address ?? "").Contains("youtube.com")) Bump("yt", 15);
                     break;
                 }
+                foreach (Tab g in tabs) if (g.Special == "games") LiveWeek(g);
             };
             watching.Start();
             System.Windows.Forms.Timer dozing = new System.Windows.Forms.Timer { Interval = 120000 }, later = new System.Windows.Forms.Timer { Interval = 6000 };
@@ -7726,7 +7726,7 @@ public class CapriInternalBrowser : ICapriMod
             int top = 0;
             foreach (KeyValuePair<string, int> p in hosts) if (p.Value > top) { top = p.Value; most = p.Key; }
             int best = Stat("typingbest");
-            mod.Tell("Your week, choom: " + Stat("pages" + Week()) + " pages, " + Took(Stat("watch" + Week())) + " of video" + (most != null ? ", mostly on " + most : "") + ", and " + Stat("wiki" + Week()) + " wiki races finished" + (best > 0 ? ". Best typing speed: " + best + " WPM." : "."));
+            mod.Tell("Your week, choom: " + Stat(RoundKey("pages")) + " pages, " + Took(Stat(RoundKey("watchall"))) + " of video" + (most != null ? ", mostly on " + most : "") + ", and " + Stat("wiki" + Week()) + " wiki races finished" + (best > 0 ? ". Best typing speed: " + best + " WPM." : "."));
         }
 
         // Capri's pick: something related to the last thing they read, from Wikipedia's "more like this".
@@ -7898,6 +7898,23 @@ public class CapriInternalBrowser : ICapriMod
             for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
             html.Append("</div><div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbgames\">Back to Games</a><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbopen\">Open leaderboards</a></div>");
             return html.Append("</div></body></html>").ToString();
+        }
+
+        // This round's numbers for THIS WEEK on the Games page; they start from 0 with each new round.
+        private static string[,] WeekStats()
+        {
+            return new string[,] { { Took(Stat(RoundKey("watchall"))), "watching videos" }, { Took(Stat(RoundKey("yt"))), "of it on YouTube" }, { Stat(RoundKey("videos")).ToString(), "videos finished" },
+                { Stat(RoundKey("pages")).ToString(), "pages visited" }, { Stat(RoundKey("typingbest")) + " WPM", "best typing speed" }, { Stat(RoundKey("survival")).ToString(), "best survival run" },
+                { Stat(RoundKey("guessbest")).ToString(), "best Guess the Site run" } };
+        }
+
+        // Puts the newest THIS WEEK numbers on an open Games page without reloading it.
+        private void LiveWeek(Tab g)
+        {
+            string[,] stats = WeekStats();
+            StringBuilder js = new StringBuilder("(function(v){for(var i=0;i<v.length;i++){var e=document.getElementById('wk'+i);if(e&&e.textContent!=v[i])e.textContent=v[i];}})([");
+            for (int i = 0; i < stats.GetLength(0); i++) js.Append(i > 0 ? "," : "").Append(Quote(stats[i, 0]));
+            try { g.Viewer.Script(js.Append("])").ToString()); } catch (Exception) { }
         }
 
         private void ShowGames()
@@ -8116,7 +8133,7 @@ public class CapriInternalBrowser : ICapriMod
                 guessing = null;
                 Retitle(guessTab, guessTab.Title);
                 if (guessTab == tab) address.Text = guessTab.Address ?? "";
-                if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); Bump("guessbest" + Week(), guessScore, true); } else { guessStreak = 0; guessLives--; }
+                if (right) { guessStreak++; guessScore++; Bump("guess", 1); Bump("guessbest", guessScore, true); } else { guessStreak = 0; guessLives--; }
                 if (guessLives < 1) AutoSend(false);
                 mod.Tell(guessLives < 1 ? "Game over, choom! You got " + guessScore + " right." : right ? (guessStreak > 2 ? guessStreak + " in a row!" : "Got it.") : "Nope. " + guessLives + (guessLives == 1 ? " life" : " lives") + " left.");
                 return;
@@ -8126,7 +8143,6 @@ public class CapriInternalBrowser : ICapriMod
                 int score, best = Stat("survival");
                 int.TryParse(Regex.Match(all, "[&]s=([0-9]+)").Groups[1].Value, out score);
                 Bump("survival", score, true);
-                Bump("survival" + Week(), score, true);
                 AutoSend(false);
                 mod.Tell(score + (score == 1 ? " word" : " words") + " before they got you." + (score > best ? " New best!" : " Your best is " + best + "."));
                 return;
@@ -8481,7 +8497,7 @@ public class CapriInternalBrowser : ICapriMod
         private void Typed(int wpm, int accuracy)
         {
             int best = Stat("typingbest");
-            if (accuracy >= 90) { Bump("typingbest", wpm, true); Bump("typingbest" + Week(), wpm, true); }
+            if (accuracy >= 90) { Bump("typingbest", wpm, true); }
             mod.Tell(wpm + " words per minute at " + accuracy + "% accuracy." + (accuracy < 90 ? " Under 90% accuracy doesn't count for your best, choom." : wpm > best ? " New personal best!" : " Your best is " + best + "."));
         }
 
@@ -8801,8 +8817,8 @@ public class CapriInternalBrowser : ICapriMod
                 .Append(lobby != null ? "<a class=\"bt go\" href=\"" + Own + "play?g=go\">Start 3, 2, 1</a>" : "").Append(lobby != null || race != null ? "<a class=\"bt\" href=\"" + Own + "play?g=cancel\">Cancel race</a>" : "").Append("<a class=\"bt go\" href=\"" + Own + "play?g=level\">Level: " + LevelName(RaceLevel) + "</a>").Append("<a class=\"bt" + (Flag("timed", false) ? " go" : "") + "\" href=\"" + Own + "play?g=timed\">3-minute limit: " + (Flag("timed", false) ? "ON" : "OFF") + "</a>").Append("</div></div>");
             html.Append("</div>").Append(BoardBox());
             html.Append("</div><h1>THIS WEEK <span>&gt;</span></h1><div class=\"row\">");
-            string[,] stats = { { Took(Stat(RoundKey("watchall"))), "watching videos" }, { Took(Stat("yt" + Week())), "of it on YouTube" }, { Stat(RoundKey("videos")).ToString(), "videos finished" }, { Stat(RoundKey("pages")).ToString(), "pages visited" }, { Stat(RoundKey("typingbest")) + " WPM", "best typing speed" }, { Stat(RoundKey("survival")).ToString(), "best survival run" }, { Stat(RoundKey("guessbest")).ToString(), "best Guess the Site run" } };
-            for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
+            string[,] stats = WeekStats();
+            for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\" id=\"wk").Append(i).Append("\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
             html.Append("</div><div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=lballtime\">All-time stats</a></div>");
             html.Append("<h1>ACHIEVEMENTS <span>&gt;</span></h1><div class=\"row\">");
             for (int i = 0; i < Badges.GetLength(0); i++)
@@ -13072,7 +13088,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 Uri went;
                 string risk = Flag("scam", true) && !t.Hidden && Uri.TryCreate(url, UriKind.Absolute, out went) && went.Host != warnedHost ? Scam(went) : null;
                 if (risk != null) { warnedHost = new Uri(url).Host; if (Flag("glitch", true)) t.Viewer.Script(RedGlitch); mod.Tell("Careful, choom: this page looks sketchy, " + risk + ". Don't sign in or pay here unless you're sure."); }
-                if (!t.Private && !t.Hidden) { Bump("pages", 1); Bump("pages" + Week(), 1); if (DateTime.Now.Hour >= 1 && DateTime.Now.Hour < 5) Bump("night", 1, true); }
+                if (!t.Private && !t.Hidden) { Bump("pages", 1); if (DateTime.Now.Hour >= 1 && DateTime.Now.Hour < 5) Bump("night", 1, true); }
                 if (race != null && race.Tab == t) Raced(url);
                 if (Masked(t)) { t.Viewer.Script("document.documentElement.style.filter='blur(18px)'"); Guess(t); }
                 if (t == tab && !adding && !address.Focused) address.Text = url;
@@ -13128,7 +13144,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             };
             v.LoginSeen = delegate(string from, string user, string pass) { OfferSave(t, from, user, pass); };
             v.PasswordBox = delegate(string from) { OfferFill(t, from); };
-            v.Ended = delegate(string title, bool counts) { if (!t.Private && counts) { Bump("videos", 1); Bump("videos" + Week(), 1); } if (!t.Private && !t.Hidden && Flag("react", true)) mod.React(title); };
+            v.Ended = delegate(string title, bool counts) { if (!t.Private && counts) { Bump("videos", 1); } if (!t.Private && !t.Hidden && Flag("react", true)) mod.React(title); };
             v.Opening = delegate(string url) { if (!t.Hidden) Later(delegate { OpenTab(null, url, true); }); };
             v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea|donate|send&k=(bug|idea)&t=[^&#]{0,600}&m=[^&#]{0,12000})$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|hint|studynote&n=[0-9]{1,3}|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
             v.Blocked = delegate(string url)
