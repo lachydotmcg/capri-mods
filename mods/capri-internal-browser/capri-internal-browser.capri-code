@@ -8477,7 +8477,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             string name = Kept("lbname");
             string[] n = BoardWeek();
-            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Top 10s: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown.</div>"
+            return "<h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Top 100s: hours watched, videos finished, sites visited, survival, Guess the Site and typing speed. Only your leaderboard name and those numbers are shown.</div>"
                 + (name.Length > 0 ? "<div class=\"n\" style=\"margin:12px 0 4px;letter-spacing:3px\">" + Esc(name) + "</div>" : "")
                 + "<div class=\"cr\"><input id=\"lb\" maxlength=\"16\" placeholder=\"Leaderboard name\" value=\"" + Esc(name) + "\"><a class=\"bt\" href=\"#\" onclick=\"location.href='" + Own + "play?g=lbname&n='+encodeURIComponent(document.getElementById('lb').value);return false\">"
                 + (name.Length > 0 ? "Change name" : "Add leaderboard name to compete") + "</a>" + (name.Length > 0 ? "<a class=\"bt go\" href=\"" + Own + "play?g=lbsend\">Send my stats</a>" : "") + "<a class=\"bt\" href=\"" + Own + "play?g=lbopen\">Open leaderboards</a></div>"
@@ -8566,7 +8566,7 @@ public class CapriInternalBrowser : ICapriMod
             string changed = DateTime.TryParseExact(updated, "yyyy-MM-dd'T'HH:mm'Z'", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out when) ? when.ToString("ddd d MMM, HH:mm", System.Globalization.CultureInfo.InvariantCulture) : "";
             int left = ((int)DayOfWeek.Monday - (int)DateTime.UtcNow.DayOfWeek + 7) % 7;
             if (left == 0) left = 7;
-            StringBuilder html = Start(look, Styled(2, ".g{max-width:900px;margin:0 auto}.g .b{display:inline-block;margin:4px;padding:12px;border:1px solid %C6%;color:%C2%}", c, null, null) + Styled(4, BoardsBasic, c, null, null));
+            StringBuilder html = Start(look, Styled(2, ".g{max-width:900px;margin:0 auto}.g .b{display:inline-block;margin:4px;padding:12px;border:1px solid %C6%;color:%C2%}", c, null, null) + Styled(4, BoardsBasic, c, null, null) + ".g .lst{max-height:310px;overflow-y:auto;scrollbar-width:thin;padding-right:4px}");
             html.Replace("<head>", "<head><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none';style-src 'unsafe-inline';form-action 'none';base-uri 'none'\">", 0, 60);
             html.Append("<div class=\"g\"><div class=\"top\"><h1>LEADERBOARDS <span>&gt;</span></h1><div class=\"wk\">")
                 .Append("UPDATES <b>EVERY WEEK</b> OR WHEN YOU PRESS <b>SEND MY STATS</b></div></div>")
@@ -8580,8 +8580,9 @@ public class CapriInternalBrowser : ICapriMod
             for (int i = 0; i < Boards.GetLength(0); i++)
             {
                 List<string[]> list = rows[Boards[i, 0]];
-                boards.Append("<div class=\"bd\"><h2>").Append(Boards[i, 1]).Append("<span>TOP 10</span></h2>");
+                boards.Append("<div class=\"bd\"><h2>").Append(Boards[i, 1]).Append("<span>TOP 100</span></h2>");
                 if (list.Count == 0) boards.Append("<div class=\"none\">Nobody yet. Be the first!</div>");
+                else boards.Append("<div class=\"lst\">");
                 bool onTop = false;
                 for (int r = 0; r < list.Count; r++)
                 {
@@ -8590,6 +8591,7 @@ public class CapriInternalBrowser : ICapriMod
                     boards.Append("<div class=\"rw").Append(r < 3 ? " r" + (r + 1) : "").Append(mine ? " me" : "").Append("\"><span class=\"rk\">").Append(r + 1).Append("</span><span class=\"nm\">").Append(Esc(list[r][0]))
                         .Append("</span><span class=\"vl\">").Append(list[r][1]).Append(Boards[i, 2]).Append("</span></div>");
                 }
+                if (list.Count > 0) boards.Append("</div>");
                 string[] at;
                 if (!onTop && places.TryGetValue(Boards[i, 0], out at))
                 {
@@ -8607,7 +8609,7 @@ public class CapriInternalBrowser : ICapriMod
                     .Append(placed.Count > 0 ? string.Join(" &middot; ", placed.ToArray()) + (players > 0 ? " &middot; out of " + players + " player" + (players == 1 ? "" : "s") : "") : "Not on the boards yet. Send your stats to put your numbers up.").Append("</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbsend\">Send my stats</a>").Append(buttons).Append("</div></div>");
             else
                 html.Append("<div class=\"you\"><div class=\"s\">Add a leaderboard name on the Games page to compete. Only your leaderboard name and your numbers show here.</div><div class=\"cr\"><a class=\"bt go\" href=\"").Append(Own).Append("play?g=lbgames\">Go to Games</a>").Append(buttons).Append("</div></div>");
-            html.Append("<h1>TOP 10s <span>&gt;</span></h1>").Append(boards);
+            html.Append("<h1>TOP 100s <span>&gt;</span></h1>").Append(boards);
             if (champs.Count > 0 && false)
             {
                 html.Append("<h1>LAST WEEK'S CHAMPIONS").Append(lastWeek.Length > 0 ? " (WEEK " + lastWeek.Substring(5) + ")" : "").Append(" <span>&gt;</span></h1><div class=\"chs\">");
