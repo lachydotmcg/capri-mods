@@ -7815,6 +7815,79 @@ public class CapriInternalBrowser : ICapriMod
             ShowReader(tab);
         }
 
+        // ---- Featured ----
+        // The worker's featured.txt: up to three boxes, each a title, a line of text and an https link (or none). Anything that
+        // doesn't fit is dropped, and it's only ever shown as escaped text.
+        private List<string[]> Featured()
+        {
+            List<string[]> all = new List<string[]>();
+            foreach (string line in Kept("featured").Split('\n'))
+            {
+                string[] p = line.TrimEnd('\r').Split('\t');
+                if (p.Length != 5 || p[0] != "featured" || !Regex.IsMatch(p[1], "^[1-3]$") || p[2].Trim().Length == 0 || p[2].Length > 40 || p[3].Length > 200) continue;
+                if (p[4].Length > 0 && FeaturedLink(p[4]) == null) continue;
+                all.Add(new[] { p[1], p[2].Trim(), p[3].Trim(), p[4] });
+            }
+            return all;
+        }
+
+        // Only a full https address with no name or password in it.
+        private static Uri FeaturedLink(string link)
+        {
+            Uri u;
+            if (link == null || link.Length > 300 || !Uri.TryCreate(link, UriKind.Absolute, out u) || u.Scheme != Uri.UriSchemeHttps || u.UserInfo.Length > 0 || u.Host.IndexOf('.') < 0) return null;
+            return u;
+        }
+
+        // Gets the newest Featured boxes, off the UI thread, and redraws the Games page if they changed.
+        private DateTime featuredAt;
+        private void LoadFeatured()
+        {
+            if (!Flag("featured", true) || DateTime.UtcNow - featuredAt < TimeSpan.FromMinutes(2)) return;
+            featuredAt = DateTime.UtcNow;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string got = null;
+                try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new System.Net.Cache.RequestCachePolicy(System.Net.Cache.RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(WorkerUrl + "featured.txt"); } } catch (Exception) { }
+                if (got == null || got.Length > 5000 || !got.StartsWith("# Capri Browser featured", StringComparison.Ordinal)) return;
+                Post(delegate
+                {
+                    if (got == Kept("featured")) return;
+                    Keep("featured", got);
+                    foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+                });
+            });
+        }
+
+        private void OpenFeatured(string all)
+        {
+            if (!Flag("featured", true)) return;
+            string slot = Regex.Match(all, "[&]n=([1-3])").Groups[1].Value;
+            foreach (string[] box in Featured())
+            {
+                if (box[0] != slot) continue;
+                Uri u = FeaturedLink(box[3]);
+                if (u != null) OpenTab(null, u.AbsoluteUri, true);
+                return;
+            }
+        }
+
+        private string FeaturedBox()
+        {
+            List<string[]> boxes = Flag("featured", true) ? Featured() : new List<string[]>();
+            if (boxes.Count == 0) return "";
+            StringBuilder html = new StringBuilder("<h1>FEATURED <span>&gt;</span></h1><div class=\"row\">");
+            foreach (string[] box in boxes)
+            {
+                Uri u = FeaturedLink(box[3]);
+                string inside = "<b>" + Esc(box[1]) + "</b>" + (box[2].Length > 0 ? "<div class=\"s\">" + Esc(box[2]) + "</div>" : "")
+                    + (u != null ? "<div class=\"s\" style=\"margin-top:6px\">&#8599; " + Esc(u.Host) + "</div>" : "");
+                if (u != null) html.Append("<a class=\"b\" style=\"text-decoration:none;cursor:pointer\" href=\"").Append(Own).Append("play?g=lbfeat&n=").Append(box[0]).Append("\">").Append(inside).Append("</a>");
+                else html.Append("<div class=\"b\">").Append(inside).Append("</div>");
+            }
+            return html.Append("</div>").ToString();
+        }
+
         private string AllTimePage()
         {
             Look look = mod.look;
@@ -7833,6 +7906,7 @@ public class CapriInternalBrowser : ICapriMod
 
         private void ShowGames()
         {
+            LoadFeatured();
             foreach (Tab open in tabs) if (open.Special == "games") { ShowReader(open); Select(open); return; }
             OpenTab(null, null, true);
             tab.Special = "games";
@@ -8685,6 +8759,7 @@ public class CapriInternalBrowser : ICapriMod
             if (which == "lbrefresh") { LoadBoards(); return; }
             if (which == "lbgames") { ShowGames(); return; }
             if (which == "lballtime") { ShowAllTime(); return; }
+            if (which == "lbfeat") { OpenFeatured(all); return; }
             if (which == "lbsend")
             {
                 if (Kept("lbname").Length == 0) { mod.Tell("Pick a leaderboard name first, choom."); return; }
@@ -8709,7 +8784,7 @@ public class CapriInternalBrowser : ICapriMod
             Look look = mod.look;
             string[] c = look.Colors;
             StringBuilder html = Start(look, Styled(2, ".g{max-width:900px;margin:0 auto}.g .b{display:inline-block;margin:4px;padding:12px;border:1px solid %C6%;color:%C2%}", c, null, null));
-            html.Append("<div class=\"g\"><h1>GAMES <span>&gt;</span></h1><div class=\"row\">");
+            html.Append("<div class=\"g\">").Append(FeaturedBox()).Append("<h1>GAMES <span>&gt;</span></h1><div class=\"row\">");
             List<string[]> list = Catalogue();
             foreach (string[] g in list)
             {
@@ -12327,6 +12402,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             { "glitch", "Glitch effect on takeover", "1", "capri" },
             { "hoard", "Too-many-tabs reminder", "1", "tabs" },
             { "achieve", "Achievement notifications", "1", "capri" },
+            { "featured", "Featured boxes on the Games page", "1", "capri" },
             { "scam", "Suspicious site warnings", "1", "privacy" },
             { "shieldtalk", "Comment on blocked pop-ups and redirects", "1", "privacy" },
             { "downloads", "Program download warnings", "1", "privacy" },
