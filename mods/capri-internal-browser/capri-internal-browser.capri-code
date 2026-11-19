@@ -12161,7 +12161,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             SideButton("\uE7FC", "Games", null).Click += delegate { ShowGames(); };
             SideButton("\uE8FD", "Custom jobs", null).Click += delegate { ShowJobs(); };
             SideExtras(sideStart);
-            Button welcome = SideButton(((char)0xE946).ToString(), "Welcome and getting started", null);
+            Button welcome = SideButton(((char)0xE946).ToString(), "Welcome and useful information", null);
             welcome.Dock = DockStyle.Bottom;
             welcome.Click += delegate { ShowWelcome(); };
             for (int i = sideButtons.Count - 1; i >= 0; i--)
@@ -12445,7 +12445,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             i.Add(RecentlyClosed());
             i.Add(new ToolStripSeparator());
             Item(i, T(49), "Ctrl+H", true, ShowHistory);
-            Item(i, "Getting started", "", true, ShowWelcome);
+            Item(i, "Useful information", "", true, ShowWelcome);
             Item(i, "Screenshot to notes", "", t != null && !t.OnReader, delegate { ShotToNotes(t); });
             Item(i, Flag("darkweb", false) ? "Dark mode for sites: on" : "Dark mode for sites: off", "", modern, delegate { SetDarkWeb(!Flag("darkweb", false)); });
             Item(i, "Pop video out", "", t != null && t.Viewer.Modern, delegate { ThreadPool.QueueUserWorkItem(delegate { mod.PopOut(); }); });
@@ -13102,7 +13102,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             if (t.Special == "welcome")
             {
                 t.Viewer.Html(WelcomePage());
-                Retitle(t, "Getting started");
+                Retitle(t, "Useful information");
                 if (t == tab) address.Text = "";
                 return;
             }
