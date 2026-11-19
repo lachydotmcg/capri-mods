@@ -8332,6 +8332,73 @@ public class CapriInternalBrowser : ICapriMod
             return at.ToString(at.Year == DateTime.Today.Year ? "d MMM HH:mm" : "d MMM yyyy");
         }
 
+        // The day divider over a run of notes.
+        private static string Day(long ticks)
+        {
+            if (ticks <= 0) return "EARLIER";
+            DateTime at = new DateTime(ticks).Date;
+            if (at == DateTime.Today) return "TODAY";
+            if (at == DateTime.Today.AddDays(-1)) return "YESTERDAY";
+            return at.ToString(at.Year == DateTime.Today.Year ? "ddd d MMM" : "d MMM yyyy").ToUpperInvariant();
+        }
+
+        // One line of the feed: a day divider or a note card. Where it's drawn eases toward where it belongs.
+        private sealed class NoteRow
+        {
+            public object Id;
+            public string Header;
+            public int Top, Height, Wide;
+            public float Shown, Appear, Hover;
+            public bool Open, Long;
+            public Bitmap Picture;
+            public string Url;
+            public Rectangle Link, More;
+        }
+
+        [StructLayout(LayoutKind.Sequential)] private struct TwipRect { public int Left, Top, Right, Bottom; }
+        [StructLayout(LayoutKind.Sequential)] private struct TextSpan { public int Min, Max; }
+        [StructLayout(LayoutKind.Sequential)] private struct PrintRange { public IntPtr Hdc, HdcTarget; public TwipRect Rc, RcPage; public TextSpan Chrg; }
+        [DllImport("user32.dll", EntryPoint = "SendMessage")] private static extern IntPtr SendRange(IntPtr window, int message, IntPtr wParam, ref PrintRange range);
+
+        // A note with pictures in it, drawn by Windows' rich text box into a picture of the card's width (in memory).
+        private readonly RichTextBox notePainter = new RichTextBox { BorderStyle = BorderStyle.None, ScrollBars = RichTextBoxScrollBars.None };
+        private Bitmap PaintRich(string rtf, int wide, Color ink, Color back, int most)
+        {
+            notePainter.BackColor = back;
+            try { notePainter.Rtf = rtf; } catch (Exception) { return null; }
+            notePainter.SelectAll();
+            notePainter.SelectionColor = ink;
+            IntPtr box = notePainter.Handle;
+            Func<IntPtr, int, PrintRange> range = delegate(IntPtr dc, int high)
+            {
+                PrintRange r = new PrintRange { Hdc = dc, HdcTarget = dc };
+                r.Rc = new TwipRect { Right = wide * 15, Bottom = high * 15 };
+                r.RcPage = r.Rc;
+                r.Chrg = new TextSpan { Min = 0, Max = -1 };
+                return r;
+            };
+            int tall;
+            using (Bitmap probe = new Bitmap(1, 1))
+            using (Graphics g = Graphics.FromImage(probe))
+            {
+                IntPtr dc = g.GetHdc();
+                try { PrintRange r = range(dc, most); SendRange(box, 0x439, IntPtr.Zero, ref r); tall = Math.Max(16, Math.Min(most, r.Rc.Bottom / 15 + 4)); }
+                finally { Poke(box, 0x439, IntPtr.Zero, IntPtr.Zero); g.ReleaseHdc(dc); }
+            }
+            Bitmap pic = new Bitmap(Math.Max(1, wide), tall);
+            using (Graphics g = Graphics.FromImage(pic))
+            {
+                g.Clear(back);
+                IntPtr dc = g.GetHdc();
+                try { PrintRange r = range(dc, tall); SendRange(box, 0x439, (IntPtr)1, ref r); }
+                finally { Poke(box, 0x439, IntPtr.Zero, IntPtr.Zero); g.ReleaseHdc(dc); }
+            }
+            return pic;
+        }
+
+        // A card's outline: cut corners top left and bottom right.
+        private static Point[] CutEdge(int x, int y, int w, int h, int cut) { return new[] { new Point(x + cut, y), new Point(x + w - 1, y), new Point(x + w - 1, y + h - 1 - cut), new Point(x + w - 1 - cut, y + h - 1), new Point(x, y + h - 1), new Point(x, y + cut) }; }
+
         private void BuildNoted()
         {
             notes.Padding = new Padding(0);
@@ -8366,133 +8433,450 @@ public class CapriInternalBrowser : ICapriMod
             string inBook = "", finding = "";
             object editing = null;
 
-            // The top: Noted's paper plane, the chat's name, pin and close.
             Buffered(notes);
             Label named;
-            Panel head = SideHead(notes, "\uE724", "Noted", out named);
-            Label plane = new Label();
-            Button shut = new Button();
+            Panel head = SideHead(notes, "", "Noted", out named);
 
-            // Which chat (a button that opens the list of chats), a button for a new one, and search.
-            Panel bar = new Panel { Dock = DockStyle.Top, Height = 36, Padding = new Padding(14, 0, 12, 4) };
-            Button picker = new Button { Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, TextAlign = ContentAlignment.MiddleLeft, Font = new System.Drawing.Font(UiBold, 10f), Cursor = Cursors.Hand, TabStop = false, UseMnemonic = false };
-            picker.FlatAppearance.BorderSize = 1;
-            Button newChat = Flat("\uE710", "New Noted chat", DockStyle.Right, 36);
-            bar.Controls.Add(picker);
-            bar.Controls.Add(newChat);
-            TextBox search = new TextBox();
-            Panel searchRow = Ring(search, "Search Noted");
-            new ToolTip().SetToolTip(picker, "Your Noted chats. Right-click to rename or delete one.");
-
-            // The feed: oldest at the top, newest at the bottom by the box, like a chat.
-            feed = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
-            Buffered(feed);
-            DarkScroll(feed);
-            Label empty = new Label { Text = "Nothing here yet.\nLeave a note for yourself below, drop in a picture, or ask Capri to add something.", Dock = DockStyle.Top, Height = 90, TextAlign = ContentAlignment.MiddleCenter, Font = new System.Drawing.Font(Ui, 10f), Visible = false };
-            feed.Controls.Add(empty);
-            List<Control> cards = new List<Control>();
-            System.Drawing.Font small = new System.Drawing.Font(Ui, 8.5f);
-            Action lay = null;
-            bool laying = false;
-            lay = delegate
-            {
-                if (laying) return;
-                laying = true;
-                // Always leaves room for the scrollbar, so cards don't change width when it comes and goes.
-                int y = 12 + feed.AutoScrollPosition.Y, w = Math.Max(120, feed.Width - SystemInformation.VerticalScrollBarWidth - 26);
-                foreach (Control c in cards)
-                {
-                    bool wider = c.Width != w;
-                    if (wider || c.Top != y || c.Left != 12) c.SetBounds(12, y, w, c.Height);
-                    // A note's height comes from its words at this width: ask the box for it again after a width change.
-                    RichTextBox words = c.Tag as RichTextBox;
-                    if (wider && words != null) Poke(words.Handle, 0x0441, IntPtr.Zero, IntPtr.Zero);
-                    y += c.Height + 12;
-                }
-                feed.AutoScrollMinSize = new Size(0, y - feed.AutoScrollPosition.Y);
-                laying = false;
-            };
-            feed.Resize += delegate { lay(); };
-            int glide = 0;
-            Action scrollEnd = delegate
-            {
-                int my = ++glide;
-                System.Windows.Forms.Timer wait = new System.Windows.Forms.Timer { Interval = 90 };
-                wait.Tick += delegate
-                {
-                    wait.Stop();
-                    wait.Dispose();
-                    if (my != glide || feed.IsDisposed) return;
-                    lay();
-                    int from = -feed.AutoScrollPosition.Y, to = Math.Max(0, feed.AutoScrollMinSize.Height - feed.ClientSize.Height);
-                    if (to <= from) return;
-                    Ease(feed, 260, delegate(float e) { if (my == glide) feed.AutoScrollPosition = new Point(0, from + (int)((to - from) * e)); }, null);
-                };
-                wait.Start();
-            };
-
-            // The box at the bottom: write, paste or drop a picture, attach a file, add the page's link, then Enter.
-            Panel composer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(12, 10, 6, 10) };
-            Label editingNote = new Label { Dock = DockStyle.Bottom, Height = 22, Text = "Editing a note  ·  Enter saves, Esc cancels", TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(12, 0, 0, 0), Font = new System.Drawing.Font(Ui, 9f), Visible = false };
-            Button send = Flat("\uE724", "Send to Noted (Enter)", DockStyle.Right, 34);
-            Button attach = Flat("\uE723", "Add a picture or a file", DockStyle.Right, 34);
-            Button pageLink = Flat("\uE71B", "Add this page's link", DockStyle.Right, 34);
-            noteText.Dock = DockStyle.Fill;
-            noteText.BorderStyle = BorderStyle.None;
-            noteText.ScrollBars = RichTextBoxScrollBars.Vertical;
-            noteText.DetectUrls = true;
-            noteText.EnableAutoDragDrop = true;
-            noteText.AcceptsTab = false;
-            noteText.Font = new System.Drawing.Font(Ui, 10.5f);
-            Label cue = new Label { Text = "Leave a note for yourself...", Left = 1, Top = 1, AutoSize = true, Cursor = Cursors.IBeam, Font = new System.Drawing.Font(Ui, 10.5f) };
-            cue.Click += delegate { noteText.Focus(); };
-            noteText.Controls.Add(cue);
-            noteText.TextChanged += delegate { cue.Visible = noteText.TextLength == 0; };
-            noteText.ContentsResized += delegate(object sender, ContentsResizedEventArgs e) { composer.Height = Math.Max(54, Math.Min(170, e.NewRectangle.Height + 22)); };
-            composer.Controls.Add(noteText);
-            composer.Controls.Add(pageLink);
-            composer.Controls.Add(attach);
-            composer.Controls.Add(send);
-            composer.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(mod.look.Shade(6))) e.Graphics.DrawLine(line, 0, 0, composer.Width, 0); };
-            notePaper = composer;
-
-            Func<object, Control> card = null;
-            Action fill = null;
-
+            // ---- Chats: pills along the top (with how many notes), "All" and "+" at the end ----
+            Panel pills = new Panel { Dock = DockStyle.Top, Height = 40, Cursor = Cursors.Hand };
+            Buffered(pills);
+            const string Everything = "All", Main = "Noted";
+            List<string> pillNames = new List<string>();
+            List<Rectangle> pillAt = new List<Rectangle>();
+            int pillHover = -1, pillShift = 0;
+            float markX = -1, markW = 0;
+            System.Drawing.Font pillFont = new System.Drawing.Font(UiBold, 9.5f), countFont = new System.Drawing.Font(Ui, 8.5f);
             Func<string, string> chatName = delegate(string book) { return book == null ? "All chats" : book.Length == 0 ? "Noted" : book; };
+            Func<string, int> countIn = delegate(string pill)
+            {
+                if (pill == Everything) return all.Count;
+                string book = pill == Main ? "" : pill;
+                int n = 0;
+                foreach (string b1 in books) if (string.Equals(b1, book, StringComparison.OrdinalIgnoreCase)) n++;
+                return n;
+            };
+            Func<int> pillNow = delegate { string now = inBook == null ? Everything : inBook.Length == 0 ? Main : inBook; return pillNames.IndexOf(now); };
+            Action layPills = delegate
+            {
+                pillNames.Clear();
+                pillAt.Clear();
+                pillNames.Add(Main);
+                pillNames.AddRange(Notebooks());
+                pillNames.Add(Everything);
+                pillNames.Add("+");
+                int x = 14 - pillShift;
+                foreach (string p in pillNames)
+                {
+                    int w = p == "+" ? 30 : TextRenderer.MeasureText(p, pillFont).Width + TextRenderer.MeasureText(countIn(p).ToString(), countFont).Width + 22;
+                    pillAt.Add(new Rectangle(x, 6, w, 26));
+                    x += w + 6;
+                }
+                int most = Math.Max(0, x + pillShift - pills.Width + 8);
+                if (pillShift > most) { pillShift = most; for (int i = 0; i < pillAt.Count; i++) pillAt[i] = new Rectangle(pillAt[i].X + (pillShift - most), 6, pillAt[i].Width, 26); }
+            };
+            Action glidePill = delegate
+            {
+                layPills();
+                int i = pillNow();
+                if (i < 0) return;
+                Rectangle to = pillAt[i];
+                if (markX < 0 || !pills.Visible) { markX = to.X; markW = to.Width; pills.Invalidate(); return; }
+                float fromX = markX, fromW = markW;
+                Ease(pills, 200, delegate(float e) { markX = fromX + (to.X - fromX) * e; markW = fromW + (to.Width - fromW) * e; pills.Invalidate(); }, null);
+            };
+            pills.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Look look = mod.look;
+                Graphics g = e.Graphics;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(look.Shade(1));
+                if (pillAt.Count != pillNames.Count) layPills();
+                int now = pillNow();
+                // The lit pill's fill slides from the last one picked.
+                if (now >= 0 && markX >= 0)
+                    using (SolidBrush lit = new SolidBrush(Mix(look.Shade(1), look.Shade(5), .22f))) using (Pen edge = new Pen(look.Shade(5)))
+                    {
+                        Point[] shape = CutEdge((int)markX, 6, (int)markW, 26, 6);
+                        g.FillPolygon(lit, shape);
+                        g.DrawPolygon(edge, shape);
+                    }
+                for (int i = 0; i < pillNames.Count; i++)
+                {
+                    Rectangle r = pillAt[i];
+                    string p = pillNames[i];
+                    if (i != now)
+                    {
+                        Point[] shape = CutEdge(r.X, r.Y, r.Width, r.Height, 6);
+                        using (SolidBrush back = new SolidBrush(i == pillHover ? Mix(look.Shade(0), look.Shade(5), .1f) : look.Shade(0))) g.FillPolygon(back, shape);
+                        using (Pen edge = new Pen(i == pillHover ? Mix(look.Shade(6), look.Shade(5), .5f) : look.Shade(6))) g.DrawPolygon(edge, shape);
+                    }
+                    Color ink = i == now ? look.Shade(2) : i == pillHover ? look.Shade(2) : look.Shade(3);
+                    if (p == "+") { TextRenderer.DrawText(g, "", new System.Drawing.Font("Segoe MDL2 Assets", 8.5f), r, ink, TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter); continue; }
+                    string count = countIn(p).ToString();
+                    int cw = TextRenderer.MeasureText(count, countFont).Width;
+                    TextRenderer.DrawText(g, p, pillFont, new Rectangle(r.X + 9, r.Y, r.Width - cw - 12, r.Height), ink, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                    TextRenderer.DrawText(g, count, countFont, new Rectangle(r.Right - cw - 7, r.Y + 1, cw, r.Height), i == now ? look.Shade(5) : look.Shade(3), TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                }
+            };
+            Func<Point, int> pillUnder = delegate(Point p) { for (int i = 0; i < pillAt.Count; i++) if (pillAt[i].Contains(p)) return i; return -1; };
+            pills.MouseMove += delegate(object sender, MouseEventArgs e) { int i = pillUnder(e.Location); if (i != pillHover) { pillHover = i; pills.Invalidate(); } };
+            pills.MouseLeave += delegate { pillHover = -1; pills.Invalidate(); };
+            pills.MouseWheel += delegate(object sender, MouseEventArgs e) { pillShift = Math.Max(0, pillShift - e.Delta / 3); layPills(); markX = -1; glidePill(); };
+            pills.Resize += delegate { layPills(); markX = -1; glidePill(); };
+            new ToolTip().SetToolTip(pills, "Your Noted chats. Right-click one to rename or delete it.");
+
+            // ---- The feed: oldest at the top, newest at the bottom by the box, like a chat ----
+            feed = new Panel { TabStop = false };
+            feed.Dock = DockStyle.Fill;
+            Buffered(feed);
+            List<NoteRow> rows = new List<NoteRow>();
+            float scroll = 0, aim = 0, barShow = 0;
+            int total = 0;
+            NoteRow hovered = null;
+            int hoverButton = -1;
+            bool dragBar = false;
+            int dragFrom = 0;
+            float dragWas = 0;
+            DateTime scrolledAt = DateTime.MinValue;
+            object undoId = null;
+            int undoAt = -1;
+            string[] undoNote = null;
+            long undoWhen = 0;
+            DateTime undoUntil = DateTime.MinValue;
+            Rectangle undoRect = Rectangle.Empty;
+            System.Drawing.Font body = new System.Drawing.Font(Ui, 10.5f), bold = new System.Drawing.Font(UiBold, 10.5f), small = new System.Drawing.Font(Ui, 8.5f), divider = new System.Drawing.Font(UiBold, 8f);
+            System.Drawing.Font glyphs = new System.Drawing.Font("Segoe MDL2 Assets", 9f);
+            const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl;
+            const int Side = 12, Pad = 14, Folded = 230;
+            System.Windows.Forms.Timer clock = new System.Windows.Forms.Timer { Interval = 15 };
+
+            Func<int> cardWide = delegate { return Math.Max(120, feed.ClientSize.Width - Side - 18); };
+            Func<int> maxScroll = delegate { return Math.Max(0, total - feed.ClientSize.Height); };
+            Action kick = delegate { if (!clock.Enabled && !feed.IsDisposed) clock.Start(); };
+            Func<string, bool> isLink = delegate(string text) { string[] l = text.Replace("\r", "").Trim().Split('\n'); return l.Length <= 2 && Regex.IsMatch(l[l.Length - 1].Trim(), @"^https?://\S+$"); };
+
+            // How tall a card is at this width, and its picture (drawn once, again only when the width or look changes).
+            Func<NoteRow, int, Bitmap> drawCard = null;
+            Func<NoteRow, int, int> measure = delegate(NoteRow row, int w)
+            {
+                int i = ids.IndexOf(row.Id);
+                if (i < 0) return 0;
+                string text = plain[i].Replace("\r", "").Trim();
+                Match url = Regex.Match(text, @"https?://[^\s<>""]+");
+                row.Url = url.Success ? url.Value.TrimEnd('.', ',', ')', ';') : null;
+                int inner = w - Pad * 2, h;
+                if (all[i].Contains("\\pict"))
+                {
+                    if (row.Picture == null || row.Wide != w) { if (row.Picture != null) row.Picture.Dispose(); row.Picture = drawCard(row, w); row.Wide = w; }
+                    return row.Picture == null ? 60 : row.Picture.Height;
+                }
+                if (!all[i].Contains("\\pict") && isLink(text))
+                {
+                    string[] l = text.Split('\n');
+                    h = l.Length == 2 ? TextRenderer.MeasureText(l[0].Trim(), bold, new Size(inner, 0), Wrap).Height : 0;
+                    return Pad + h + 24 + 26;
+                }
+                h = TextRenderer.MeasureText(text, body, new Size(inner, 0), Wrap).Height;
+                row.Long = h > Folded + 40;
+                if (row.Long) h = (row.Open ? h : Folded) + 26;
+                return Pad + h + 30;
+            };
+            drawCard = delegate(NoteRow row, int w)
+            {
+                int i = ids.IndexOf(row.Id);
+                if (i < 0) return null;
+                Look look = mod.look;
+                Color back = Mix(look.Shade(1), look.Shade(5), .05f), ink = look.Shade(2), faded = look.Shade(3);
+                string text = plain[i].Replace("\r", "").Trim();
+                int inner = w - Pad * 2;
+                Bitmap rich = null;
+                int h;
+                if (all[i].Contains("\\pict"))
+                {
+                    rich = PaintRich(all[i], inner, ink, back, 900);
+                    h = Pad + (rich == null ? 20 : rich.Height) + 30;
+                }
+                else h = row.Height > 0 && row.Wide == w ? row.Height : measure(row, w);
+                Bitmap pic = new Bitmap(w, Math.Max(40, h));
+                using (Graphics g = Graphics.FromImage(pic))
+                {
+                    g.Clear(look.Shade(0));
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    Point[] shape = CutEdge(0, 0, w, pic.Height, 10);
+                    using (SolidBrush fillIn = new SolidBrush(back)) g.FillPolygon(fillIn, shape);
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+                    using (Pen edge = new Pen(look.Shade(6))) g.DrawPolygon(edge, shape);
+                    int y = Pad;
+                    row.Link = row.More = Rectangle.Empty;
+                    if (rich != null) { g.DrawImageUnscaled(rich, Pad, y); y += rich.Height; rich.Dispose(); }
+                    else if (isLink(text))
+                    {
+                        string[] l = text.Split('\n');
+                        Uri u;
+                        string address = l[l.Length - 1].Trim(), host = Uri.TryCreate(address, UriKind.Absolute, out u) ? u.Host : address;
+                        if (l.Length == 2) { Size t = TextRenderer.MeasureText(l[0].Trim(), bold, new Size(inner, 0), Wrap); TextRenderer.DrawText(g, l[0].Trim(), bold, new Rectangle(Pad, y, inner, t.Height), ink, Wrap); y += t.Height; }
+                        TextRenderer.DrawText(g, "↗  " + host, body, new Rectangle(Pad, y + 4, inner, 20), look.Shade(4), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                        row.Link = new Rectangle(0, 0, w, pic.Height);
+                        row.Url = address;
+                    }
+                    else
+                    {
+                        int full = TextRenderer.MeasureText(text, body, new Size(inner, 0), Wrap).Height, show = row.Long && !row.Open ? Folded : full;
+                        TextRenderer.DrawText(g, text, body, new Rectangle(Pad, y, inner, show), ink, Wrap | TextFormatFlags.EndEllipsis);
+                        // A folded note fades out at the bottom, with Show more under it.
+                        if (row.Long && !row.Open)
+                            using (System.Drawing.Drawing2D.LinearGradientBrush fade = new System.Drawing.Drawing2D.LinearGradientBrush(new Rectangle(1, y + show - 40, w - 2, 41), Color.FromArgb(0, back), back, 90f))
+                                g.FillRectangle(fade, 1, y + show - 39, w - 2, 40);
+                        y += show;
+                        if (row.Long)
+                        {
+                            string more = row.Open ? "SHOW LESS  ▴" : "SHOW MORE  ▾";
+                            Size m = TextRenderer.MeasureText(more, divider);
+                            TextRenderer.DrawText(g, more, divider, new Point(Pad, y + 6), look.Shade(5), TextFormatFlags.NoPrefix);
+                            row.More = new Rectangle(Pad - 4, y + 2, m.Width + 8, 22);
+                            y += 26;
+                        }
+                    }
+                    // The bottom line: which chat (in All), the first link in it, and when.
+                    int x = Pad, line = pic.Height - 24;
+                    if (inBook == null && books[i].Length > 0)
+                    {
+                        Size t = TextRenderer.MeasureText(books[i], small);
+                        using (SolidBrush tag = new SolidBrush(Mix(back, look.Shade(5), .18f))) g.FillRectangle(tag, x, line + 2, t.Width + 8, 16);
+                        TextRenderer.DrawText(g, books[i], small, new Point(x + 4, line + 3), look.Shade(2), TextFormatFlags.NoPrefix);
+                        x += t.Width + 14;
+                    }
+                    if (row.Url != null && row.Link.IsEmpty)
+                    {
+                        Uri u;
+                        string host = "↗ " + (Uri.TryCreate(row.Url, UriKind.Absolute, out u) ? u.Host : "link");
+                        Size t = TextRenderer.MeasureText(host, small);
+                        int room = Math.Max(30, Math.Min(t.Width, w - x - 90));
+                        TextRenderer.DrawText(g, host, small, new Rectangle(x, line + 3, room, 16), look.Shade(4), TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                        row.Link = new Rectangle(x - 3, line, room + 6, 22);
+                    }
+                    TextRenderer.DrawText(g, edited[i] > 0 ? new DateTime(edited[i]).ToString("HH:mm") : "", small, new Rectangle(Pad, line + 3, w - Pad * 2, 16), faded, TextFormatFlags.Right | TextFormatFlags.NoPrefix);
+                    if (editing == row.Id) { using (Pen lit = new Pen(look.Shade(4), 2)) g.DrawPolygon(lit, CutEdge(1, 1, w - 2, pic.Height - 2, 9)); }
+                }
+                return pic;
+            };
+            Action<NoteRow> forget = delegate(NoteRow row) { if (row.Picture != null) { row.Picture.Dispose(); row.Picture = null; } row.Wide = 0; };
+
+            // Where everything goes. Rows ease from where they're drawn now to here.
+            Action lay = delegate
+            {
+                int w = cardWide(), y = 12;
+                foreach (NoteRow row in rows)
+                {
+                    if (row.Header != null) row.Height = 30;
+                    else if (row.Wide != w || row.Height == 0) { forget(row); row.Height = measure(row, w); row.Wide = w; }
+                    row.Top = y;
+                    if (row.Shown < -9000) row.Shown = y;
+                    y += row.Height + (row.Header != null ? 2 : 10);
+                }
+                total = y + 6;
+                aim = Math.Max(0, Math.Min(maxScroll(), aim));
+                kick();
+            };
+
+            Func<int, bool> fits = delegate(int i)
+            {
+                return (inBook == null || string.Equals(books[i], inBook, StringComparison.OrdinalIgnoreCase)) && (finding.Length == 0 || plain[i].IndexOf(finding, StringComparison.OrdinalIgnoreCase) >= 0);
+            };
+            Func<object, float, NoteRow> newRow = delegate(object id, float at) { return new NoteRow { Id = id, Shown = at, Appear = 0 }; };
+            Action toEnd = delegate { lay(); aim = maxScroll(); kick(); };
+            // Rebuilds the list (a chat or search change). The cards fade in where they are, at the newest end.
+            Action fill = delegate
+            {
+                foreach (NoteRow row in rows) forget(row);
+                rows.Clear();
+                hovered = null;
+                List<int> take = new List<int>();
+                for (int i = 0; i < all.Count && take.Count < 150; i++) if (fits(i)) take.Add(i);
+                take.Reverse();
+                string day = null;
+                foreach (int i in take)
+                {
+                    string d = Day(edited[i]);
+                    if (d != day) { day = d; rows.Add(new NoteRow { Header = d, Shown = -9999, Appear = 0 }); }
+                    rows.Add(newRow(ids[i], -9999));
+                }
+                lay();
+                scroll = aim = maxScroll();
+                layPills();
+                pills.Invalidate();
+            };
+
+            // ---- Painting ----
+            ImageAttributes see = new ImageAttributes();
+            feed.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Look look = mod.look;
+                Graphics g = e.Graphics;
+                g.Clear(look.Shade(0));
+                int top = (int)Math.Round(scroll), high = feed.ClientSize.Height, w = cardWide();
+                if (rows.Count == 0)
+                {
+                    TextRenderer.DrawText(g, "", new System.Drawing.Font("Segoe MDL2 Assets", 30f), new Rectangle(0, high / 2 - 90, feed.ClientSize.Width, 60), Mix(look.Shade(0), look.Shade(5), .45f), TextFormatFlags.HorizontalCenter);
+                    string say = finding.Length > 0 ? "No notes with “" + finding + "”" : "Nothing here yet";
+                    string under = finding.Length > 0 ? (inBook == null ? "Try other words." : "Try other words, or look in All.") : "Write a note below, paste or drop a picture,\nor ask Capri to add something.";
+                    TextRenderer.DrawText(g, say, bold, new Rectangle(20, high / 2 - 20, feed.ClientSize.Width - 40, 24), look.Shade(2), TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+                    TextRenderer.DrawText(g, under, body, new Rectangle(20, high / 2 + 8, feed.ClientSize.Width - 40, 60), look.Shade(3), TextFormatFlags.HorizontalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                }
+                foreach (NoteRow row in rows)
+                {
+                    int y = (int)Math.Round(row.Shown) - top + (int)((1 - row.Appear) * 14);
+                    if (y > high || y + row.Height < 0) continue;
+                    if (row.Header != null)
+                    {
+                        Size t = TextRenderer.MeasureText(row.Header, divider);
+                        Color ink = Color.FromArgb((int)(255 * row.Appear), look.Shade(3));
+                        TextRenderer.DrawText(g, row.Header, divider, new Point(Side + 2, y + 10), Mix(look.Shade(0), look.Shade(3), row.Appear), TextFormatFlags.NoPrefix);
+                        using (Pen line = new Pen(Mix(look.Shade(0), look.Shade(6), row.Appear))) g.DrawLine(line, Side + t.Width + 8, y + 17, Side + w, y + 17);
+                        continue;
+                    }
+                    if (row.Picture == null || row.Wide != w) { forget(row); row.Picture = drawCard(row, w); row.Wide = w; }
+                    if (row.Picture == null) continue;
+                    if (row.Appear >= .99f) g.DrawImageUnscaled(row.Picture, Side, y);
+                    else
+                    {
+                        ColorMatrix m = new ColorMatrix { Matrix33 = row.Appear };
+                        see.SetColorMatrix(m);
+                        g.DrawImage(row.Picture, new Rectangle(Side, y, row.Picture.Width, row.Picture.Height), 0, 0, row.Picture.Width, row.Picture.Height, GraphicsUnit.Pixel, see);
+                    }
+                    if (row.Hover > .02f)
+                    {
+                        int a = (int)(255 * row.Hover);
+                        using (SolidBrush bar = new SolidBrush(Color.FromArgb(a, look.Shade(5)))) g.FillRectangle(bar, Side, y + 10, 3, row.Height - 20);
+                        using (Pen edge = new Pen(Color.FromArgb(a, Mix(look.Shade(6), look.Shade(5), .6f)))) g.DrawPolygon(edge, CutEdge(Side, y, w, row.Height, 10));
+                        // Edit, Copy and Delete, top right.
+                        string[] icons = { "", "", "" };
+                        Color back = Mix(look.Shade(1), look.Shade(5), .05f);
+                        for (int k = 0; k < 3; k++)
+                        {
+                            Rectangle r = new Rectangle(Side + w - 10 - (3 - k) * 28, y + 6, 26, 24);
+                            using (SolidBrush pad = new SolidBrush(Color.FromArgb(a, row == hovered && hoverButton == k ? Mix(back, look.Shade(5), .3f) : Mix(back, look.Shade(0), .4f)))) g.FillRectangle(pad, r);
+                            TextRenderer.DrawText(g, icons[k], glyphs, r, Mix(back, k == 2 && row == hovered && hoverButton == k ? look.Shade(5) : look.Shade(2), row.Hover), TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                        }
+                    }
+                }
+                // The scrollbar: thin, wider under the mouse, fades when not in use.
+                if (total > high && barShow > .02f)
+                {
+                    int thumb = Math.Max(30, high * high / total), at = (int)((high - thumb) * (scroll / Math.Max(1, maxScroll())));
+                    bool near = dragBar || feed.PointToClient(Cursor.Position).X > feed.ClientSize.Width - 14;
+                    int bw = near ? 6 : 3;
+                    using (SolidBrush b1 = new SolidBrush(Color.FromArgb((int)(barShow * (near ? 230 : 150)), near ? look.Shade(5) : look.Shade(3)))) g.FillRectangle(b1, feed.ClientSize.Width - bw - 3, at + 2, bw, thumb - 4);
+                }
+                // Undo, after a delete.
+                undoRect = Rectangle.Empty;
+                if (DateTime.Now < undoUntil)
+                {
+                    string said = "Note deleted";
+                    Size t = TextRenderer.MeasureText(said, body), u = TextRenderer.MeasureText("UNDO", bold);
+                    int bw = t.Width + u.Width + 44, bx = (feed.ClientSize.Width - bw) / 2, by = high - 50;
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                    using (SolidBrush b1 = new SolidBrush(look.Shade(1))) g.FillPolygon(b1, CutEdge(bx, by, bw, 36, 8));
+                    using (Pen edge = new Pen(look.Shade(5))) g.DrawPolygon(edge, CutEdge(bx, by, bw, 36, 8));
+                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.None;
+                    TextRenderer.DrawText(g, said, body, new Point(bx + 14, by + 9), look.Shade(2), TextFormatFlags.NoPrefix);
+                    undoRect = new Rectangle(bx + t.Width + 22, by + 4, u.Width + 14, 28);
+                    TextRenderer.DrawText(g, "UNDO", bold, new Point(undoRect.X + 7, by + 9), look.Shade(4), TextFormatFlags.NoPrefix);
+                }
+            };
+
+            // One clock for every movement; it stops when everything's settled.
+            clock.Tick += delegate
+            {
+                if (feed.IsDisposed) { clock.Stop(); clock.Dispose(); return; }
+                bool moving = false;
+                aim = Math.Max(0, Math.Min(maxScroll(), aim));
+                if (Math.Abs(aim - scroll) > .5f) { scroll += (aim - scroll) * .24f; moving = true; } else scroll = aim;
+                foreach (NoteRow row in rows)
+                {
+                    if (Math.Abs(row.Top - row.Shown) > .5f) { row.Shown += (row.Top - row.Shown) * .22f; moving = true; } else row.Shown = row.Top;
+                    if (row.Appear < 1) { row.Appear = Math.Min(1, row.Appear + .08f); moving = true; }
+                    float want = row == hovered ? 1 : 0;
+                    if (Math.Abs(want - row.Hover) > .02f) { row.Hover += (want - row.Hover) * .3f; moving = true; } else row.Hover = want;
+                }
+                bool inUse = dragBar || (DateTime.Now - scrolledAt).TotalMilliseconds < 900 || feed.ClientRectangle.Contains(feed.PointToClient(Cursor.Position));
+                float bar = inUse ? 1 : 0;
+                if (Math.Abs(bar - barShow) > .02f) { barShow += (bar - barShow) * .2f; moving = true; } else barShow = bar;
+                if (DateTime.Now < undoUntil.AddMilliseconds(100)) moving = true;
+                feed.Invalidate();
+                if (!moving) clock.Stop();
+            };
+
+            Func<Point, NoteRow> rowAt = delegate(Point p)
+            {
+                int y = p.Y + (int)scroll;
+                foreach (NoteRow row in rows) if (row.Header == null && y >= row.Top && y < row.Top + row.Height && p.X >= Side && p.X < Side + cardWide()) return row;
+                return null;
+            };
+            Func<NoteRow, Point, int> buttonAt = delegate(NoteRow row, Point p)
+            {
+                int w = cardWide(), y = row.Top - (int)scroll;
+                for (int k = 0; k < 3; k++) if (new Rectangle(Side + w - 10 - (3 - k) * 28, y + 6, 26, 24).Contains(p)) return k;
+                return -1;
+            };
+            Func<NoteRow, Point, Point> inCard = delegate(NoteRow row, Point p) { return new Point(p.X - Side, p.Y + (int)scroll - row.Top); };
+
+            // ---- What a card can do ----
+            Action<object> edit = null;
             Action<object> drop = delegate(object id)
             {
                 int i = ids.IndexOf(id);
                 if (i < 0) return;
-                string first = plain[i].Trim().Split('\n')[0];
-                if (MessageBox.Show(FindForm(), "Delete \"" + Clip(first.Length == 0 ? "this picture" : first, 50) + "\"? This can't be undone.", "Noted", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+                if (editing == id) { editing = null; noteText.Clear(); }
+                undoId = id; undoAt = i; undoNote = new[] { all[i], plain[i], books[i] }; undoWhen = edited[i];
+                undoUntil = DateTime.Now.AddSeconds(6);
                 all.RemoveAt(i); plain.RemoveAt(i); books.RemoveAt(i); edited.RemoveAt(i); ids.RemoveAt(i);
                 store();
-                fill();
+                // The card fades out and the ones under it close the gap.
+                int r = rows.FindIndex(delegate(NoteRow x) { return x.Id == id; });
+                if (r >= 0)
+                {
+                    forget(rows[r]);
+                    rows.RemoveAt(r);
+                    bool lonely = r > 0 && rows[r - 1].Header != null && (r == rows.Count || rows[r].Header != null);
+                    if (lonely) rows.RemoveAt(r - 1);
+                }
+                hovered = null;
+                lay();
+                layPills();
+                pills.Invalidate();
+                System.Windows.Forms.Timer gone = new System.Windows.Forms.Timer { Interval = 6100 };
+                gone.Tick += delegate { gone.Stop(); gone.Dispose(); kick(); };
+                gone.Start();
             };
-            Action<object> edit = delegate(object id)
+            Action undo = delegate
             {
-                int i = ids.IndexOf(id);
-                if (i < 0) return;
-                editing = id;
-                if (all[i].StartsWith("{\\rtf")) { try { noteText.Rtf = all[i]; } catch (Exception) { noteText.Text = plain[i]; } } else noteText.Text = all[i];
-                editingNote.Visible = true;
-                noteText.Focus();
-                noteText.SelectionStart = noteText.TextLength;
+                if (undoNote == null) return;
+                int at = Math.Min(Math.Max(0, undoAt), all.Count);
+                all.Insert(at, undoNote[0]); plain.Insert(at, undoNote[1]); books.Insert(at, undoNote[2]); edited.Insert(at, undoWhen); ids.Insert(at, undoId);
+                undoNote = null;
+                undoUntil = DateTime.MinValue;
+                store();
+                float keep = aim;
+                fill();
+                aim = scroll = Math.Min(keep, maxScroll());
+                kick();
             };
-            Action<object, Control> menuFor = delegate(object id, Control at)
+            Action<object> copy = delegate(object id)
+            {
+                int j = ids.IndexOf(id);
+                if (j < 0) return;
+                try { DataObject d = new DataObject(); if (all[j].StartsWith("{\\rtf")) d.SetData(DataFormats.Rtf, all[j]); d.SetData(DataFormats.UnicodeText, plain[j]); Clipboard.SetDataObject(d, true); } catch (Exception) { }
+                mod.Tell("Copied, choom.");
+            };
+            Action<object> menuFor = delegate(object id)
             {
                 int i = ids.IndexOf(id);
                 if (i < 0) return;
                 ContextMenuStrip m = NewMenu();
                 Match link = Regex.Match(plain[i], @"(?:https?|file)://\S+");
                 Item(m.Items, "Edit", "", true, delegate { edit(id); });
-                Item(m.Items, "Copy", "", true, delegate
-                {
-                    int j = ids.IndexOf(id);
-                    if (j < 0) return;
-                    try { DataObject d = new DataObject(); if (all[j].StartsWith("{\\rtf")) d.SetData(DataFormats.Rtf, all[j]); d.SetData(DataFormats.UnicodeText, plain[j]); Clipboard.SetDataObject(d, true); } catch (Exception) { }
-                });
+                Item(m.Items, "Copy", "", true, delegate { copy(id); });
                 if (link.Success) Item(m.Items, "Open link", "", true, delegate { OpenTab(null, link.Value, true); });
                 ToolStripMenuItem move = new ToolStripMenuItem("Move to") { ForeColor = mod.look.Shade(2) };
                 List<string> places = new List<string> { "" };
@@ -8510,97 +8894,123 @@ public class CapriInternalBrowser : ICapriMod
                 m.Show(Cursor.Position);
             };
 
-            card = delegate(object id)
+            feed.MouseWheel += delegate(object sender, MouseEventArgs e) { aim = Math.Max(0, Math.Min(maxScroll(), aim - e.Delta * .9f)); scrolledAt = DateTime.Now; kick(); };
+            feed.MouseMove += delegate(object sender, MouseEventArgs e)
+            {
+                if (dragBar) { int high = feed.ClientSize.Height, thumb = Math.Max(30, high * high / Math.Max(1, total)); aim = scroll = Math.Max(0, Math.Min(maxScroll(), dragWas + (e.Y - dragFrom) * maxScroll() / (float)Math.Max(1, high - thumb))); feed.Invalidate(); return; }
+                NoteRow row = rowAt(e.Location);
+                int button = row == null ? -1 : buttonAt(row, e.Location);
+                Point local = row == null ? Point.Empty : inCard(row, e.Location);
+                bool hand = undoRect.Contains(e.Location) || button >= 0 || (row != null && (row.Link.Contains(local) || row.More.Contains(local)));
+                feed.Cursor = hand ? Cursors.Hand : Cursors.Default;
+                if (row != hovered || button != hoverButton) { hovered = row; hoverButton = button; kick(); }
+                kick();
+            };
+            feed.MouseLeave += delegate { hovered = null; hoverButton = -1; kick(); };
+            feed.MouseDown += delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left && total > feed.ClientSize.Height && e.X > feed.ClientSize.Width - 14) { dragBar = true; dragFrom = e.Y; dragWas = scroll; feed.Capture = true; kick(); }
+            };
+            feed.MouseUp += delegate(object sender, MouseEventArgs e)
+            {
+                if (dragBar) { dragBar = false; feed.Capture = false; scrolledAt = DateTime.Now; kick(); return; }
+                if (e.Button == MouseButtons.Left && undoRect.Contains(e.Location)) { undo(); return; }
+                NoteRow row = rowAt(e.Location);
+                if (row == null) return;
+                if (e.Button == MouseButtons.Right) { menuFor(row.Id); return; }
+                if (e.Button != MouseButtons.Left) return;
+                int button = buttonAt(row, e.Location);
+                if (button == 0) { edit(row.Id); return; }
+                if (button == 1) { copy(row.Id); return; }
+                if (button == 2) { drop(row.Id); return; }
+                Point local = inCard(row, e.Location);
+                if (row.More.Contains(local)) { row.Open = !row.Open; forget(row); row.Height = 0; lay(); return; }
+                if (row.Link.Contains(local) && row.Url != null) OpenTab(null, row.Url, true);
+            };
+            feed.DoubleClick += delegate { NoteRow row = rowAt(feed.PointToClient(Cursor.Position)); if (row != null && row.Link.IsEmpty) edit(row.Id); };
+            feed.Resize += delegate { bool atEnd = aim >= maxScroll() - 2; lay(); if (atEnd) scroll = aim = maxScroll(); feed.Invalidate(); };
+
+            // ---- The box at the bottom: write, paste or drop a picture, attach a file, add the page's link, then Enter ----
+            Panel composer = new Panel { Dock = DockStyle.Bottom, Height = 62, Padding = new Padding(12, 8, 12, 12) };
+            Panel paper = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12, 9, 4, 5) };
+            Buffered(composer);
+            Buffered(paper);
+            Label editingNote = new Label { Dock = DockStyle.Bottom, Height = 24, Text = "EDITING A NOTE  ·  Enter saves  ·  Esc cancels", TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(14, 0, 0, 0), Font = new System.Drawing.Font(UiBold, 8.5f), Visible = false };
+            Button send = Flat("", "Send to Noted (Enter)", DockStyle.Right, 34);
+            Button attach = Flat("", "Add a picture or a file", DockStyle.Right, 32);
+            Button pageLink = Flat("", "Add this page's link", DockStyle.Right, 32);
+            noteText.Dock = DockStyle.Fill;
+            noteText.BorderStyle = BorderStyle.None;
+            noteText.ScrollBars = RichTextBoxScrollBars.Vertical;
+            noteText.DetectUrls = true;
+            noteText.EnableAutoDragDrop = true;
+            noteText.AcceptsTab = false;
+            noteText.Font = new System.Drawing.Font(Ui, 10.5f);
+            Label cue = new Label { Text = "Leave a note for yourself...", Left = 1, Top = 1, AutoSize = true, Cursor = Cursors.IBeam, Font = new System.Drawing.Font(Ui, 10.5f) };
+            cue.Click += delegate { noteText.Focus(); };
+            noteText.Controls.Add(cue);
+            noteText.TextChanged += delegate { cue.Visible = noteText.TextLength == 0; };
+            // It grows with what's written (smoothly), up to a point, then scrolls.
+            int grow = 0;
+            noteText.ContentsResized += delegate(object sender, ContentsResizedEventArgs e)
+            {
+                int to = Math.Max(62, Math.Min(190, e.NewRectangle.Height + 36)), from = composer.Height, my = ++grow;
+                if (to == from) return;
+                Ease(composer, 140, delegate(float k) { if (my == grow) composer.Height = from + (int)((to - from) * k); }, null);
+            };
+            paper.Controls.Add(noteText);
+            paper.Controls.Add(pageLink);
+            paper.Controls.Add(attach);
+            paper.Controls.Add(send);
+            composer.Controls.Add(paper);
+            paper.Paint += delegate(object sender, PaintEventArgs e)
+            {
+                Look look = mod.look;
+                Graphics g = e.Graphics;
+                g.Clear(composer.BackColor);
+                Point[] shape = CutEdge(0, 0, paper.Width, paper.Height, 9);
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                using (SolidBrush fillIn = new SolidBrush(look.Shade(0))) g.FillPolygon(fillIn, shape);
+                bool on = noteText.Focused;
+                using (Pen edge = new Pen(editing != null ? look.Shade(4) : on ? look.Shade(5) : Mix(look.Shade(6), look.Shade(5), .3f), on || editing != null ? 1.6f : 1f)) g.DrawPolygon(edge, shape);
+            };
+            noteText.GotFocus += delegate { paper.Invalidate(); };
+            noteText.LostFocus += delegate { paper.Invalidate(); };
+            composer.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(mod.look.Shade(6))) e.Graphics.DrawLine(line, 0, 0, composer.Width, 0); };
+            notePaper = composer;
+
+            edit = delegate(object id)
             {
                 int i = ids.IndexOf(id);
-                Look look = mod.look;
-                Color back = Mix(look.Shade(1), look.Shade(5), .06f);
-                Panel c = new Panel { Height = 64, BackColor = back, Padding = new Padding(14, 12, 14, 26) };
-                Buffered(c);
-                string[] lines = plain[i].Replace("\r", "").Trim().Split('\n');
-                string last = lines[lines.Length - 1].Trim();
-                bool linkCard = !all[i].Contains("\\pict") && lines.Length <= 2 && Regex.IsMatch(last, @"^https?://\S+$");
-                List<Control> parts = new List<Control> { c };
-                if (linkCard)
-                {
-                    Uri u;
-                    string host = Uri.TryCreate(last, UriKind.Absolute, out u) ? u.Host : last;
-                    Label title = new Label { Text = lines.Length == 2 ? lines[0].Trim() : host, Dock = DockStyle.Top, AutoSize = false, ForeColor = look.Shade(2), Font = new System.Drawing.Font(UiBold, 10.5f), UseMnemonic = false };
-                    LinkLabel site = new LinkLabel { Text = "↗  " + host, Dock = DockStyle.Top, Height = 26, LinkColor = look.Shade(5), ActiveLinkColor = look.Shade(4), VisitedLinkColor = look.Shade(5), LinkBehavior = LinkBehavior.HoverUnderline, Font = new System.Drawing.Font(Ui, 10f), UseMnemonic = false, Padding = new Padding(0, 6, 0, 0) };
-                    site.LinkClicked += delegate { OpenTab(null, last, true); };
-                    c.Controls.Add(site);
-                    c.Controls.Add(title);
-                    parts.Add(site);
-                    parts.Add(title);
-                    c.Resize += delegate
-                    {
-                        title.Height = TextRenderer.MeasureText(title.Text, title.Font, new Size(Math.Max(40, c.Width - 28), 0), TextFormatFlags.WordBreak).Height + 2;
-                        int h = c.Padding.Vertical + title.Height + site.Height;
-                        if (c.Height != h) { c.Height = h; Later(delegate { lay(); }); }
-                    };
-                }
-                else
-                {
-                    RichTextBox words = new RichTextBox { Dock = DockStyle.Fill, ReadOnly = true, BorderStyle = BorderStyle.None, ScrollBars = RichTextBoxScrollBars.None, DetectUrls = true, TabStop = false, Cursor = Cursors.Arrow, Font = new System.Drawing.Font(Ui, 10.5f) };
-                    words.BackColor = back;
-                    words.ForeColor = look.Shade(2);
-                    if (all[i].StartsWith("{\\rtf")) { try { words.Rtf = all[i]; } catch (Exception) { words.Text = plain[i]; } } else words.Text = all[i];
-                    words.LinkClicked += delegate(object sender, LinkClickedEventArgs e) { OpenLink(e.LinkText); };
-                    words.ContentsResized += delegate(object sender, ContentsResizedEventArgs e)
-                    {
-                        int h = Math.Max(52, e.NewRectangle.Height + 6 + c.Padding.Vertical);
-                        if (c.Height != h) { c.Height = h; Later(delegate { lay(); }); }
-                    };
-                    c.Tag = words;
-                    words.DoubleClick += delegate { edit(id); };
-                    c.Controls.Add(words);
-                    parts.Add(words);
-                }
-                foreach (Control part in parts) part.MouseUp += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Right) menuFor(id, c); };
-                // Opera-style card: a thin edge, two little corner notches, and when it was written underneath.
-                c.Paint += delegate(object sender, PaintEventArgs e)
-                {
-                    Look lk = mod.look;
-                    Graphics g = e.Graphics;
-                    int j = ids.IndexOf(id);
-                    using (Pen line = new Pen(lk.Shade(6))) g.DrawRectangle(line, 0, 0, c.Width - 1, c.Height - 1);
-                    using (SolidBrush tip = new SolidBrush(Mix(lk.Shade(2), lk.Shade(1), .1f)))
-                    {
-                        g.FillPolygon(tip, new[] { new Point(0, 0), new Point(9, 0), new Point(0, 9) });
-                        g.FillPolygon(tip, new[] { new Point(c.Width, c.Height), new Point(c.Width - 10, c.Height), new Point(c.Width, c.Height - 10) });
-                    }
-                    if (j < 0) return;
-                    string stamp = (inBook == null && books[j].Length > 0 ? books[j] + "  ·  " : "") + When(edited[j]);
-                    TextRenderer.DrawText(g, stamp, small, new Rectangle(14, c.Height - 21, c.Width - 30, 16), lk.Shade(3), TextFormatFlags.Right | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
-                };
-                return c;
+                if (i < 0) return;
+                object was = editing;
+                editing = id;
+                if (all[i].StartsWith("{\\rtf")) { try { noteText.Rtf = all[i]; } catch (Exception) { noteText.Text = plain[i]; } } else noteText.Text = all[i];
+                noteText.SelectAll();
+                noteText.SelectionColor = mod.look.Shade(2);
+                editingNote.Visible = true;
+                noteText.Focus();
+                noteText.SelectionStart = noteText.TextLength;
+                foreach (NoteRow row in rows) if (row.Id == id || row.Id == was) forget(row);
+                paper.Invalidate();
+                kick();
             };
-
-            Func<int, bool> fits = delegate(int i)
+            Action stopEditing = delegate
             {
-                return (inBook == null || string.Equals(books[i], inBook, StringComparison.OrdinalIgnoreCase)) && (finding.Length == 0 || plain[i].IndexOf(finding, StringComparison.OrdinalIgnoreCase) >= 0);
-            };
-            fill = delegate
-            {
-                feed.SuspendLayout();
-                foreach (Control c in cards) { feed.Controls.Remove(c); c.Dispose(); }
-                cards.Clear();
-                List<int> take = new List<int>();
-                for (int i = 0; i < all.Count && take.Count < 150; i++) if (fits(i)) take.Add(i);
-                take.Reverse();
-                foreach (int i in take) { Control c = card(ids[i]); cards.Add(c); feed.Controls.Add(c); }
-                empty.Visible = cards.Count == 0;
-                feed.ResumeLayout();
-                lay();
-                scrollEnd();
+                object was = editing;
+                editing = null;
+                editingNote.Visible = false;
+                foreach (NoteRow row in rows) if (row.Id == was) forget(row);
+                paper.Invalidate();
+                kick();
             };
 
             // Picture into the box: scaled down to fit, through the clipboard (what RichTextBox takes), then their clipboard put back.
             Action<Image> putPicture = delegate(Image picture)
             {
                 if (picture == null) return;
-                int most = Math.Max(140, Math.Min(320, noteText.ClientSize.Width - 30));
-                float scale = Math.Min(1f, Math.Min(most / (float)picture.Width, most * .75f / picture.Height));
+                int widest = Math.Max(140, Math.Min(320, noteText.ClientSize.Width - 30));
+                float scale = Math.Min(1f, Math.Min(widest / (float)picture.Width, widest * .75f / picture.Height));
                 IDataObject held = null;
                 using (Bitmap shrunk = new Bitmap(Math.Max(1, (int)(picture.Width * scale)), Math.Max(1, (int)(picture.Height * scale))))
                 {
@@ -8617,16 +9027,18 @@ public class CapriInternalBrowser : ICapriMod
                 if (noteText.Text.Trim().Length == 0 && !pic) return;
                 string rtf = noteText.Rtf, words = noteText.Text.Trim();
                 int was = editing == null ? -1 : ids.IndexOf(editing);
-                editing = null;
-                editingNote.Visible = false;
                 if (was >= 0)
                 {
                     all[was] = rtf; plain[was] = words; edited[was] = DateTime.Now.Ticks;
+                    object id0 = editing;
+                    stopEditing();
                     noteText.Clear();
                     store();
-                    fill();
+                    foreach (NoteRow row in rows) if (row.Id == id0) { forget(row); row.Height = 0; }
+                    lay();
                     return;
                 }
+                stopEditing();
                 Bump("notes", 1);
                 string into = pickBook != null ? BookFor(pickBook) : inBook ?? "";
                 pickBook = null;
@@ -8637,18 +9049,21 @@ public class CapriInternalBrowser : ICapriMod
                 noteText.Clear();
                 store();
                 if (switched || finding.Length > 0) { fill(); return; }
-                Control made = card(id);
-                cards.Add(made);
-                feed.Controls.Add(made);
-                empty.Visible = false;
+                // The new card rises in at the bottom, under a Today divider if there isn't one yet.
                 lay();
-                scrollEnd();
+                float from = total;
+                if (rows.Count == 0 || rows.FindLastIndex(delegate(NoteRow x) { return x.Header != null; }) < 0 || rows[rows.FindLastIndex(delegate(NoteRow x) { return x.Header != null; })].Header != "TODAY")
+                    rows.Add(new NoteRow { Header = "TODAY", Shown = from, Appear = 0 });
+                rows.Add(newRow(id, from + 30));
+                toEnd();
+                layPills();
+                pills.Invalidate();
             };
             send.Click += delegate { post(); noteText.Focus(); };
             noteText.KeyDown += delegate(object sender, KeyEventArgs e)
             {
                 if (e.KeyCode == Keys.Enter && !e.Shift && !e.Control) { e.SuppressKeyPress = true; post(); }
-                else if (e.KeyCode == Keys.Escape && editing != null) { e.SuppressKeyPress = true; editing = null; editingNote.Visible = false; noteText.Clear(); }
+                else if (e.KeyCode == Keys.Escape && editing != null) { e.SuppressKeyPress = true; stopEditing(); noteText.Clear(); }
                 else if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; SlideIn(notes, notes.Width); }
                 else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && Clipboard.ContainsImage()) { e.SuppressKeyPress = true; using (Image pasted = Clipboard.GetImage()) putPicture(pasted); }
                 else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && !Clipboard.ContainsImage() && Clipboard.ContainsText()) { e.SuppressKeyPress = true; noteText.SelectionColor = mod.look.Shade(2); noteText.SelectedText = Clipboard.GetText(); }
@@ -8701,13 +9116,12 @@ public class CapriInternalBrowser : ICapriMod
                 textNote(t.Title + "\n" + t.Address);
             };
 
-            const string Everything = "All chats", Main = "Noted", Make = "+  New Noted chat...";
-            bool picking = false;
+            // ---- Chats: picking, making, renaming, deleting ----
             ShowBook = delegate
             {
                 if (inBook != null && inBook.Length > 0 && !new List<string>(Notebooks()).Contains(inBook)) inBook = "";
-                picker.Text = "  " + chatName(inBook) + "   \u25BE";
-                named.Text = inBook == null || inBook.Length == 0 ? "Noted" : "Noted  ·  " + inBook;
+                named.Text = inBook == null || inBook.Length == 0 ? (inBook == null ? "Noted  ·  All" : "Noted") : "Noted  ·  " + inBook;
+                glidePill();
             };
             Action makeChat = delegate
             {
@@ -8718,31 +9132,8 @@ public class CapriInternalBrowser : ICapriMod
                 if (found == null) { mine.Add(name); Keep("notebooks", string.Join("\u001e", mine.ToArray())); found = name; }
                 inBook = found;
             };
-            picker.Click += delegate
+            Action<string> chatMenu = delegate(string now)
             {
-                if (JustShut) return;
-                ContextMenuStrip m = NewMenu();
-                List<string> chats = new List<string> { Main };
-                chats.AddRange(Notebooks());
-                chats.Add(Everything);
-                foreach (string one in chats)
-                {
-                    string pick = one;
-                    string now = inBook == null ? Everything : inBook.Length == 0 ? Main : inBook;
-                    Item(m.Items, (pick == now ? "\u2713  " : "     ") + pick, "", true, delegate { inBook = pick == Everything ? null : pick == Main ? "" : pick; ShowBook(); fill(); });
-                }
-                m.Items.Add(new ToolStripSeparator());
-                Item(m.Items, Make, "", true, delegate { makeChat(); ShowBook(); fill(); });
-                m.Show(picker, new Point(0, picker.Height));
-            };
-            if (picking) ShowBook();
-            newChat.Click += delegate { makeChat(); ShowBook(); fill(); };
-            ContextMenuStrip chatMenu = new ContextMenuStrip();
-            chatMenu.Opening += delegate(object sender, System.ComponentModel.CancelEventArgs e)
-            {
-                e.Cancel = true;
-                if (string.IsNullOrEmpty(inBook)) return;
-                string now = inBook;
                 ContextMenuStrip m = NewMenu();
                 Item(m.Items, "Rename \"" + now + "\"", "", true, delegate
                 {
@@ -8753,7 +9144,7 @@ public class CapriInternalBrowser : ICapriMod
                     if (i >= 0) mine[i] = name;
                     Keep("notebooks", string.Join("\u001e", mine.ToArray()));
                     for (int j = 0; j < books.Count; j++) if (books[j] == now) books[j] = name;
-                    inBook = name;
+                    if (inBook == now) inBook = name;
                     store(); ShowBook(); fill();
                 });
                 Item(m.Items, "Delete \"" + now + "\" (its notes move to Noted)", "", true, delegate
@@ -8762,13 +9153,31 @@ public class CapriInternalBrowser : ICapriMod
                     mine.Remove(now);
                     Keep("notebooks", string.Join("\u001e", mine.ToArray()));
                     for (int j = 0; j < books.Count; j++) if (books[j] == now) books[j] = "";
-                    inBook = "";
+                    if (inBook == now) inBook = "";
                     store(); ShowBook(); fill();
                 });
                 m.Show(Cursor.Position);
             };
-            picker.ContextMenuStrip = chatMenu;
-            search.TextChanged += delegate { finding = search.Text.Trim(); fill(); };
+            pills.MouseUp += delegate(object sender, MouseEventArgs e)
+            {
+                int i = pillUnder(e.Location);
+                if (i < 0) return;
+                string p = pillNames[i];
+                if (e.Button == MouseButtons.Right) { if (p != Main && p != Everything && p != "+") chatMenu(p); return; }
+                if (e.Button != MouseButtons.Left) return;
+                if (p == "+") makeChat();
+                else inBook = p == Everything ? null : p == Main ? "" : p;
+                ShowBook();
+                fill();
+            };
+
+            // Search waits until they stop typing for a moment.
+            TextBox search = new TextBox();
+            Panel searchRow = Ring(search, "Search Noted");
+            System.Windows.Forms.Timer typing = new System.Windows.Forms.Timer { Interval = 160 };
+            typing.Tick += delegate { typing.Stop(); string now = search.Text.Trim(); if (now == finding) return; finding = now; fill(); };
+            search.TextChanged += delegate { typing.Stop(); typing.Start(); };
+            search.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && search.TextLength > 0) { e.SuppressKeyPress = true; search.Clear(); } };
 
             Color tinted = Color.Empty;
             noteTint = delegate
@@ -8776,27 +9185,27 @@ public class CapriInternalBrowser : ICapriMod
                 Look look = mod.look;
                 bool changed = tinted != look.Shade(1);
                 tinted = look.Shade(1);
-                notes.BackColor = head.BackColor = bar.BackColor = searchRow.BackColor = look.Shade(1);
+                notes.BackColor = head.BackColor = pills.BackColor = searchRow.BackColor = look.Shade(1);
                 foreach (Control part in head.Controls) if ("red".Equals(part.Tag)) part.ForeColor = look.Shade(5); else part.ForeColor = look.Shade(3);
                 named.ForeColor = look.Shade(2);
-                picker.BackColor = search.BackColor = look.Shade(0);
-                picker.ForeColor = search.ForeColor = look.Shade(2);
-                picker.FlatAppearance.BorderColor = look.Shade(6);
-                picker.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), look.Shade(5), .2f);
+                search.BackColor = look.Shade(0);
+                search.ForeColor = look.Shade(2);
                 feed.BackColor = look.Shade(0);
-                empty.ForeColor = look.Shade(3);
                 composer.BackColor = look.Shade(1);
-                noteText.BackColor = look.Shade(1);
+                paper.BackColor = noteText.BackColor = look.Shade(0);
                 noteText.ForeColor = look.Shade(2);
                 cue.ForeColor = look.Shade(3);
-                cue.BackColor = look.Shade(1);
-                editingNote.ForeColor = look.Shade(5);
+                cue.BackColor = look.Shade(0);
+                editingNote.ForeColor = look.Shade(4);
                 editingNote.BackColor = look.Shade(1);
-                foreach (Button b in new[] { newChat, send, attach, pageLink }) { b.BackColor = Color.Transparent; b.ForeColor = look.Shade(3); }
+                foreach (Button b in new[] { send, attach, pageLink }) { b.BackColor = look.Shade(0); b.ForeColor = look.Shade(3); b.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), look.Shade(5), .2f); }
                 send.ForeColor = look.Shade(5);
-                if (changed && cards.Count > 0) fill();
+                if (changed) foreach (NoteRow row in rows) forget(row);
+                pills.Invalidate();
+                paper.Invalidate();
+                feed.Invalidate();
             };
-            notes.VisibleChanged += delegate { if (notes.Visible) { noteTint(); lay(); scrollEnd(); } };
+            notes.VisibleChanged += delegate { if (notes.Visible) { noteTint(); lay(); scroll = aim = maxScroll(); glidePill(); kick(); } };
             ShowBook();
             noteTint();
             fill();
@@ -8804,7 +9213,7 @@ public class CapriInternalBrowser : ICapriMod
             notes.Controls.Add(editingNote);
             notes.Controls.Add(composer);
             notes.Controls.Add(searchRow);
-            notes.Controls.Add(bar);
+            notes.Controls.Add(pills);
             notes.Controls.Add(head);
             feed.BringToFront();
             notes.Width = NotesWide();
