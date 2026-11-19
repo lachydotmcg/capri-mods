@@ -700,7 +700,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // ---- Message reader ----
-    internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; public bool Opened; }
+    internal sealed class ChatAt { public string Site, Who, Id, Others; public Tab Tab; public bool Opened; public int Count = 1; }
     // "Any new Discord messages?", "do I have any DMs", "anything on WhatsApp", "check my Discord", "has anyone messaged me"...
     private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:hey|ok|okay)\s+)?(?:capri\s*,?\s*)?(?:"
         + @"(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got|are\s+there|is\s+there)\s+)?(?:any\s+(?:new\s+|unread\s+)?|new\s+|unread\s+)(?:discord\s+|whats\s?app\s+)?(?:messages?|msgs?|dms?|direct\s+messages?|texts?)"
@@ -711,10 +711,10 @@ public class CapriInternalBrowser : ICapriMod
     private static readonly Regex StopReply = new Regex(@"^(?:cancel|stop|forget\s+(?:it|that)|don'?t\s+(?:reply|send)|no\s+reply)\b", Plain);
 
     // Who's messaged them on Discord: an unread DM in the list, as name, chat address and how many.
-    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var seen={},out='',lab=function(e){return e.getAttribute('aria-label')||''},nm=function(l){return l.replace(/^\d+\s+mentions?,\s*/i,'').replace(/,\s*\d+\s+mentions?$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()};[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){if(out)return;var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;seen[h]=1;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),b=box.querySelector('[class*=numberBadge],[class*=mentionsBadge]'),n=b?parseInt(b.textContent,10):parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(!(n>0))return;if(/\bgroup\b|\d+\s+members?/i.test(l+' '+(box.innerText||'')))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=((t||a).innerText||'').split('\n')[0].trim()}if(name)out=name.slice(0,40)+'\t'+h+'\t'+n});if(out)return out;[].forEach.call(document.querySelectorAll('[data-list-item-id^=guildsnav___]'),function(e){if(out||e.closest('[data-dnd-name]'))return;var id=(/^guildsnav___(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1],l=lab(e),n=parseInt((/(\d+)\s+mentions?/i.exec(l)||[])[1],10);if(id&&n>0&&nm(l)&&!/\bgroup\b/i.test(l))out=nm(l).slice(0,40)+'\t/channels/@me/'+id+'\t'+n});return out})()";
+    private const string DcUnread = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return '';var seen={},out=[],lab=function(e){return e.getAttribute('aria-label')||''},nm=function(l){return l.replace(/^\d+\s+(?:mentions?|unread\s+messages?),\s*/i,'').replace(/,\s*\d+\s+mentions?$/i,'').replace(/\s*\((?:direct message|group dm|dm)\)\s*$/i,'').replace(/,\s*\d*\s*unread.*$/i,'').trim()},num=function(box,l){var b=box&&box.querySelector('[class*=numberBadge],[class*=mentionsBadge]'),n=b?parseInt(b.textContent,10):NaN;if(!(n>0))n=parseInt((/(\d+)\s+(?:mentions?|unread)/i.exec(l)||[])[1],10);return n>0?n:0},add=function(name,h,n){if(!name||seen[h]||out.length>=6)return;seen[h]=1;out.push(name.slice(0,40)+'\t'+h+'\t'+Math.min(n,99))};var sep=document.querySelector('nav [class*=guildSeparator],[aria-label=Servers] [class*=guildSeparator],[class*=guildSeparator]');[].forEach.call(document.querySelectorAll('[data-list-item-id^=guildsnav___]'),function(e){var id=(/^guildsnav___(\d{5,25})$/.exec(e.getAttribute('data-list-item-id'))||[])[1];if(!id)return;if(sep?!(sep.compareDocumentPosition(e)&2):!!e.closest('[data-dnd-name]'))return;var box=e.closest('[class*=listItem]')||e.parentElement||e,l=lab(e)||lab(box),n=num(box,l),im=box.querySelector('img[alt]');if(!(n>0)||/\bgroup\b|\d+\s+members?/i.test(l))return;add(nm(l)||(im?im.getAttribute('alt').trim():''),'/channels/@me/'+id,n)});[].forEach.call(document.querySelectorAll('a[href^=""/channels/@me/""]'),function(a){var h=a.getAttribute('href')||'';if(!/^\/channels\/@me\/\d{5,25}$/.test(h)||seen[h])return;var box=a.closest('li,[class*=listItem],[role=treeitem]')||a,l=lab(a)||lab(box),n=num(box,l);if(!(n>0))return;if(/\bgroup\b|\d+\s+members?/i.test(l+' '+(box.innerText||'')))return;var name=nm(l);if(!name){var t=box.querySelector('[class*=name],[class*=overflow]');name=((t||a).innerText||'').split('\n')[0].trim()}add(name,h,n)});return out.join('\n')})()";
     private const string DcOpen = @"(function(h){var a=document.querySelector('a[href=""'+h+'""]')||document.querySelector('[data-list-item-id=""guildsnav___'+h.split('/').pop()+'""]');if(a){a.click();return 'ok'}history.pushState(null,'',h);dispatchEvent(new PopStateEvent('popstate'));return 'ok'})";
     // The newest messages in that chat from whoever sent the last one (up to 3), with their name first. 'mine' when it was them.
-    private const string DcRead = @"(function(h){if(location.pathname!==h)return 'wait';var L=[].slice.call(document.querySelectorAll('li[id^=chat-messages-]'));if(!L.length)return 'wait';var au=function(li){for(var x=li;x;x=x.previousElementSibling){var u=x.querySelector&&x.querySelector('[id^=message-username-]');if(u)return (u.innerText||'').trim()}return ''},A=au(L[L.length-1]),me=document.querySelector('[class*=panelTitleContainer],section[class*=panels] [class*=nameTag] [class*=title]'),out=[];if(me&&(me.innerText||'').trim().split('\n')[0]===A)return 'mine';for(var i=L.length-1;i>=0&&out.length<3;i--){if(au(L[i])!==A)break;var c=document.getElementById('message-content-'+L[i].id.split('-').pop()),t=c?(c.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(L[i].querySelector('img,video,[class*=attachment],[class*=imageWrapper]')?'[media]':'[other]'))}return A.slice(0,40)+'\n'+out.join('\n')})";
+    private const string DcRead = @"(function(h,most){most=Math.max(1,Math.min(most||3,10));if(location.pathname!==h)return 'wait';var L=[].slice.call(document.querySelectorAll('li[id^=chat-messages-]'));if(!L.length)return 'wait';var au=function(li){for(var x=li;x;x=x.previousElementSibling){var u=x.querySelector&&x.querySelector('[id^=message-username-]');if(u)return (u.innerText||'').trim()}return ''},A=au(L[L.length-1]),me=document.querySelector('[class*=panelTitleContainer],section[class*=panels] [class*=nameTag] [class*=title]'),out=[];if(me&&(me.innerText||'').trim().split('\n')[0]===A)return 'mine';for(var i=L.length-1;i>=0&&out.length<most;i--){if(au(L[i])!==A)break;var c=document.getElementById('message-content-'+L[i].id.split('-').pop()),t=c?(c.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(L[i].querySelector('img,video,[class*=attachment],[class*=imageWrapper]')?'[media]':'[other]'))}return A.slice(0,40)+'\n'+out.join('\n')})";
     private const string DcState = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return 'wait';if(/^\/(login|register)/.test(location.pathname))return 'login';return document.querySelector('a[href^=""/channels/@me/""],[data-list-item-id^=guildsnav___]')?'ready':'wait'})()";
     private const string WaState = @"(function(){if(location.hostname!=='web.whatsapp.com')return 'wait';if(document.getElementById('pane-side'))return 'ready';return document.querySelector('canvas,[data-ref]')?'login':'wait'})()";
     // Where the chat's message box is on the screen (in screen pixels), for the picture of a typed reply.
@@ -762,22 +762,39 @@ public class CapriInternalBrowser : ICapriMod
                         if (state != "ready") { Tell((site == "Discord" ? "Discord" : "WhatsApp Web") + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
                     }
                     any = true;
-                    string[] p = (InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "").Split('\t');
-                    if (p.Length != 3) continue;
-                    ChatAt chat = new ChatAt { Site = site, Who = Clean(p[0], 40), Id = p[1], Tab = t };
-                    if (chat.Who.Length == 0 || (site == "Discord" && !Regex.IsMatch(chat.Id, @"^/channels/@me/\d{5,25}$"))) continue;
-                    string key = site + "|" + chat.Id + "|" + p[2], where = site + "|" + chat.Id;
-                    DateTime last;
-                    lock (gate)
+                    List<ChatAt> found = new List<ChatAt>();
+                    foreach (string line in (InTab(t, site == "Discord" ? DcUnread : WaUnread) ?? "").Split('\n'))
                     {
-                        if (chatsSeen.Count > 500) chatsSeen.Clear();
-                        // Once per new message, not while they're looking at that chat, and each chat at most every 3 minutes.
-                        if (!asked && (chatsSeen.Contains(key) || looking || (DateTime.Now - lastAnnounced).TotalSeconds < 20 || (chatAsked.TryGetValue(where, out last) && (DateTime.Now - last).TotalMinutes < 3))) { if (looking) chatsSeen.Add(key); continue; }
+                        string[] p = line.Split('\t');
+                        int count;
+                        if (p.Length != 3 || !int.TryParse(p[2], out count) || count < 1) continue;
+                        ChatAt one = new ChatAt { Site = site, Who = Clean(p[0], 40), Id = p[1], Tab = t, Count = Math.Min(count, 10) };
+                        if (one.Who.Length == 0 || (site == "Discord" && !Regex.IsMatch(one.Id, @"^/channels/@me/\d{5,25}$"))) continue;
+                        found.Add(one);
                     }
-                    if (!MessageIn(chat)) continue;
-                    lock (gate) { chatsSeen.Add(key); chatAsked[where] = lastAnnounced = DateTime.Now; }
-                    told = true;
-                    break;
+                    foreach (ChatAt chat in found)
+                    {
+                        string key = site + "|" + chat.Id + "|" + chat.Count, where = site + "|" + chat.Id;
+                        DateTime last;
+                        lock (gate)
+                        {
+                            if (chatsSeen.Count > 500) chatsSeen.Clear();
+                            // Once per new message, not while they're looking at that chat, and each chat at most every 3 minutes.
+                            if (!asked && (chatsSeen.Contains(key) || looking || (DateTime.Now - lastAnnounced).TotalSeconds < 20 || (chatAsked.TryGetValue(where, out last) && (DateTime.Now - last).TotalMinutes < 3))) { if (looking) chatsSeen.Add(key); continue; }
+                        }
+                        // Asked: everyone else with new messages gets named too.
+                        if (asked)
+                        {
+                            List<string> rest = new List<string>();
+                            foreach (ChatAt other in found) if (other != chat) rest.Add(other.Who + " (" + other.Count + ")");
+                            if (rest.Count > 0) chat.Others = rest.Count == 1 ? rest[0] : string.Join(", ", rest.GetRange(0, rest.Count - 1).ToArray()) + " and " + rest[rest.Count - 1];
+                        }
+                        if (!MessageIn(chat)) continue;
+                        lock (gate) { chatsSeen.Add(key); chatAsked[where] = lastAnnounced = DateTime.Now; }
+                        told = true;
+                        break;
+                    }
+                    if (told) break;
                 }
                 if (asked && !told) Tell(any ? (only == "Discord" ? "No new Discord messages, choom." : only == "WhatsApp" ? "No new WhatsApp messages, choom." : "No new messages, choom.") : "Open Discord or WhatsApp Web in Capri Browser and sign in there, and I'll keep an eye on it for you.");
             }
@@ -791,9 +808,12 @@ public class CapriInternalBrowser : ICapriMod
     {
         lock (gate) if ((pend != null && Now() <= pendUntil) || (replying != null && Now() <= replyUntil) || typedChat != null) return false;
         // Auto read-out: straight to reading it, with her box showing.
-        if (Flag("autoread", false)) { Card(chat, "New message from " + chat.Who + "...", "Reading it out."); Tell(ReadChat(chat)); return true; }
-        Card(chat, "New " + chat.Site + " message from " + chat.Who + ". Want me to read it?", "Say yes and I'll read it out.");
-        Tell(Ask("New " + chat.Site + " message from " + chat.Who + ", choom. Want me to read it?", delegate { return ReadChat(chat); }));
+        if (Flag("autoread", false)) { Card(chat, (chat.Count > 1 ? chat.Count + " new messages" : "New message") + " from " + chat.Who + "...", "Reading it out."); Tell(ReadChat(chat)); return true; }
+        string what = chat.Count > 1 ? chat.Count + " new " + chat.Site + " messages from " + chat.Who : "New " + chat.Site + " message from " + chat.Who;
+        string also = chat.Others == null ? "" : " You've also got new ones from " + chat.Others + ".";
+        string it = chat.Count > 1 ? "them" : "it";
+        Card(chat, what + "." + also + " Want me to read " + it + "?", "Say yes and I'll read " + it + " out.");
+        Tell(Ask(what + ", choom." + also + " Want me to read " + it + "?", delegate { return ReadChat(chat); }));
         return true;
     }
 
@@ -803,7 +823,7 @@ public class CapriInternalBrowser : ICapriMod
         bool dc = chat.Site == "Discord";
         string got = InTab(chat.Tab, (dc ? DcOpen : WaOpen) + "(" + Quote(chat.Id) + ")");
         string said = null;
-        for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, (dc ? DcRead : WaRead) + "(" + Quote(chat.Id) + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
+        for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, dc ? DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")" : WaRead + "(" + Quote(chat.Id) + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
         if (said == "mine") { Card(chat, "Looks like you've already answered this one.", ""); return "Looks like you've already answered that one, choom."; }
         if (string.IsNullOrEmpty(said) || said == "wait") { Card(chat, "I couldn't open that chat.", "Click here to see it."); return "I couldn't open that chat, choom. It's in your " + chat.Site + " tab."; }
         string[] lines = said.Split('\n');
@@ -813,7 +833,7 @@ public class CapriInternalBrowser : ICapriMod
         string raw = "";
         for (int i = 1; i < lines.Length; i++) { raw += lines[i] + "\n"; parts.Add(lines[i] == "[media]" ? "(sent a picture, video or voice note)" : lines[i] == "[other]" ? "(sent something I can't read out)" : Clip(Regex.Replace(Regex.Replace(lines[i], @"https?://\S+|www\.\S+", "(a link)"), @"\s+", " ").Trim(), 300)); }
         if (LoginCode.IsMatch(raw)) { Card(chat, "That one looks like a login code, so I won't read it out.", "Click here to see it in the chat."); return "That one looks like a login code, choom, so I won't read it out. Click the box if you want to see it."; }
-        string text = Clip(string.Join(" ", parts.ToArray()), 450);
+        string text = Clip(string.Join(" ... ", parts.ToArray()), 1200);
         Card(chat, from + " says: " + text, "Want to reply? Say yes or no.");
         return Ask(from + " says: " + text + " ... Want to reply?", delegate { return StartReply(chat); });
     }
