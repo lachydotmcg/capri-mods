@@ -22,7 +22,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "what's new in Capri Browser?" | Tells you the update notes, then asks if you want her to remember them |
 | "find a random website" | Opens a random interesting site (Site Roulette) |
 | "add to my notes ..." / "note this down" / "write that down" | Puts what you said in a new Browser note (nothing said: the page you're on) |
-| "research ..." / "look into ..." / "dig into this" | Capri Research: reads several sites in the background while you carry on, then asks to bring it up, put it in your notes, or both |
+| "research ..." / "look into ..." / "dig into this" | Capri Research: searches and reads several sites in hidden views of the browser (not in your tabs or history) while you carry on, then asks to bring it up, put it in your notes, or both |
 | "what's the best ..." / "what's the best website for ..." | Her top picks with prices and sources, or the best sites for it |
 | "fact check ..." / "is it true that ..." | True, false, partly true or not clear, with sources |
 | "compare my tabs" / "which of these should I buy?" / "what have I got open?" | Compares or sums up your open tabs |
@@ -110,7 +110,7 @@ The mod itself (not the pages you visit) contacts:
 | Host | Why |
 | --- | --- |
 | raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | The ad blocker lists, voice commands in other languages, games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
-| en.wikipedia.org (or your language's Wikipedia), www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
+| en.wikipedia.org (or your language's Wikipedia), search.brave.com, www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
 | www.google.com/s2/favicons, github.githubassets.com, and each Speed Dial site | Little site icons for Speed Dial and the sidebar |
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
 
