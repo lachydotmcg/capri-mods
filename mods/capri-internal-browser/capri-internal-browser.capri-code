@@ -10228,13 +10228,14 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             string home = ExtensionsHome;
             object profile = ExtensionProfile();
             if (home == null || profile == null) { done("Open a website tab first, then try again."); return; }
-            string folder;
+            string folder, made = null;
             try
             {
                 string name = Regex.Replace(Path.GetFileNameWithoutExtension(source.TrimEnd('\\', '/')), @"[^\w.-]+", "-");
                 folder = Path.Combine(home, name);
                 for (int n = 2; Directory.Exists(folder); n++) folder = Path.Combine(home, name + "-" + n);
                 Directory.CreateDirectory(folder);
+                made = folder;
                 if (Directory.Exists(source)) CopyFolder(source, folder, 0);
                 else
                 {
@@ -10260,6 +10261,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             try
             {
                 string kept = folder;
+                string unpacked = made;
                 object task = Call(profile, "AddBrowserExtensionAsync", folder);
                 System.Threading.Tasks.Task run = (System.Threading.Tasks.Task)task;
                 run.ContinueWith(delegate(System.Threading.Tasks.Task finished)
@@ -10270,6 +10272,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     Post(delegate
                     {
                         if (id != null) Keep("extfolders", Kept("extfolders") + id + "\t" + kept + "\n");
+                        else if (unpacked != null) try { Directory.Delete(unpacked, true); } catch (Exception) { }
                         done(why);
                     });
                 });
@@ -12645,11 +12648,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         {
             Type type = videoForms.GetType("Microsoft.Web.WebView2.WinForms.WebView2", true);
             view = (Control)Activator.CreateInstance(type);
-            object properties = Activator.CreateInstance(videoForms.GetType("Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties", true));
-            Set(properties, "UserDataFolder", profile);
-            if (inPrivate) Set(properties, "IsInPrivateModeEnabled", true);
-            try { Set(properties, "AreBrowserExtensionsEnabled", true); } catch (Exception) { }
-            Set(view, "CreationProperties", properties);
+            startProfile = profile;
+            startPrivate = inPrivate;
             Set(view, "DefaultBackgroundColor", background);
             Control = view;
             Hook(view, "CoreWebView2InitializationCompleted", delegate(object args)
@@ -12873,6 +12873,72 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 if (Loaded != null) Loaded();
             });
             Hook(view, "SourceChanged", delegate { string at = Address; if (at != null && at.StartsWith("http", StringComparison.Ordinal) && Moved != null) Moved(at); });
+            StartEdge(type);
+        }
+
+        private readonly string startProfile;
+        private readonly bool startPrivate;
+        // One Edge environment per profile folder, with extensions on, shared by every tab.
+        private static readonly Dictionary<string, System.Threading.Tasks.Task> Environments = new Dictionary<string, System.Threading.Tasks.Task>();
+
+        private void StartEdge(Type type)
+        {
+            SynchronizationContext ui = SynchronizationContext.Current;
+            System.Threading.Tasks.Task made = null;
+            try
+            {
+                if (ui == null) throw new InvalidOperationException("no UI context");
+                lock (Environments)
+                    if (!Environments.TryGetValue(startProfile, out made))
+                    {
+                        Type kind = videoCore.GetType("Microsoft.Web.WebView2.Core.CoreWebView2EnvironmentOptions", true);
+                        ConstructorInfo make = kind.GetConstructors()[0];
+                        ParameterInfo[] ps = make.GetParameters();
+                        object[] values = new object[ps.Length];
+                        for (int i = 0; i < ps.Length; i++) values[i] = ps[i].HasDefaultValue ? ps[i].DefaultValue : null;
+                        object options = make.Invoke(values);
+                        Set(options, "AreBrowserExtensionsEnabled", true);
+                        Type env = videoCore.GetType("Microsoft.Web.WebView2.Core.CoreWebView2Environment", true);
+                        MethodInfo create = env.GetMethod("CreateAsync", new[] { typeof(string), typeof(string), kind });
+                        made = (System.Threading.Tasks.Task)create.Invoke(null, new object[] { null, startProfile, options });
+                        Environments[startProfile] = made;
+                    }
+            }
+            catch (Exception) { made = null; }
+            if (made == null) { StartOldWay(type); return; }
+            made.ContinueWith(delegate(System.Threading.Tasks.Task done)
+            {
+                try
+                {
+                    if (done.IsFaulted || view.IsDisposed) throw new InvalidOperationException("no environment");
+                    object environment = done.GetType().GetProperty("Result").GetValue(done, null);
+                    object controller = environment.GetType().GetMethod("CreateCoreWebView2ControllerOptions").Invoke(environment, null);
+                    if (startPrivate) Set(controller, "IsInPrivateModeEnabled", true);
+                    MethodInfo ensure = null;
+                    foreach (MethodInfo method in type.GetMethods())
+                        if (method.Name == "EnsureCoreWebView2Async" && method.GetParameters().Length == 2 && method.GetParameters()[1].ParameterType.Name == "CoreWebView2ControllerOptions") ensure = method;
+                    if (ensure == null) throw new InvalidOperationException("no controller options");
+                    ensure.Invoke(view, new[] { environment, controller });
+                }
+                catch (Exception)
+                {
+                    lock (Environments) if (done.IsFaulted) Environments.Remove(startProfile);
+                    if (!view.IsDisposed) StartOldWay(type);
+                }
+            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        // As before: the control makes its own environment (extensions stay off).
+        private void StartOldWay(Type type)
+        {
+            try
+            {
+                object properties = Activator.CreateInstance(videoForms.GetType("Microsoft.Web.WebView2.WinForms.CoreWebView2CreationProperties", true));
+                Set(properties, "UserDataFolder", startProfile);
+                if (startPrivate) Set(properties, "IsInPrivateModeEnabled", true);
+                Set(view, "CreationProperties", properties);
+            }
+            catch (Exception) { }
             MethodInfo ensure = null;
             foreach (MethodInfo method in type.GetMethods()) if (method.Name == "EnsureCoreWebView2Async" && (ensure == null || method.GetParameters().Length < ensure.GetParameters().Length)) ensure = method;
             ensure.Invoke(view, new object[ensure.GetParameters().Length]);
