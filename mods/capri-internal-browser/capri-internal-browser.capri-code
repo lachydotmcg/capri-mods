@@ -190,7 +190,7 @@ public class CapriInternalBrowser : ICapriMod
     // Done with the chats: nothing being read, replied to or waiting to send, for 8 seconds.
     private bool ChatIdle()
     {
-        lock (gate) return typedChat == null && (replying == null || Now() > replyUntil) && (pend == null || Now() > pendUntil) && (DateTime.Now - chatUsed).TotalSeconds > 15;
+        lock (gate) return typedChat == null && (replying == null || Now() > replyUntil) && (pend == null || Now() > pendUntil) && (DateTime.Now - chatUsed).TotalSeconds > 8;
     }
     private string typedText;
     private DateTime typedUntil;
