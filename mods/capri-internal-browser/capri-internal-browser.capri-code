@@ -5953,59 +5953,124 @@ public class CapriInternalBrowser : ICapriMod
             float[] w;
             switch (kind)
             {
-                case "open":
-                    w = new float[(int)(BlipRate * .16)];
-                    Glide(w, 0, .11, 140, 320, .35, .55);
-                    Hiss(w, 0, .13, new Filter('b', 1600, .8), .2);
-                    return Soften(w, 4200);
-                case "close":
-                    w = new float[(int)(BlipRate * .12)];
-                    Glide(w, 0, .09, 260, 95, .25, .6);
-                    Hiss(w, 0, .035, new Filter('l', 320, .9), .5);
-                    return Soften(w, 2600);
-                case "click":
-                case "switch":
-                    w = new float[(int)(BlipRate * .07)];
-                    double k = kind == "switch" ? .6 : 1;
-                    Glide(w, 0, .045, 180, 60, .1, .55 * k);
-                    Glide(w, 0, .04, 270, 90, .6, .18 * k);
-                    Hiss(w, 0, .012, new Filter('l', 2200, .9), .22 * k);
-                    return Soften(w, 3200);
-                case "hover":
-                    w = new float[(int)(BlipRate * .02)];
-                    Hiss(w, 0, .015, new Filter('h', 4200, .8), .07);
-                    return w;
-                case "menu":
-                    w = new float[(int)(BlipRate * .05)];
-                    Glide(w, 0, .035, 620, 560, 0, .1);
-                    Hiss(w, 0, .02, new Filter('b', 3000, 1.2), .08);
-                    return w;
                 case "key":
                     w = new float[(int)(BlipRate * .05)];
                     Glide(w, 0, .035, 150 * pitch, 105 * pitch, .2, .42);
                     Hiss(w, 0, .009, new Filter('b', 2500 * pitch, 1.3), .55);
                     return Soften(w, 6000);
-                case "focus":
-                    w = new float[(int)(BlipRate * .15)];
-                    Glide(w, 0, .065, 330, 330, 0, .22);
-                    Glide(w, 0, .065, 660, 660, 0, .05);
-                    Glide(w, .055, .075, 495, 495, 0, .24);
-                    Glide(w, .055, .075, 990, 990, 0, .06);
-                    return Soften(w, 2200);
-                case "panel":
-                    w = new float[(int)(BlipRate * .2)];
-                    Glide(w, 0, .16, 520, 780, 0, .12);
-                    Glide(w, .02, .15, 1040, 1560, 0, .05);
-                    Hiss(w, 0, .16, new Filter('b', 2400, 1.5), .1);
-                    return Soften(w, 3600);
-                default: // "done": a warm two-chord resolve, A2 + E3 then C#3 + G#3
-                    w = new float[(int)(BlipRate * .4)];
-                    Glide(w, 0, .2, 110, 110, .5, .3);
-                    Glide(w, 0, .2, 164.8, 164.8, .5, .24);
-                    Glide(w, .15, .25, 138.6, 138.6, .5, .3);
-                    Glide(w, .15, .25, 207.7, 207.7, .5, .24);
-                    return Soften(w, 1800);
+                case "open":            // a tab opens: an airy rise and a soft pop up into place
+                    w = new float[(int)(BlipRate * .32)];
+                    Air(w, 0, .13, 700, 3400, .16);
+                    Pluck(w, .035, 587, 1.5, .085, .5);
+                    Pluck(w, .035, 1174, 1.5, .05, .12);
+                    return Level(Room(Soften(w, 5200), .2), .5);
+                case "close":           // a tab closes: the same air falling away, and a muffled drop
+                    w = new float[(int)(BlipRate * .3)];
+                    Air(w, 0, .12, 3000, 650, .14);
+                    Pluck(w, .02, 392, 1.35, .075, .5);
+                    Pluck(w, .02, 196, 1.2, .06, .25);
+                    return Level(Room(Soften(w, 3600), .18), .46);
+                case "switch":          // moving between tabs: a light glassy tick
+                    w = new float[(int)(BlipRate * .16)];
+                    Pluck(w, 0, 1318, 1.15, .028, .32);
+                    Pluck(w, 0, 2637, 1.1, .016, .08);
+                    return Level(Room(Soften(w, 7000), .16), .26);
+                case "click":           // a button: a small rounded tap
+                    w = new float[(int)(BlipRate * .16)];
+                    Pluck(w, 0, 880, 1.4, .03, .4);
+                    Pluck(w, 0, 220, 1.6, .035, .3);
+                    return Level(Room(Soften(w, 5000), .14), .32);
+                case "hover":           // barely there
+                    w = new float[(int)(BlipRate * .05)];
+                    Pluck(w, 0, 2349, 1.05, .01, .2);
+                    return Level(Soften(w, 8000), .07);
+                case "menu":            // a menu opens: a quick shimmer up
+                    w = new float[(int)(BlipRate * .24)];
+                    Air(w, 0, .07, 1400, 3600, .12);
+                    Pluck(w, .012, 988, 1.3, .05, .35);
+                    Pluck(w, .04, 1480, 1.2, .045, .2);
+                    return Level(Room(Soften(w, 6500), .2), .3);
+                case "panel":           // a side panel slides in: a longer swish with two soft notes
+                    w = new float[(int)(BlipRate * .42)];
+                    Air(w, 0, .22, 500, 2600, .18);
+                    Pluck(w, .06, 659, 1.25, .1, .3);
+                    Pluck(w, .1, 988, 1.2, .12, .25);
+                    return Level(Room(Soften(w, 4800), .24), .42);
+                case "focus":           // the address bar: two quiet notes
+                    w = new float[(int)(BlipRate * .3)];
+                    Pluck(w, 0, 784, 1.1, .08, .3);
+                    Pluck(w, .05, 1175, 1.1, .1, .25);
+                    return Level(Room(Soften(w, 5200), .22), .3);
+                default:                // "done", a download finished: three rising notes that ring out
+                    w = new float[(int)(BlipRate * .75)];
+                    Pluck(w, 0, 523, 1.2, .22, .3);
+                    Pluck(w, .085, 659, 1.2, .24, .3);
+                    Pluck(w, .17, 784, 1.2, .32, .34);
+                    Pluck(w, .17, 1568, 1.1, .2, .06);
+                    return Level(Room(Soften(w, 4500), .28), .5);
             }
+        }
+
+        // A synth pluck: starts a little sharp (bend) and slides into its note in a few milliseconds, then dies away.
+        private static void Pluck(float[] into, double start, double hz, double bend, double decay, double loud)
+        {
+            int first = (int)(start * BlipRate);
+            double phase = 0;
+            for (int i = 0; first + i < into.Length; i++)
+            {
+                double t = i / (double)BlipRate;
+                double amp = Math.Min(1, t / .0025) * Math.Exp(-t / decay);
+                if (amp < .0005 && t > .005) break;
+                double f = hz * (1 + (bend - 1) * Math.Exp(-t / .012));
+                phase += 2 * Math.PI * f / BlipRate;
+                into[first + i] += (float)(loud * amp * (Math.Sin(phase) + .12 * Math.Sin(2 * phase)));
+            }
+        }
+
+        // Air: noise through a band that sweeps from one pitch to another, swelling in and out.
+        private static void Air(float[] into, double start, double length, double from, double to, double loud)
+        {
+            int first = (int)(start * BlipRate), count = (int)(length * BlipRate);
+            double y1 = 0, y2 = 0, x1 = 0, x2 = 0;
+            for (int i = 0; i < count && first + i < into.Length; i++)
+            {
+                double t = i / (double)count, hz = from * Math.Pow(to / from, t);
+                double wv = 2 * Math.PI * hz / BlipRate, alpha = Math.Sin(wv) / 2.4, a0 = 1 + alpha;
+                double white;
+                lock (blipDice) white = blipDice.NextDouble() * 2 - 1;
+                double y = (alpha * white - alpha * x2 + 2 * Math.Cos(wv) * y1 - (1 - alpha) * y2) / a0;
+                x2 = x1; x1 = white; y2 = y1; y1 = y;
+                double swell = Math.Sin(Math.PI * t);
+                into[first + i] += (float)(loud * swell * swell * y * 3);
+            }
+        }
+
+        // A small room: a few short echoes blended in, so sounds sit in a space instead of a dry beep.
+        private static float[] Room(float[] wave, double mix)
+        {
+            int[] gaps = { (int)(BlipRate * .0297), (int)(BlipRate * .0371), (int)(BlipRate * .0411), (int)(BlipRate * .0437) };
+            float[] wet = new float[wave.Length];
+            foreach (int gap in gaps)
+            {
+                float[] line = new float[gap];
+                int at = 0;
+                for (int i = 0; i < wave.Length; i++) { float o = line[at]; line[at] = wave[i] + o * .62f; wet[i] += o * .25f; at = (at + 1) % gap; }
+            }
+            Filter dark = new Filter('l', 3800, .707);
+            for (int i = 0; i < wave.Length; i++) wave[i] += (float)(mix * dark.Run(wet[i]));
+            return wave;
+        }
+
+        // Every sound brought to the same peak, then a fade over its last few milliseconds so nothing clicks at the end.
+        private static float[] Level(float[] wave, double peak)
+        {
+            float top = 0;
+            foreach (float v in wave) top = Math.Max(top, Math.Abs(v));
+            if (top <= 0) return wave;
+            float k = (float)(peak / top);
+            int tail = Math.Min(wave.Length, (int)(BlipRate * .012));
+            for (int i = 0; i < wave.Length; i++) wave[i] *= k * Math.Min(1f, (wave.Length - i) / (float)tail);
+            return wave;
         }
 
         private DateTime lastHover = DateTime.MinValue;
@@ -7939,7 +8004,7 @@ public class CapriInternalBrowser : ICapriMod
             html.Append(open(11)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
             int volume;
             if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
-            html.Append(open(12)).Append(Row("Browser sounds", "Sounds for tabs, menus, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
+            html.Append(open(12)).Append(Row("Browser sounds", "Soft sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
                 .Append(Row("Typing sounds", "A soft key sound as you type in the address bar and on pages.", Switch("x-typesounds", Flag("typesounds", false))))
                 .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
                 .Append("</div>");
