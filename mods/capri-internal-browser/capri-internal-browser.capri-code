@@ -4013,6 +4013,7 @@ public class CapriInternalBrowser : ICapriMod
         private void Select(Tab t)
         {
             if (t == null) return;
+            if (pwCard != null && pwCardTab != t) ClosePwCard();
             Tab was = tab;
             if (was != null && was != t && tabs.Contains(was)) Blip("switch");
             if (was != null && was != t && tabs.Contains(was) && !was.Private && !was.OnReader && was.Address != null && !Touchy.IsMatch("at " + was.Address + " "))
@@ -5857,7 +5858,7 @@ public class CapriInternalBrowser : ICapriMod
             + "• Kept only on this PC. Nothing is uploaded, synced or sent anywhere.\n"
             + "• Capri can't see them. Her voice commands, custom jobs and page reading never touch this list, and she never types passwords.\n"
             + "• Passwords stay hidden until you press the eye, and a copied one is wiped from the clipboard after 30 seconds.\n"
-            + "• Signing in on sites still works as before: Edge's engine fills in what it saved for you.";
+            + "• When you sign in on a site, a card offers to save it here, and next time to fill it in. Nothing is saved or filled unless you press the button, and never in private tabs. Passwords Edge saved before still fill in too.";
 
         private void BuildPasswords()
         {
@@ -6003,6 +6004,113 @@ public class CapriInternalBrowser : ICapriMod
                     Width = wide, Height = 60, ForeColor = faint, BackColor = back, Font = new System.Drawing.Font(Ui, 10f), UseMnemonic = false
                 });
             pwList.ResumeLayout();
+        }
+
+        // A site's name for matching saved logins: no https://, path, port or www.
+        private static string SiteHost(string site)
+        {
+            string h = Regex.Replace((site ?? "").Trim().ToLowerInvariant(), "^[a-z]+://", "");
+            int end = h.IndexOfAny(new[] { '/', '?', '#', ':' });
+            if (end >= 0) h = h.Substring(0, end);
+            return h.StartsWith("www.", StringComparison.Ordinal) ? h.Substring(4) : h;
+        }
+
+        // They signed in: offer to save it (or update it) in Passwords. Only on https pages in normal tabs, and not on sites they said never to.
+        private void OfferSave(Tab t, string from, string user, string pass)
+        {
+            Uri at;
+            if (t == null || t.Private || !tabs.Contains(t) || pass == null || pass.Length == 0 || pass.Length > 500 || !Uri.TryCreate(from, UriKind.Absolute, out at) || at.Scheme != "https") return;
+            string host = SiteHost(at.Host), name = NoTabs(user);
+            if (host.Length == 0 || ("|" + Kept("pw-never") + "|").Contains("|" + host + "|")) return;
+            Login same = Logins().Find(delegate(Login l) { return SiteHost(l.Site) == host && l.User == name; });
+            if (same != null && same.Pass == pass) return;
+            PwCard(t, (same == null ? "Save password for " : "Update password for ") + host + "?", name.Length > 0 ? name : "No username", same == null ? "Save" : "Update", delegate
+            {
+                if (same == null) Logins().Insert(0, new Login { Site = host, User = name, Pass = pass });
+                else { same.Pass = pass; same.When = DateTime.Now; }
+                SaveLogins();
+                if (pwList != null) FillLogins();
+            }, "Never for this site", delegate { Keep("pw-never", (Kept("pw-never") + "|" + host).Trim('|')); });
+        }
+
+        // The page has a password box and they've saved a login for this site: offer to fill it in (the newest one).
+        private void OfferFill(Tab t, string from)
+        {
+            Uri at;
+            if (t == null || t.Private || !tabs.Contains(t) || pwCard != null || !Uri.TryCreate(from, UriKind.Absolute, out at) || at.Scheme != "https") return;
+            string host = SiteHost(at.Host);
+            Login l = Logins().Find(delegate(Login x) { return SiteHost(x.Site) == host; });
+            if (l == null) return;
+            PwCard(t, "Fill your saved password?", (l.User.Length > 0 ? l.User + " on " : "") + host, "Fill", delegate
+            {
+                // Only into the same site, still open in that tab.
+                if (!tabs.Contains(t) || t.Private || SiteHost(HostOf(t.Address) ?? "") != host) return;
+                t.Viewer.Script(FillScript + "(" + Quote(l.User) + "," + Quote(l.Pass) + ")");
+            }, null, null);
+        }
+
+        // Puts the username (if its box is empty) and the password into the page's visible password box, as typing would.
+        private const string FillScript = "(function(u,p){var ps=[].slice.call(document.querySelectorAll('input[type=password]')).filter(function(e){return e.offsetParent!==null});if(!ps.length)return 'none';var pw=ps[0];"
+            + "function set(e,v){Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))}"
+            + "if(u){var ins=[].slice.call((pw.form||document).querySelectorAll('input')),un=null;for(var i=0;i<ins.length;i++){if(ins[i]===pw)break;if(/^(text|email|tel)$/i.test(ins[i].type)&&ins[i].offsetParent!==null)un=ins[i]}if(un&&!un.value)set(un,u)}set(pw,p);return 'ok'})";
+
+        private Panel pwCard;
+        private Tab pwCardTab;
+
+        // The small save / fill card at the top right of the page, in her colours. It goes after 45 seconds, or when they switch tabs.
+        private void PwCard(Tab t, string head, string body, string okText, Action ok, string altText, Action alt)
+        {
+            if (t != tab) return;
+            ClosePwCard();
+            Look look = mod.look;
+            Panel c = new Panel { Width = 330, Height = 104, BackColor = look.Shade(1) };
+            c.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(look.Shade(4))) e.Graphics.DrawRectangle(line, 0, 0, c.Width - 1, c.Height - 1); using (SolidBrush bar = new SolidBrush(look.Shade(5))) e.Graphics.FillRectangle(bar, 0, 0, 3, c.Height); };
+            Label h = new Label { Text = head, Left = 14, Top = 10, Width = 280, Height = 20, ForeColor = look.Shade(5), BackColor = look.Shade(1), Font = new System.Drawing.Font(UiBold, 10f), AutoEllipsis = true, UseMnemonic = false };
+            Label b = new Label { Text = body, Left = 14, Top = 34, Width = 300, Height = 20, ForeColor = look.Shade(2), BackColor = look.Shade(1), Font = new System.Drawing.Font(Ui, 10f), AutoEllipsis = true, UseMnemonic = false };
+            Label x = new Label { Text = "", Left = 300, Top = 10, Width = 22, Height = 22, ForeColor = look.Shade(3), BackColor = look.Shade(1), Font = new System.Drawing.Font("Segoe MDL2 Assets", 9f), Cursor = Cursors.Hand };
+            Func<string, int, Label> button = delegate(string text, int left)
+            {
+                System.Drawing.Font font = new System.Drawing.Font(UiBold, 9.5f);
+                return new Label { Text = text, Left = left, Top = 64, Height = 28, Width = TextRenderer.MeasureText(text, font).Width + 26, TextAlign = ContentAlignment.MiddleCenter, Font = font, BorderStyle = BorderStyle.FixedSingle, BackColor = look.Shade(1), ForeColor = look.Shade(5), Cursor = Cursors.Hand, UseMnemonic = false };
+            };
+            Label go = button(okText, 14);
+            go.Click += delegate { ClosePwCard(); ok(); };
+            c.Controls.AddRange(new Control[] { h, b, x, go });
+            if (altText != null)
+            {
+                Label other = button(altText, go.Right + 8);
+                other.ForeColor = look.Shade(3);
+                other.Click += delegate { ClosePwCard(); alt(); };
+                c.Controls.Add(other);
+            }
+            x.Click += delegate { ClosePwCard(); };
+            pwCard = c;
+            pwCardTab = t;
+            Controls.Add(c);
+            c.BringToFront();
+            Point at = PointToClient(holder.PointToScreen(Point.Empty));
+            c.Left = at.X + holder.Width - c.Width - 14;
+            int top = at.Y + 14;
+            c.Top = top - 20;
+            Ease(c, 200, delegate(float e) { c.Top = top - 20 + (int)(20 * e); }, null);
+            DateTime shown = DateTime.UtcNow;
+            System.Windows.Forms.Timer away = new System.Windows.Forms.Timer { Interval = 2000 };
+            away.Tick += delegate
+            {
+                if (c.IsDisposed || pwCard != c) { away.Dispose(); return; }
+                if ((DateTime.UtcNow - shown).TotalSeconds > 45 && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) { away.Dispose(); ClosePwCard(); }
+            };
+            away.Start();
+        }
+
+        private void ClosePwCard()
+        {
+            Panel c = pwCard;
+            pwCard = null;
+            pwCardTab = null;
+            if (c == null || c.IsDisposed) return;
+            int from = c.Top;
+            Ease(c, -140, delegate(float e) { c.Top = from - (int)(20 * e); }, delegate { Controls.Remove(c); c.Dispose(); });
         }
 
         // Add or change one: a small window in her colours with the site, username and password.
@@ -10598,6 +10706,8 @@ public class CapriInternalBrowser : ICapriMod
                     mod.Summarise(t.Title, t.Address, "The part they highlighted on \"" + t.Title + "\": " + picked, delegate { }, "Explain the part they highlighted, simply and briefly.");
                 });
             };
+            v.LoginSeen = delegate(string from, string user, string pass) { OfferSave(t, from, user, pass); };
+            v.PasswordBox = delegate(string from) { OfferFill(t, from); };
             v.Ended = delegate(string title) { if (!t.Private) { Bump("videos", 1); Bump("videos" + Week(), 1); } if (!t.Private && Flag("react", true)) mod.React(title); };
             v.Opening = delegate(string url) { Later(delegate { OpenTab(null, url, true); }); };
             v.Mine = delegate(string url) { if ((t.OnReader && t.Special != "addon" && t.Special != "welcome") || (t.Special == "welcome" && Regex.IsMatch(url, "^" + Regex.Escape(Own) + "go[?]w=(video|settings|home|download|quiet|bug|idea|send&k=(bug|idea)&t=[^&#]{0,600}&m=[^&#]{0,12000})$")) || Regex.IsMatch(url, "^" + Regex.Escape(Own) + "play[?]g=(cancel|guess|guessed&r=[01]|quit|typed&w=[0-9]+&a=[0-9]+|survived&s=[0-9]+)$")) Later(delegate { OwnLink(t, url); }); };
@@ -11225,6 +11335,9 @@ public class CapriInternalBrowser : ICapriMod
         public Action Loaded, Ready;
         // Asked: they picked "Ask Capri about this" on some highlighted words. Ended: a video on the page finished (its title).
         public Action<string> Asked, Ended;
+        // LoginSeen: they signed in on the page (where, username, password), for the Passwords list. PasswordBox: the page has a password box.
+        public Action<string, string, string> LoginSeen;
+        public Action<string> PasswordBox;
         public virtual void Dark(bool on) { }
         public virtual void Downloads() { }
         // Sound: the page started or stopped making sound, or was muted (playing, muted).
@@ -11409,7 +11522,8 @@ public class CapriInternalBrowser : ICapriMod
                 try
                 {
                     object settings = Get(core, "Settings");
-                    Set(settings, "IsPasswordAutosaveEnabled", true);
+                    // Off: Capri Browser offers to save sign-ins to its own Passwords list instead (LoginScript). Ones Edge saved before still fill in.
+                    Set(settings, "IsPasswordAutosaveEnabled", false);
                     Set(settings, "IsGeneralAutofillEnabled", true);
                 }
                 catch (Exception) { }
@@ -11433,12 +11547,15 @@ public class CapriInternalBrowser : ICapriMod
                     catch (Exception) { }
                 });
                 try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", EndedScript); } catch (Exception) { }
+                try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", LoginScript); } catch (Exception) { }
                 Hook(core, "WebMessageReceived", delegate(object message)
                 {
                     try
                     {
                         string said = Call(message, "TryGetWebMessageAsString") as string;
                         if (said != null && said.StartsWith("capri-ended|", StringComparison.Ordinal) && Ended != null) Ended(said.Substring(12));
+                        else if (said != null && said.StartsWith("capri-login|", StringComparison.Ordinal) && LoginSeen != null) { int cut = said.IndexOf('\n'); if (cut > 12) LoginSeen(Get(message, "Source") as string ?? "", said.Substring(12, cut - 12), said.Substring(cut + 1)); }
+                        else if (said == "capri-pwbox" && PasswordBox != null) PasswordBox(Get(message, "Source") as string ?? "");
                         else if (said == "capri-click|plain") { plainClick = DateTime.UtcNow; topClick = DateTime.UtcNow; }
                         else if (said == "capri-click|link") { plainClick = DateTime.MinValue; topClick = DateTime.UtcNow; }
                         else if (said == "capri-key") { if (Typed != null) Typed(); }
@@ -11779,6 +11896,19 @@ public class CapriInternalBrowser : ICapriMod
         skips();
     }, 1500);
 })();";
+        private const string LoginScript = "(function(){if(window.top!==window)return;var last='',U='__capriUser';function vis(e){return e&&e.offsetParent!==null}"
+            + "function idlike(e){return e&&/^(text|email|tel)$/i.test(e.type)&&e.value&&vis(e)&&(e.type=='email'||/user|mail|login|account|ident|phone/i.test((e.name||'')+' '+(e.id||'')+' '+(e.getAttribute('autocomplete')||'')))}"
+            + "function user(root){var u='',ins=(root||document).querySelectorAll('input');for(var j=0;j<ins.length;j++){var e=ins[j];if(e.type=='password')break;if(/^(text|email|tel)$/i.test(e.type)&&e.value&&vis(e))u=e.value}if(!u){var a=document.querySelector('input[autocomplete~=username],input[autocomplete~=email]');if(a&&a.value)u=a.value}return u}"
+            + "function grab(root){var p=null,ps=document.querySelectorAll('input[type=password]');for(var i=0;i<ps.length;i++)if(ps[i].value&&vis(ps[i])&&(!root||root===document||root.contains(ps[i]))){p=ps[i];break}"
+            + "if(!p){var ins=(root||document).querySelectorAll('input');for(var j=0;j<ins.length;j++)if(idlike(ins[j])){try{sessionStorage.setItem(U,ins[j].value.slice(0,200))}catch(x){}break}return}"
+            + "var u=user(p.form||document);if(!u)try{u=sessionStorage.getItem(U)||''}catch(x){}var k=u+'|'+p.value;if(k===last)return;last=k;"
+            + "if(window.chrome&&chrome.webview)chrome.webview.postMessage('capri-login|'+u.slice(0,200)+String.fromCharCode(10)+p.value.slice(0,500))}"
+            + "function sub(b){if(!b)return false;var t=(b.getAttribute('type')||'').toLowerCase();if(b.tagName=='INPUT')return t=='submit';if(b.form&&(t==''||t=='submit'))return true;return /log ?in|sign ?in|continue|next|submit/i.test(b.innerText||'')}"
+            + "document.addEventListener('submit',function(e){grab(e.target)},true);"
+            + "document.addEventListener('click',function(e){var b=e.target&&e.target.closest&&e.target.closest('button,input[type=submit],[role=button]');if(sub(b))grab(b.form||document)},true);"
+            + "document.addEventListener('keydown',function(e){if(e.key==='Enter'&&e.target&&e.target.tagName=='INPUT')grab(e.target.form||document)},true);"
+            + "var told=0;function box(){if(told)return;var ps=document.querySelectorAll('input[type=password]');for(var i=0;i<ps.length;i++)if(vis(ps[i])){told=1;if(window.chrome&&chrome.webview)chrome.webview.postMessage('capri-pwbox');return}}"
+            + "document.addEventListener('DOMContentLoaded',function(){box();var o=new MutationObserver(function(){if(told)o.disconnect();else box()});o.observe(document.documentElement,{childList:true,subtree:true});setTimeout(function(){o.disconnect()},30000)})})();";
         private const string EndedScript = "(function(){function f(e){var v=e.target;if(!v||v.tagName!='VIDEO'||!(v.duration>45)||!isFinite(v.duration))return;if(e.type=='timeupdate'&&v.currentTime<v.duration*0.9)return;var k=v.currentSrc||'v';if(v.__capriDone===k)return;v.__capriDone=k;if(window.chrome&&chrome.webview)chrome.webview.postMessage('capri-ended|'+document.title);}document.addEventListener('ended',f,true);document.addEventListener('timeupdate',f,true);})();";
         private System.Threading.Tasks.Task<string> darkId;
 
