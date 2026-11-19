@@ -10266,13 +10266,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 System.Threading.Tasks.Task run = (System.Threading.Tasks.Task)task;
                 run.ContinueWith(delegate(System.Threading.Tasks.Task finished)
                 {
-                    string why = null, id = null;
-                    if (finished.IsFaulted) why = finished.Exception.GetBaseException().Message;
-                    else try { id = (string)Get(finished.GetType().GetProperty("Result").GetValue(finished, null), "Id"); } catch (Exception) { }
+                    string why = finished.IsFaulted ? finished.Exception.GetBaseException().Message : null;
                     Post(delegate
                     {
+                        string id = null;
+                        if (why == null) try { id = (string)Get(finished.GetType().GetProperty("Result").GetValue(finished, null), "Id"); } catch (Exception) { }
                         if (id != null) Keep("extfolders", Kept("extfolders") + id + "\t" + kept + "\n");
-                        else if (unpacked != null) try { Directory.Delete(unpacked, true); } catch (Exception) { }
+                        else if (why != null && unpacked != null) try { Directory.Delete(unpacked, true); } catch (Exception) { }
                         done(why);
                     });
                 });
