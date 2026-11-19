@@ -1972,7 +1972,7 @@ public class CapriInternalBrowser : ICapriMod
         List<string[]> badge = new List<string[]>();
         Dictionary<string, List<string>> said = new Dictionary<string, List<string>>();
         Dictionary<string, string> tips = new Dictionary<string, string>();
-        List<string[]> zones = new List<string[]>();
+        List<string[]> zones = new List<string[]>(), themes = new List<string[]>();
         foreach (string line in (text ?? "").Replace("\r", "").Split('\n'))
         {
             string[] p = line.Split('\t');
@@ -1983,8 +1983,10 @@ public class CapriInternalBrowser : ICapriMod
             else if (p[0] == "tip" && p.Length == 3 && p[1].Length > 0 && p[2].Length > 0 && p[2].Length <= 400) tips[p[1]] = p[2];
             else if (p[0] == "zone" && p.Length == 3 && Regex.IsMatch(p[1], @"^[a-z ]+(\|[a-z ]+)*$") && Regex.IsMatch(p[2], @"^[A-Za-z .()+-]{3,60}$")) zones.Add(new[] { p[1], p[2] });
             else if (p[0] == "known" && p.Length == 2 && p[1].Contains(".")) known.Add(p[1]);
+            else if (p[0] == "theme" && p.Length == 11) { string[] one = new string[10]; Array.Copy(p, 1, one, 0, 10); themes.Add(one); }
             else if (p[0] == "engine" && p.Length == 4 && p[3].StartsWith("https://", StringComparison.Ordinal)) eng.Add(new[] { p[1], p[2], p[3] });
         }
+        Look.UseThemes(themes);
         try { foreach (string[] one in site) new Regex(one[0]); } catch (Exception) { return; }
         if (site.Count >= 2 && site[0][1] == "youtube.com" && site[site.Count - 1][0] == "web") Sites = site.ToArray();
         if (known.Count > 0) Known = known.ToArray();
@@ -2987,12 +2989,37 @@ public class CapriInternalBrowser : ICapriMod
                 if (Theme == "synth") return new[] { "#0d0718", "#160d26", "#f1e9ff", "#9c8bb5", "#b388ff", "#ff6ec7", "#2e1a4d" };
                 if (Theme == "rose") return new[] { "#140a0e", "#1e0f15", "#f7e9ee", "#a58a94", "#ffb86b", "#ff8fab", "#3d1a26" };
                 if (Theme == "mono") return new[] { "#0b0b0b", "#151515", "#ededed", "#8a8a8a", "#ffffff", "#bdbdbd", "#2a2a2a" };
+                string[] more;
+                if (Theme != null && ExtraColors.TryGetValue(Theme, out more)) return more;
                 return new[] { "#0a0a10", "#11101c", "#ececf1", "#92828c", "#5ef0f6", "#e84246", "#5c1824" };
             }
         }
 
-        public bool Dark { get { return Theme != "light" && Theme != "warm"; } }
-        public static readonly string[] ThemeNames = { "dark", "light", "warm", "neon", "ocean", "forest", "synth", "rose", "mono" };
+        public bool Dark { get { return Theme != "light" && Theme != "warm" && !LightThemes.Contains(Theme ?? ""); } }
+        public static readonly string[] BuiltInThemes = { "dark", "light", "warm", "neon", "ocean", "forest", "synth", "rose", "mono" };
+        public static string[] ThemeNames = BuiltInThemes;
+        // More themes from data/lists.txt: colors, names, and which ones are light.
+        public static Dictionary<string, string[]> ExtraColors = new Dictionary<string, string[]>();
+        public static Dictionary<string, string> ExtraNames = new Dictionary<string, string>();
+        public static HashSet<string> LightThemes = new HashSet<string>();
+
+        // "theme" lines: id, name, dark or light, then the 7 colors (background, panel, text, faded text, first accent, second accent, border).
+        public static void UseThemes(List<string[]> lines)
+        {
+            Dictionary<string, string[]> colors = new Dictionary<string, string[]>();
+            Dictionary<string, string> names = new Dictionary<string, string>();
+            HashSet<string> light = new HashSet<string>();
+            List<string> all = new List<string>(BuiltInThemes);
+            foreach (string[] p in lines)
+            {
+                if (all.Contains(p[0]) || !Regex.IsMatch(p[0], "^[a-z]{2,12}$") || !Regex.IsMatch(p[1], "^[A-Za-z0-9 ]{2,16}$") || (p[2] != "dark" && p[2] != "light")) continue;
+                string[] c = new string[7];
+                Array.Copy(p, 3, c, 0, 7);
+                if (!Array.TrueForAll(c, x => Regex.IsMatch(x, "^#[0-9a-fA-F]{6}$"))) continue;
+                colors[p[0]] = c; names[p[0]] = p[1]; if (p[2] == "light") light.Add(p[0]); all.Add(p[0]);
+            }
+            ExtraColors = colors; ExtraNames = names; LightThemes = light; ThemeNames = all.ToArray();
+        }
         public Color Shade(int which) { return ColorTranslator.FromHtml(Colors[which]); }
 
         public static Look Load(ICapriStore store)
@@ -3067,9 +3094,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "f3553ea88386602e167c020ccedc3118a9b85d8b";
+    private const string AddonsCommit = "7825926fd4f5e8a10dd2d2a6fce17ca58b14ba47";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=cc9f7ee834ec2ccb268ea590b47a2dafb9854bc876f449fa1efcd7ed0551dad4;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=218d1d2b40d1903ae2a8d03a05fd4d10f4b3c8c285d18f535051a101e57013f1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=81636a4bef5e45e47ca1652d9b38f0bce73da14efb5f16e6691c1268f245a864;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=218d1d2b40d1903ae2a8d03a05fd4d10f4b3c8c285d18f535051a101e57013f1;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=62cf07211f0d3cbbedc46d168ecc9f2ccc4f0817707cddcaf8026fe005311f8b;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=dabae5adb20c67bf4afab3b8c0e6cfa5a210a6accb317233e9abc144e8217846";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -8062,7 +8089,7 @@ public class CapriInternalBrowser : ICapriMod
             foreach (string theme in Look.ThemeNames)
             {
                 string[] k = new Look { Theme = theme }.Colors;
-                string name = theme == "dark" ? T(9) : theme == "light" ? T(10) : theme == "warm" ? T(11) : char.ToUpperInvariant(theme[0]) + theme.Substring(1);
+                string name = theme == "dark" ? T(9) : theme == "light" ? T(10) : theme == "warm" ? T(11) : Look.ExtraNames.ContainsKey(theme) ? Look.ExtraNames[theme] : char.ToUpperInvariant(theme[0]) + theme.Substring(1);
                 html.Append("<a href='#' class='").Append(theme == look.Theme ? "on" : "").Append("' style='background:").Append(k[0]).Append(";color:").Append(k[2]).Append("' onclick=\"S('theme','").Append(theme).Append("');return false\">").Append(Esc(name))
                     .Append("<i><u style='background:").Append(k[5]).Append("'></u><u style='background:").Append(k[4]).Append("'></u><u style='background:").Append(k[1]).Append("'></u></i></a>");
             }
@@ -8147,7 +8174,7 @@ public class CapriInternalBrowser : ICapriMod
             if (SetSiteFromPage(key, value)) return;
             switch (key)
             {
-                case "theme": mod.look.Theme = value; Changed(); return;
+                case "theme": if (Array.IndexOf(Look.ThemeNames, value) >= 0) { mod.look.Theme = value; Changed(); } return;
                 case "font": mod.look.Font = value; Changed(); return;
                 case "animesite": if (Array.IndexOf(AnimeHosts, value) >= 0) Keep("animesite", value); break;
                 case "videosite": if (Array.IndexOf(VideoHosts, value) >= 0) Keep("videosite", value); break;
