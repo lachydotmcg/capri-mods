@@ -757,7 +757,7 @@ public class CapriInternalBrowser : ICapriMod
 
     // ---- Message reader ----
     internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; public bool Opened; public int Count = 1; }
-    // "Any new Discord messages?", "do I have any DMs", "anything on WhatsApp", "check my Discord", "has anyone messaged me"...
+    // "Any new Discord messages?", "do I have any DMs", "check my Discord", "has anyone messaged me"...
     private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:hey|ok|okay)\s+)?(?:capri\s*,?\s*)?(?:"
         + @"(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got|are\s+there|is\s+there)\s+)?(?:any\s+(?:new\s+|unread\s+)?|new\s+|unread\s+)(?:discord\s+|whats\s?app\s+)?(?:messages?|msgs?|dms?|direct\s+messages?|texts?)"
         + @"|(?:is\s+there\s+)?any(?:thing)?\s+(?:new\s+)?(?:on|from|in)\s+(?:discord|whats\s?app)"
@@ -779,12 +779,12 @@ public class CapriInternalBrowser : ICapriMod
     private const string DcRead = @"(function(h,most){most=Math.max(1,Math.min(most||3,10));var bare=function(u){var c=u.cloneNode(true);[].forEach.call(c.querySelectorAll('[class*=chiplet],[class*=Chiplet],[class*=clanTag],[class*=guildTag],[class*=Tag],[class*=tag_],[class*=badge],[class*=Badge],img,svg'),function(x){x.remove()});return (c.textContent||'').replace(/\s+/g,' ').trim()};if(location.pathname!==h)return 'wait';var L=[].slice.call(document.querySelectorAll('li[id^=chat-messages-]'));if(!L.length)return 'wait';var au=function(li){for(var x=li;x;x=x.previousElementSibling){var u=x.querySelector&&x.querySelector('[id^=message-username-]');if(u)return bare(u)}return ''},A=au(L[L.length-1]),me=document.querySelector('[class*=panelTitleContainer],section[class*=panels] [class*=nameTag] [class*=title]'),out=[];if(me&&(me.innerText||'').trim().split('\n')[0]===A)return 'mine';for(var i=L.length-1;i>=0&&out.length<most;i--){if(au(L[i])!==A)break;var c=document.getElementById('message-content-'+L[i].id.split('-').pop()),t=c?(c.innerText||'').replace(/\s+/g,' ').trim():'';out.unshift(t||(L[i].querySelector('img,video,[class*=attachment],[class*=imageWrapper]')?'[media]':'[other]'))}return A.slice(0,40)+'\n'+out.join('\n')})";
     private const string DcState = @"(function(){if(!/(^|\.)discord\.com$/.test(location.hostname))return 'wait';if(/^\/(login|register)/.test(location.pathname))return 'login';return document.querySelector('a[href^=""/channels/@me/""],[data-list-item-id^=guildsnav___]')?'ready':'wait'})()";
     // Where the chat's message box is on the screen (in screen pixels), for the picture of a typed reply.
-    private const string BoxRect = @"(function(w){var b=w?document.querySelector('#main footer'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return '';b=w?b:(b.closest('form')||b.parentElement);var r=b.getBoundingClientRect(),d=devicePixelRatio||1,g=document.createRange(),e=w?b.querySelector('[contenteditable=true]')||b:b.querySelector('[role=textbox]')||b;g.selectNodeContents(e);var q=g.getBoundingClientRect(),wd=Math.min(r.width,Math.max(260,q.right-r.left+28));return [r.left,r.top,wd,r.height].map(function(v){return Math.round(v*d)}).join(',')})";
+    private const string BoxRect = @"(function(){var b=document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return '';b=b.closest('form')||b.parentElement;var r=b.getBoundingClientRect(),d=devicePixelRatio||1,g=document.createRange(),e=b.querySelector('[role=textbox]')||b;g.selectNodeContents(e);var q=g.getBoundingClientRect(),wd=Math.min(r.width,Math.max(260,q.right-r.left+28));return [r.left,r.top,wd,r.height].map(function(v){return Math.round(v*d)}).join(',')})";
     private const string DcNow = @"(function(){return /(^|\.)discord\.com$/.test(location.hostname)?location.pathname:''})()";
-    // The chat's message box (w: WhatsApp): 'check' focuses it and says 'empty' or 'busy', 'text' gives what's in it, 'clear' empties it.
-    private const string ChatBox = @"(function(w,act){var b=w?document.querySelector('#main footer [contenteditable=true]'):document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return 'none';var s=w?[]:b.querySelectorAll('[data-slate-string]'),t=s.length?[].map.call(s,function(x){return x.textContent}).join(' '):(b.innerText||'');if(!w&&!s.length)[].forEach.call(b.querySelectorAll('[data-slate-placeholder]'),function(p){t=t.replace(p.innerText,'')});t=t.replace(/[\u200b\ufeff]/g,'').replace(/\s+/g,' ').trim();if(act=='text')return t;b.focus();if(act=='clear'){document.execCommand('selectAll');document.execCommand('delete');return 'ok'}return t?'busy':'empty'})";
+    // Discord's message box: 'check' focuses it and says 'empty' or 'busy', 'text' gives what's in it, 'clear' empties it.
+    private const string ChatBox = @"(function(act){var b=document.querySelector('[role=textbox][data-slate-editor=true]');if(!b)return 'none';var s=b.querySelectorAll('[data-slate-string]'),t=s.length?[].map.call(s,function(x){return x.textContent}).join(' '):(b.innerText||'');if(!s.length)[].forEach.call(b.querySelectorAll('[data-slate-placeholder]'),function(p){t=t.replace(p.innerText,'')});t=t.replace(/[\u200b\ufeff]/g,'').replace(/\s+/g,' ').trim();if(act=='text')return t;b.focus();if(act=='clear'){document.execCommand('selectAll');document.execCommand('delete');return 'ok'}return t?'busy':'empty'})";
 
-    // Every few seconds (and when they ask): anything new in their Discord or WhatsApp tab they haven't been asked about?
+    // Every few seconds (and when they ask): anything new in her Discord they haven't been asked about?
     internal void CheckMessages(bool asked) { CheckMessages(asked, null); }
 
     // When asked and the site isn't open, it opens out of sight and she waits for it to load (or finds they're signed out).
@@ -806,7 +806,7 @@ public class CapriInternalBrowser : ICapriMod
                     InBrowser(delegate(Browser b) { t = b.ChatTab(site); looking = t != null && b.Looking(t); return null; });
                     if (t == null && asked)
                     {
-                        InBrowser(delegate(Browser b) { b.OpenTab(null, site == "Discord" ? "https://discord.com/channels/@me" : "https://web.whatsapp.com/", false); return null; });
+                        InBrowser(delegate(Browser b) { b.OpenTab(null, "https://discord.com/channels/@me", false); return null; });
                         for (int i = 0; t == null && i < 20; i++) { Thread.Sleep(500); InBrowser(delegate(Browser b) { t = b.ChatTab(site); return null; }); }
                     }
                     if (t == null) continue;
@@ -814,8 +814,8 @@ public class CapriInternalBrowser : ICapriMod
                     {
                         string state = "wait";
                         for (int i = 0; i < 30 && state == "wait"; i++) { state = InTab(t, DcState) ?? "gone"; if (state == "wait") Thread.Sleep(500); }
-                        if (state == "login") { Tell("You're not signed in to " + (site == "Discord" ? "Discord" : "WhatsApp Web") + " in Capri Browser yet, choom. Sign in on its tab and ask me again."); told = true; continue; }
-                        if (state != "ready") { Tell((site == "Discord" ? "Discord" : "WhatsApp Web") + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
+                        if (state == "login") { Tell("You're not signed in to " + "Discord" + " in Capri Browser yet, choom. Sign in on its tab and ask me again."); told = true; continue; }
+                        if (state != "ready") { Tell("Discord" + " is still loading, choom. Ask me again in a moment."); told = true; continue; }
                     }
                     any = true;
                     List<ChatAt> found = new List<ChatAt>();
@@ -861,7 +861,7 @@ public class CapriInternalBrowser : ICapriMod
                 }
                 // Asked and nobody found: the page's layout goes in discord-check.txt (no names or messages), for fixing.
                 if (asked && !told) { Tab dt = null; InBrowser(delegate(Browser b) { dt = b.ChatTab("Discord"); return null; }); if (dt != null) { try { File.WriteAllText(Path.Combine(Folder, "discord-check.txt"), DateTime.Now.ToString("d MMM HH:mm") + "\n" + (InTab(dt, DcShape) ?? "(no answer)")); } catch (Exception) { } } }
-                if (asked && !told) Tell(any ? (only == "Discord" ? "No new Discord messages, choom." : only == "WhatsApp" ? "No new WhatsApp messages, choom." : "No new messages, choom.") : "Open Discord or WhatsApp Web in Capri Browser and sign in there, and I'll keep an eye on it for you.");
+                if (asked && !told) Tell(any ? "No new Discord messages, choom." : "Sign in to Discord in Capri Browser, and I'll keep an eye on it for you.");
             }
             catch (Exception error) { Note("messages: " + error.Message); }
             finally { checking = false; }
@@ -1027,7 +1027,6 @@ public class CapriInternalBrowser : ICapriMod
     // On their yes: opens that chat in its own tab and reads the newest message out, then asks if they want to reply.
     private string ReadChat(ChatAt chat)
     {
-        bool dc = chat.Site == "Discord";
         string got = InTab(chat.Tab, DcOpen + "(" + Quote(chat.Id) + ")");
         string said = null;
         for (int i = 0; got == "ok" && i < 20; i++) { Thread.Sleep(500); said = InTab(chat.Tab, DcRead + "(" + Quote(chat.Id) + "," + chat.Count + ")"); if (!string.IsNullOrEmpty(said) && said != "wait") break; }
@@ -1077,36 +1076,35 @@ public class CapriInternalBrowser : ICapriMod
     // box and asks before sending. Nothing is sent here.
     private string TypeReply(ChatAt chat, string text, bool hidden)
     {
-        bool dc = chat.Site == "Discord";
         hidden = hidden || (chat.Tab != null && chat.Tab.Hidden);
-        string w = dc ? "0" : "1", not = "so I didn't type it, choom.", fail = null, typed = "";
+        string not = "so I didn't type it, choom.", fail = null, typed = "";
         string now = InTab(chat.Tab, DcNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, " + not;
         else if (now != chat.Id) fail = "That chat isn't open in your " + chat.Site + " tab any more, " + not;
         else
         {
-            string box = InTab(chat.Tab, ChatBox + "(" + w + ",'check')");
+            string box = InTab(chat.Tab, ChatBox + "('check')");
             // Something already in the box: cleared, so only what they asked for goes in.
-            if (box == "busy") { InTab(chat.Tab, ChatBox + "(" + w + ",'clear')"); Thread.Sleep(250); box = InTab(chat.Tab, ChatBox + "(" + w + ",'check')"); }
+            if (box == "busy") { InTab(chat.Tab, ChatBox + "('clear')"); Thread.Sleep(250); box = InTab(chat.Tab, ChatBox + "('check')"); }
             if (box == "busy") fail = "There's something in that chat's message box I couldn't clear, " + not + " Have a look.";
             else if (box != "empty") fail = "I can't find the message box in that chat, " + not;
         }
         for (int tries = 0; fail == null && tries < (hidden ? 1 : 2); tries++)
         {
             // A tab that's out of sight may not take typing: the second try brings it to the front first.
-            if (tries == 1) { InBrowser(delegate(Browser b) { b.Show(chat.Tab); return null; }); Thread.Sleep(700); InTab(chat.Tab, ChatBox + "(" + w + ",'clear')"); if (InTab(chat.Tab, ChatBox + "(" + w + ",'check')") != "empty") break; }
+            if (tries == 1) { InBrowser(delegate(Browser b) { b.Show(chat.Tab); return null; }); Thread.Sleep(700); InTab(chat.Tab, ChatBox + "('clear')"); if (InTab(chat.Tab, ChatBox + "('check')") != "empty") break; }
             TabCdp(chat.Tab, "Input.insertText", "{\"text\":" + DcJson(text) + "}");
             Thread.Sleep(350);
-            typed = InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "";
+            typed = InTab(chat.Tab, ChatBox + "('text')") ?? "";
             if (typed.Length > 0) break;
         }
         if (fail == null && Regex.Replace(typed, @"\s+", " ").Trim() != text)
         {
-            if (typed.Length > 0) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
+            if (typed.Length > 0) InTab(chat.Tab, ChatBox + "('clear')");
             fail = "It didn't type in right, " + not;
         }
         if (fail != null) { Card(chat, "I couldn't type that.", "Nothing was sent."); Tidy(chat); return fail; }
-        CardShot(BoxShot(chat) ?? DrawnBox(text, dc));
+        CardShot(BoxShot(chat) ?? DrawnBox(text));
         lock (gate) { typedChat = chat; typedText = text; typedUntil = Now().AddMinutes(2); }
         Card(chat, "I typed this to " + chat.Who + ". Want me to send it?", "Say yes to send it, or no and I'll delete it.");
         string question = Ask("I've typed \"" + text + "\" to " + chat.Who + ". Want me to send it?", delegate { return PressSend(chat, text); });
@@ -1117,19 +1115,18 @@ public class CapriInternalBrowser : ICapriMod
     // On their yes: presses Enter, only if it's the same chat and the box still holds exactly what she typed.
     private string PressSend(ChatAt chat, string text)
     {
-        bool dc = chat.Site == "Discord";
-        string w = dc ? "0" : "1", fail = null;
+        string fail = null;
         lock (gate) { typedChat = null; pendNo = null; pendNoFor = null; }
         string now = InTab(chat.Tab, DcNow);
         if (now == null) fail = "Your " + chat.Site + " tab's closed, so I didn't send it, choom.";
         else if (now != chat.Id) fail = "That chat isn't open any more, so I didn't send it, choom.";
-        else if (Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() != text) fail = "What's in the box changed, so I left it for you to send, choom.";
+        else if (Regex.Replace(InTab(chat.Tab, ChatBox + "('text')") ?? "", @"\s+", " ").Trim() != text) fail = "What's in the box changed, so I left it for you to send, choom.";
         if (fail == null)
         {
             TabCdp(chat.Tab, "Input.dispatchKeyEvent", "{\"type\":\"keyDown\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13,\"text\":\"\\r\"}");
             TabCdp(chat.Tab, "Input.dispatchKeyEvent", "{\"type\":\"keyUp\",\"key\":\"Enter\",\"code\":\"Enter\",\"windowsVirtualKeyCode\":13}");
             Thread.Sleep(1200);
-            if ((InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "").Length > 0) fail = "I pressed send, but it's still sitting in the box. Have a look, choom.";
+            if ((InTab(chat.Tab, ChatBox + "('text')") ?? "").Length > 0) fail = "I pressed send, but it's still sitting in the box. Have a look, choom.";
         }
         CardShot(null);
         Card(chat, fail == null ? "Sent it to " + chat.Who + ". \u2713" : "Not sent.", fail == null ? "\u201c" + text + "\u201d" : "");
@@ -1170,7 +1167,7 @@ public class CapriInternalBrowser : ICapriMod
         {
             Thread.Sleep(300);
             chat.Id = InTab(t, DcNow);
-            if (chat.Id != null && chat.Id.StartsWith("/channels/@me/", StringComparison.Ordinal) && InTab(t, ChatBox + "(0,'check')") != "none") break;
+            if (chat.Id != null && chat.Id.StartsWith("/channels/@me/", StringComparison.Ordinal) && InTab(t, ChatBox + "('check')") != "none") break;
         }
         Card(chat, "Typing it to " + them + "...", "“" + what + "”");
         return TypeReply(chat, what, true);
@@ -1180,9 +1177,7 @@ public class CapriInternalBrowser : ICapriMod
     private string Untype(ChatAt chat, string text, string line)
     {
         lock (gate) { if (typedChat == chat) typedChat = null; }
-        bool dc = chat.Site == "Discord";
-        string w = dc ? "0" : "1";
-        if (InTab(chat.Tab, DcNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
+        if (InTab(chat.Tab, DcNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "('text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "('clear')");
         CardShot(null);
         Card(chat, "Deleted it. Nothing was sent.", "");
         Tidy(chat);
@@ -1207,7 +1202,7 @@ public class CapriInternalBrowser : ICapriMod
     // A picture of the chat's message box with her typing in it, kept only in memory. Null if the page couldn't be pictured.
     private Bitmap BoxShot(ChatAt chat)
     {
-        string[] r = (InTab(chat.Tab, BoxRect + "(" + (chat.Site == "Discord" ? "0" : "1") + ")") ?? "").Split(',');
+        string[] r = (InTab(chat.Tab, BoxRect + "()") ?? "").Split(',');
         int x, y, wide, high;
         if (r.Length != 4 || !int.TryParse(r[0], out x) || !int.TryParse(r[1], out y) || !int.TryParse(r[2], out wide) || !int.TryParse(r[3], out high) || wide < 40 || high < 10) return null;
         Bitmap all = null;
@@ -1236,7 +1231,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // A lookalike of the chat's message box with her typing in it, for when the page itself can't be pictured.
-    private static Bitmap DrawnBox(string text, bool dc)
+    private static Bitmap DrawnBox(string text)
     {
         using (System.Drawing.Font font = new System.Drawing.Font("Segoe UI", 11f))
         {
@@ -1244,8 +1239,8 @@ public class CapriInternalBrowser : ICapriMod
             Bitmap pic = new Bitmap(Math.Max(260, need.Width + 32), Math.Min(220, need.Height + 24));
             using (Graphics g = Graphics.FromImage(pic))
             {
-                g.Clear(dc ? Color.FromArgb(49, 51, 56) : Color.FromArgb(17, 27, 33));
-                using (SolidBrush box = new SolidBrush(dc ? Color.FromArgb(56, 58, 64) : Color.FromArgb(42, 57, 66))) g.FillRectangle(box, 4, 4, pic.Width - 8, pic.Height - 8);
+                g.Clear(Color.FromArgb(49, 51, 56));
+                using (SolidBrush box = new SolidBrush(Color.FromArgb(56, 58, 64))) g.FillRectangle(box, 4, 4, pic.Width - 8, pic.Height - 8);
                 TextRenderer.DrawText(g, text, font, new Rectangle(16, 12, pic.Width - 28, pic.Height - 16), Color.FromArgb(242, 243, 245), TextFormatFlags.WordBreak);
             }
             return pic;
@@ -3719,9 +3714,9 @@ public class CapriInternalBrowser : ICapriMod
     };
 
     // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-    private const string AddonsCommit = "7ec34307693c06de475fcc20c7d843e38412c44e";
+    private const string AddonsCommit = "8828fa619927bc64ea764b7b9a8e98433b91e234";
     private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=c3c3405751e89c5dec2acb99744032ff1e8d26630f6cb036c597405e9711378b;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=1bb71a5d204f8c45b64910447428ea859bd7a4cf38c313f9fda287d4d0496aea";
+    private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=2ca6973635c075e8d8a372dd1cba9543f33d3138e202efed0161a7f726f60168;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=0c0973b6a7f6c04e7339253a3822e88bef25e6164c32c6bc94f6e3697c8e51df;languages.txt=07089f1fab4b338c45d9cf3cbd1194d33ee67eb30b2c59a11e1d70c01833fac3;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=f88356693a9d8b54a8a8c1b85e427558468445277a4a1832c8e9058f6477b048;whats-new.txt=51efeb975528807873c3c028e81a398af2605fbee3bd3473c2c3f26baa24e6c7";
 
     // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
     internal static string Pinned(WebClient web, string file)
@@ -5014,7 +5009,7 @@ public class CapriInternalBrowser : ICapriMod
             System.Windows.Forms.Timer dozing = new System.Windows.Forms.Timer { Interval = 120000 }, later = new System.Windows.Forms.Timer { Interval = 6000 };
             dozing.Tick += delegate { Doze(); };
             dozing.Start();
-            // Every 8 seconds, a look for new Discord or WhatsApp messages (only when that reader's on in Settings).
+            // Every 8 seconds, a look for new Discord messages (only when that reader's on in Settings).
             System.Windows.Forms.Timer chatting = new System.Windows.Forms.Timer { Interval = 8000 };
             chatting.Tick += delegate { if (Flag("readdiscord", false)) mod.CheckMessages(false); else if (!Flag("quietmsg", false)) DropHiddenDiscord(); };
             chatting.Start();
@@ -11711,7 +11706,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
         private Panel shotCard;
 
-        // ---- Message reader: their Discord or WhatsApp tab, and the live box ----
+        // ---- Message reader: her Discord, and the live box ----
         // They downloaded add-ons before, and this Capri Browser pins newer ones.
         internal bool AddonsBehind() { return Kept("updated").Length > 0 && Kept("addons-pin") != AddonsCommit; }
 
@@ -11751,11 +11746,11 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             holder.Controls.Remove(t.Viewer.Control);
             t.Viewer.Control.Dispose();
         }
-        // Their Discord or WhatsApp Web tab, whatever the reader settings.
+        // Their Discord tab, whatever the reader settings.
         internal Tab SiteTab(string site)
         {
             if (site == "Discord" && hiddenDc != null) return hiddenDc;
-            foreach (Tab t in tabs) if (!t.Private && !t.OnReader && t.Address != null && Regex.IsMatch(t.Address, site == "Discord" ? @"^https://(?:ptb\.|canary\.)?discord\.com/" : @"^https://web\.whatsapp\.com/")) return t;
+            foreach (Tab t in tabs) if (!t.Private && !t.OnReader && t.Address != null && site == "Discord" && Regex.IsMatch(t.Address, @"^https://(?:ptb\.|canary\.)?discord\.com/")) return t;
             return null;
         }
         private bool Watched(Tab t) { return t == ChatTab("Discord"); }
