@@ -631,8 +631,8 @@ public class CapriInternalBrowser : ICapriMod
         who = Regex.Replace(who, @"^(?:my\s+)?(?:friend|mate|buddy|bestie)\s+|\s+(?:a\s+)?(?:message|dm|text)$", "", Plain).Trim();
         what = Regex.Replace(what, @"^(?:a\s+)?(?:quick\s+)?(?:message|dm|text|msg)\s*(?:saying|that\s+says|that|:|,)?\s*", "", Plain).Trim().Trim('"');
         if (who.Length == 0 || who.Length > 60 || Regex.IsMatch(who, @"^(?:me|us|myself|ourselves|you|yourself|him|her|them|it|everyone|everybody|someone|a|an|the|what|how|why|about)\b", Plain)) return false;
-        capri.Say(mode == 1 ? "Opening it on Discord, choom." : "Finding " + who + " on Discord, choom.");
-        ThreadPool.QueueUserWorkItem(delegate { capri.Say(Discord(who, what, mode)); });
+        Tell(mode == 1 ? "Opening it on Discord, choom." : "Finding " + who + " on Discord, choom.");
+        ThreadPool.QueueUserWorkItem(delegate { Tell(Discord(who, what, mode)); });
         return true;
     }
 
@@ -656,6 +656,7 @@ public class CapriInternalBrowser : ICapriMod
     private string Discord(string who, string what, int mode)
     {
         if (!Flag("discordmsg", false)) return "Discord messaging is turned off in Capri Browser's settings.";
+        if (mode == 0 && what.Length > 0 && Flag("quietmsg", false)) return QuietDiscord(who, what);
         string got = null, why;
         bool had = InBrowser(delegate(Browser b) { return b.ToDiscord(); }) == "ok";
         OpenBrowser(null, had ? null : "https://discord.com/channels/@me");
@@ -698,7 +699,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // ---- Message reader ----
-    internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; }
+    internal sealed class ChatAt { public string Site, Who, Id; public Tab Tab; public bool Opened; }
     // "Any new Discord messages?", "do I have any DMs", "anything on WhatsApp", "check my Discord", "has anyone messaged me"...
     private static readonly Regex MessagesAsk = new Regex(@"^(?:(?:hey|ok|okay)\s+)?(?:capri\s*,?\s*)?(?:"
         + @"(?:(?:do\s+i\s+have|have\s+i\s+got|did\s+i\s+get|got|are\s+there|is\s+there)\s+)?(?:any\s+(?:new\s+|unread\s+)?|new\s+|unread\s+)(?:discord\s+|whats\s?app\s+)?(?:messages?|msgs?|dms?|direct\s+messages?|texts?)"
@@ -834,13 +835,13 @@ public class CapriInternalBrowser : ICapriMod
         if (text.Length == 0) { lock (gate) { replying = chat; replyUntil = Now().AddSeconds(60); } Tell("What should I say, choom?"); return true; }
         text = Clip(Regex.Replace(text, @"\s+", " "), 500);
         Card(chat, "Typing it to " + chat.Who + "...", "\u201c" + text + "\u201d");
-        ThreadPool.QueueUserWorkItem(delegate { Tell(TypeReply(chat, text)); });
+        ThreadPool.QueueUserWorkItem(delegate { Tell(TypeReply(chat, text, false)); });
         return true;
     }
 
     // Types it into that same chat (only if the chat's still open there and its box was empty), shows a picture of it in her
     // box and asks before sending. Nothing is sent here.
-    private string TypeReply(ChatAt chat, string text)
+    private string TypeReply(ChatAt chat, string text, bool hidden)
     {
         bool dc = chat.Site == "Discord";
         string w = dc ? "0" : "1", not = "so I didn't type it, choom.", fail = null, typed = "";
@@ -853,7 +854,7 @@ public class CapriInternalBrowser : ICapriMod
             if (box == "busy") fail = "There's already something typed in that chat, " + not + " Have a look.";
             else if (box != "empty") fail = "I can't find the message box in that chat, " + not;
         }
-        for (int tries = 0; fail == null && tries < 2; tries++)
+        for (int tries = 0; fail == null && tries < (hidden ? 1 : 2); tries++)
         {
             // A tab that's out of sight may not take typing: the second try brings it to the front first.
             if (tries == 1) { InBrowser(delegate(Browser b) { b.Show(chat.Tab); return null; }); Thread.Sleep(700); if (InTab(chat.Tab, ChatBox + "(" + w + ",'check')") != "empty") break; }
@@ -867,7 +868,7 @@ public class CapriInternalBrowser : ICapriMod
             if (typed.Length > 0) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
             fail = "It didn't type in right, " + not;
         }
-        if (fail != null) { Card(chat, "I couldn't type that.", "Nothing was sent."); return fail; }
+        if (fail != null) { Card(chat, "I couldn't type that.", "Nothing was sent."); Tidy(chat); return fail; }
         CardShot(BoxShot(chat) ?? DrawnBox(text, dc));
         lock (gate) { typedChat = chat; typedText = text; typedUntil = Now().AddMinutes(2); }
         Card(chat, "I typed this to " + chat.Who + ". Want me to send it?", "Say yes to send it, or no and I'll delete it.");
@@ -895,7 +896,50 @@ public class CapriInternalBrowser : ICapriMod
         }
         CardShot(null);
         Card(chat, fail == null ? "Sent it to " + chat.Who + ". \u2713" : "Not sent.", fail == null ? "\u201c" + text + "\u201d" : "");
+        Tidy(chat);
         return fail ?? "Sent it to " + chat.Who + ", choom.";
+    }
+
+    // A Discord tab she opened out of sight to send something is closed again when she's done.
+    private void Tidy(ChatAt chat)
+    {
+        if (chat == null || !chat.Opened) return;
+        chat.Opened = false;
+        InBrowser(delegate(Browser b) { b.CloseQuiet(chat.Tab); return null; });
+    }
+
+    // Out of sight: their Discord tab in the background (or a new one there), home, the person from their Direct Messages,
+    // then typed and shown in her box. Sending waits for their yes, like a reply.
+    private string QuietDiscord(string who, string what)
+    {
+        Tab t = null;
+        bool made = false;
+        InBrowser(delegate(Browser b) { t = b.SiteTab("Discord"); return null; });
+        if (t == null)
+        {
+            InBrowser(delegate(Browser b) { b.OpenTab(null, "https://discord.com/channels/@me", false); return null; });
+            for (int i = 0; t == null && i < 20; i++) { Thread.Sleep(500); InBrowser(delegate(Browser b) { t = b.SiteTab("Discord"); return null; }); }
+            if (t == null) return "I couldn't open Discord in Capri Browser, choom.";
+            made = true;
+        }
+        ChatAt chat = new ChatAt { Site = "Discord", Who = who, Tab = t, Opened = made };
+        string state = "wait";
+        for (int i = 0; i < 40 && state == "wait"; i++) { state = InTab(t, DcState) ?? "gone"; if (state == "wait") Thread.Sleep(500); }
+        if (state != "ready") { Tidy(chat); return state == "login" ? "Sign in to Discord in Capri Browser first, choom, then ask me again." : "Discord didn't finish loading, choom. Try again in a sec."; }
+        InTab(t, "(function(){var h=document.querySelector('[data-list-item-id=guildsnav___home]');if(h&&!/^/channels/@me/.test(location.pathname))h.click();return 1})()");
+        Thread.Sleep(600);
+        InTab(t, DcLib);
+        string them = InTab(t, DiscordPick + "(" + Quote(who) + ")");
+        if (string.IsNullOrEmpty(them)) { Tidy(chat); return "I couldn't find " + who + " in your Discord direct messages, choom."; }
+        chat.Who = them;
+        for (int i = 0; i < 20; i++)
+        {
+            Thread.Sleep(300);
+            chat.Id = InTab(t, DcNow);
+            if (chat.Id != null && chat.Id.StartsWith("/channels/@me/", StringComparison.Ordinal) && InTab(t, ChatBox + "(0,'check')") != "none") break;
+        }
+        Card(chat, "Typing it to " + them + "...", "“" + what + "”");
+        return TypeReply(chat, what, true);
     }
 
     // Deletes a reply she typed (only if the box still holds just that), and the picture of it.
@@ -907,6 +951,7 @@ public class CapriInternalBrowser : ICapriMod
         if (InTab(chat.Tab, dc ? DcNow : WaNow) == chat.Id && Regex.Replace(InTab(chat.Tab, ChatBox + "(" + w + ",'text')") ?? "", @"\s+", " ").Trim() == text) InTab(chat.Tab, ChatBox + "(" + w + ",'clear')");
         CardShot(null);
         Card(chat, "Deleted it. Nothing was sent.", "");
+        Tidy(chat);
         return line;
     }
 
@@ -10240,12 +10285,17 @@ public class CapriInternalBrowser : ICapriMod
         // ---- Message reader: their Discord or WhatsApp tab, and the live box ----
         internal Tab ChatTab(string site)
         {
-            if (!Flag(site == "Discord" ? "readdiscord" : "readwhatsapp", false)) return null;
+            return Flag(site == "Discord" ? "readdiscord" : "readwhatsapp", false) ? SiteTab(site) : null;
+        }
+        // Their Discord or WhatsApp Web tab, whatever the reader settings.
+        internal Tab SiteTab(string site)
+        {
             foreach (Tab t in tabs) if (!t.Private && !t.OnReader && t.Address != null && Regex.IsMatch(t.Address, site == "Discord" ? @"^https://(?:ptb\.|canary\.)?discord\.com/" : @"^https://web\.whatsapp\.com/")) return t;
             return null;
         }
         private bool Watched(Tab t) { return t == ChatTab("Discord") || t == ChatTab("WhatsApp"); }
         internal bool Has(Tab t) { return t != null && tabs.Contains(t) && !t.Private; }
+        internal void CloseQuiet(Tab t) { if (t != null && tabs.Contains(t)) Close(t); }
         internal bool InFront(Tab t) { Form f = FindForm(); return t == tab && f != null && f.Visible && f.WindowState != FormWindowState.Minimized; }
         internal void Show(Tab t) { if (Has(t)) Select(t); }
         internal bool Looking(Tab t) { Form f = FindForm(); return t == tab && f != null && f.Visible && f.WindowState != FormWindowState.Minimized && Form.ActiveForm == f; }
@@ -10628,6 +10678,7 @@ public class CapriInternalBrowser : ICapriMod
                 case "readdiscord": return "Tells you when someone messages you directly (not servers or groups) and reads it out on your yes. Ask “any new Discord messages?” any time. Sign in to Discord in Capri Browser once.";
                 case "readwhatsapp": return "Tells you who messaged you and reads it out on your yes. Ask “anything on WhatsApp?” any time. Sign in to WhatsApp Web in Capri Browser once.";
                 case "autoread": return "New messages are read straight out, with her box under her hologram, instead of her asking first. Replies still wait for your yes.";
+                case "quietmsg": return "Messages are found and typed out of sight, in a background tab she closes after, instead of Discord coming to the front. She still shows you the message and asks before sending.";
                 case "discordmsg": return "Say “message Alex on Discord saying ...”. She types it and asks before sending.";
                 default: return null;
             }
@@ -10641,6 +10692,7 @@ public class CapriInternalBrowser : ICapriMod
             { "readwhatsapp", "Reads new WhatsApp messages", "0", "discord" },
             { "autoread", "Auto read-out messages", "0", "discord" },
             { "discordmsg", "Sends Discord messages for you", "0", "discord" },
+            { "quietmsg", "Message without opening tab", "0", "discord" },
             { "skipask", "Offer to skip ads, intros and recaps (asks first, the mouse presses Skip on your yes)", "0", "video" },
             { "mouse", "Move the real mouse when Capri does things on a page", "1", "capri" },
             { "catchup", "Catch me up when I come back to a tab that changed", "1", "tabs" },
