@@ -178,6 +178,8 @@ public class CapriInternalBrowser : ICapriMod
   private readonly object gate = new object();
   private ICapriHost capri;
   private volatile bool stopped;
+  // The site the running job is on (its link, or the last site a step opened): "" when it has none, null when no job runs.
+  private volatile string jobSite;
   private Page offered, toolPage, lastPage;
   private DateTime offerUntil, toolAt, replayUntil;
   private bool newsAsked;
@@ -3412,8 +3414,19 @@ public class CapriInternalBrowser : ICapriMod
     foreach (string[] s in Sites) if (Regex.IsMatch(asked, @"\b(" + s[0] + @")\b")) { at = s; named = true; break; }
     // No site named: their Anime site for anime, their Video site for everything else they watch.
     string[] animeAt = SiteFrom(capri.Store.Get("animesite", "") ?? "", capri.Store.Get("animelink", "") ?? "", Browser.AnimeHosts[0]), videoAt = SiteFrom(capri.Store.Get("videosite", "") ?? "", capri.Store.Get("videolink", "") ?? "", Browser.VideoHosts[0]);
-    if (!named && kind != "thing") at = Regex.IsMatch(said ?? "", @"\banime\b", Plain) ? animeAt : videoAt;
     string animeName = SiteName(animeAt), videoName = SiteName(videoAt);
+    if (!named && kind != "thing") at = Regex.IsMatch(said ?? "", @"\banime\b", Plain) ? animeAt : videoAt;
+    // In a job on a site: that site, for anything they find (a movie, a jacket, a recipe).
+    string onSite = jobSite;
+    Uri ju = null;
+    bool jobs0 = !named && !string.IsNullOrEmpty(onSite) && Uri.TryCreate(onSite.Contains("://") ? onSite : "https://" + onSite, UriKind.Absolute, out ju);
+    if (jobs0)
+    {
+      string host = Regex.Replace(ju.Host.ToLowerInvariant(), @"^www\.", "");
+      at = SiteFrom("custom", ju.Scheme + "://" + ju.Host + "/", Browser.VideoHosts[0]);
+      foreach (string[] s in Sites) if (s[1] == host && s.Length <= 5) at = s;
+      videoName = SiteName(at);
+    }
     what = Regex.Replace(what ?? "", @"\b(" + at[0] + @")\b", "", Plain).Trim();
     if (what.Length == 0 && Regex.IsMatch(kind, "^(anime|movies?|films?|shows?)$", Plain) && at[1] != "crunchyroll.com") what = kind;
     int roll;
@@ -3437,7 +3450,7 @@ public class CapriInternalBrowser : ICapriMod
               Match m = Regex.Match(answer ?? "", @"^\W*(\w+(?: video)?)\s*\|\s*(.+?)(?:\s*\|?\s*[(\[]?(picked)[)\]]?\.?)?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
               if (m.Success)
               {
-                foreach (string[] s in Sites) if (Regex.IsMatch(m.Groups[1].Value.ToLowerInvariant(), "^(" + s[0] + ")$")) at = s;
+                if (!jobs0) foreach (string[] s in Sites) if (Regex.IsMatch(m.Groups[1].Value.ToLowerInvariant(), "^(" + s[0] + ")$")) at = s;
                 what = Clip(m.Groups[2].Value.Trim('"', '\'', '.'), 120);
                 if (m.Groups[3].Success && what.Length > 0 && !Regex.IsMatch(what, "^home", Plain)) chosenTitle = what;
                 if (Regex.IsMatch(what, "^home( ?page| ?feed)?$", Plain)) what = "";
@@ -5000,6 +5013,7 @@ public class CapriInternalBrowser : ICapriMod
   {
     try
     {
+      if (from == 0) jobSite = job.Link;
       if (from == 0 && job.Link.Length > 0)
       {
         Controlling();
@@ -5033,11 +5047,12 @@ public class CapriInternalBrowser : ICapriMod
         if (said.Length > 0) capri.Log("job " + job.Trigger + ": " + said);
         Thread.Sleep(700);
       }
+      jobSite = null;
       if (i < steps.Length) return;
       lock (jobMissed) if (missed.Count > 0) jobMissed[job.Trigger] = string.Join(", ", missed.ToArray()); else jobMissed.Remove(job.Trigger);
       if (missed.Count > 0) capri.Say("Done with " + job.Trigger + ", choom, but I didn't know how to do " + string.Join(", ", missed.ToArray()) + ". You can fix that on your Custom jobs page.");
     }
-    catch (Exception error) { capri.Log("job: " + error.Message); capri.Say("That job glitched partway, choom."); }
+    catch (Exception error) { jobSite = null; capri.Log("job: " + error.Message); capri.Say("That job glitched partway, choom."); }
   }
 
   // One step in plain words, done. Null when it's done (or said), "ASK:question" when it needs their yes, else what happened.
@@ -5099,6 +5114,7 @@ public class CapriInternalBrowser : ICapriMod
       string v = Regex.Replace(verb.Groups[1].Value, @"\s+", "");
       if (v == "press") v = "click";
       if (v == "goto") v = "go";
+      if ((v == "open" || v == "go") && jobSite != null && Regex.IsMatch(verb.Groups[2].Value, @"^(?:https?://)?[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}(?:/\S*)?$", Plain)) jobSite = verb.Groups[2].Value;
       if (v == "next" && Regex.IsMatch(verb.Groups[2].Value, @"^(?:video|one|song)?$")) return BrowserTool("next");
       return Touchy1(BrowserTool(v + (verb.Groups[2].Value.Length > 0 ? " " + step.Substring(step.Length - verb.Groups[2].Value.Length) : "")));
     }
