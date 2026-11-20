@@ -2473,7 +2473,7 @@ public class CapriInternalBrowser : ICapriMod
     private static readonly Regex CompareAsk = new Regex(@"^(?:compare\s+(?:these|them|my\s+tabs|the\s+tabs|(?:all\s+)?(?:my\s+)?open\s+tabs)|which\s+(?:one|of\s+these|of\s+my\s+tabs|tab)\s+(?:is|should\s+i\s+(?:get|buy|pick|choose))(?:\s+(?:the\s+)?(?:best|better|cheapest))?)\s*(?<for>.*)$", Plain);
     private static readonly Regex TabsAsk = new Regex(@"^(?:what(?:'?s|\s+have\s+i\s+got|\s+do\s+i\s+have)\s+open|(?:summari[sz]e|sum\s+up|go\s+(?:through|over))\s+(?:all\s+)?(?:of\s+)?my\s+tabs|what\s+are\s+my\s+tabs)$", Plain);
     private static readonly Regex FactAsk = new Regex(@"^(?:fact[\s-]?check|is\s+it\s+(?:really\s+)?true\s+that|check\s+if)\s+(?<what>.+)$", Plain);
-    private static readonly Regex SolveVerb = new Regex(@"^(?:can\s+you\s+|please\s+)?(?:work\s+(?:\w+\s+)?out|solve|answer|figure\s+(?:\w+\s+)?out|explain|help\s+(?:me\s+)?with)\b", Plain);
+    private static readonly Regex SolveVerb = new Regex(@"^(?:can\s+you\s+|please\s+)?(?:work\s+(?:\w+\s+)?out|work\s+on|go\s+(?:through|over)|solve|answer|figure\s+(?:\w+\s+)?out|explain|help\s+(?:me\s+)?with)\b", Plain);
     private static readonly Regex SolveWhere = new Regex(@"\b(?:notes?|noted|picture|screenshot|file)\b", Plain);
     private static readonly Regex LastAsk = new Regex(@"^(?:(?<show>bring\s+up|show\s+me|open|pull\s+up)\s+|(?:add|put|save)\s+)(?:my|the|your|that)\s+(?:last\s+)?(?:research|findings?|results?)(?(show)|\s+(?:to|in|into)\s+(?:my\s+)?(?:notes?|noted))$", Plain);
     private static readonly Regex NotesSaid = new Regex(@"\b(?:notes?|noted|save\s+it|keep\s+it|write\s+it\s+down)\b", Plain);
@@ -2494,7 +2494,7 @@ public class CapriInternalBrowser : ICapriMod
         }
         if (TabsAsk.IsMatch(said)) { Study("tabs", "", said); return true; }
         if ((m = CompareAsk.Match(said)).Success) { Study("compare", m.Groups["for"].Value.Trim(), said); return true; }
-        if (SolveVerb.IsMatch(said) && SolveWhere.IsMatch(said) && said.Split(' ').Length <= 14) { Study("solve", "", said); return true; }
+        if (SolveVerb.IsMatch(said) && SolveWhere.IsMatch(said) && said.Split(' ').Length <= 14) { Study("solve", SolvePick(said), said); return true; }
         if ((m = FactAsk.Match(said)).Success) { Study("fact", m.Groups["what"].Value.Trim(), said); return true; }
         m = BestAsk.Match(said);
         string what = m.Groups["what"].Value.Trim();
@@ -2603,7 +2603,7 @@ public class CapriInternalBrowser : ICapriMod
         if (!capri.Brain.Ready) { capri.Say("My brain's offline, so I can't research right now, choom."); return; }
         if (Unsuitable.IsMatch(topic + " " + said)) { capri.Say("That's not something I'll research, choom. Ask me about something else?"); return; }
         if (Interlocked.Exchange(ref studying, 1) == 1) { capri.Say("I'm still working on the last one, choom. I'll tell you when it's done."); return; }
-        capri.Say(kind == "tabs" ? "Going through your tabs, choom." : kind == "compare" ? "Comparing your tabs, choom. Keep doing your thing." : kind == "solve" ? "Let me look at your newest note, choom."
+        capri.Say(kind == "tabs" ? "Going through your tabs, choom." : kind == "compare" ? "Comparing your tabs, choom. Keep doing your thing." : kind == "solve" ? (topic.StartsWith("at:") ? "Let me look at that note, choom." : topic.Length > 5 ? "Let me look at your newest " + topic.Substring(5) + " note, choom." : "Let me look at your newest note, choom.")
             : "On it, choom. I'll research that in the background and tell you when I'm done.");
         Thread worker = new Thread(delegate()
         {
@@ -2631,7 +2631,7 @@ public class CapriInternalBrowser : ICapriMod
             case "pick": return "They highlighted this on a page and asked you to research it. If it's a claim, fact-check it and start with True, False, Partly true or Not clear; otherwise explain it with the key facts. ";
             case "compare": return "The sources are the tabs they have open. Compare them for what they want: one line per tab starting with \"- \" and its name, with the price and key points if shown, then say which is best for them and why. ";
             case "tabs": return "The sources are the tabs they have open (titles and addresses). Write one line per tab starting with \"- \" saying what it is, then say which ones look finished with. ";
-            case "solve": return "The source is their newest note (text read from a picture can have small mistakes). Work it out: for maths show the working step by step and the final answer, for a question answer it clearly. If you can't tell what they want, say what you see. ";
+            case "solve": return "The source is their note (text read from a picture can have small mistakes). Work it out: for maths show the working step by step and the final answer, for a question answer it clearly. If you can't tell what they want, say what you see. ";
             case "page": return "Source 1 is the page they're on. Research what it's about properly, using the other sources too: an overview, the key facts, and anything they disagree on. ";
             default: return "Research it properly: an overview, the key facts, and anything the sources disagree on. ";
         }
@@ -2639,7 +2639,7 @@ public class CapriInternalBrowser : ICapriMod
 
     private void StudyNow(string kind, string topic, string said)
     {
-        ResearchResult f = new ResearchResult { Kind = kind, Title = topic.Length > 0 ? char.ToUpperInvariant(topic[0]) + topic.Substring(1) : kind == "solve" ? "Worked out" : "Your tabs" };
+        ResearchResult f = new ResearchResult { Kind = kind, Title = kind == "solve" ? "Worked out" : topic.Length > 0 ? char.ToUpperInvariant(topic[0]) + topic.Substring(1) : "Your tabs" };
         StringBuilder data = new StringBuilder();
         Action<string, string, string> add = delegate(string title, string address, string text)
         {
@@ -2662,8 +2662,8 @@ public class CapriInternalBrowser : ICapriMod
         }
         else if (kind == "solve")
         {
-            string note = NoteToRead();
-            if (note == null) { capri.Say("I couldn't find a note to work out, choom. Put the question, a picture or a file in Noted first."); return; }
+            string note = NoteToRead(topic);
+            if (note == null) { capri.Say(topic.Length > 5 ? "There's nothing in your " + topic.Substring(5) + " notes to work out yet, choom." : "I couldn't find a note to work out, choom. Put the question, a picture or a file in Noted first."); return; }
             data.Append("\n<<<\n" + Clip(note.Replace("<<<", "").Replace(">>>", ""), 6000) + "\n>>>\n");
         }
         else
@@ -2773,13 +2773,36 @@ public class CapriInternalBrowser : ICapriMod
         FileNote(null, delegate(string into) { WithBrowser(delegate(Browser b) { b.NoteTo(note, into); return null; }); }, note);
     }
 
-    // Their newest note in Noted as text: its words, a picture read with Windows' own text reader, and a text file's contents.
-    private string NoteToRead()
+    // Which note "work out my ... notes" means: "book:School" for the newest in a chat ("book:" is Noted itself), the chat
+    // on show for "my open notes" (or any time Noted is open), else "" for the newest of all.
+    private string SolvePick(string said)
     {
-        string[] all = (capri.Store.Get("notelist", "") ?? "").Split('\u001e'), when = (capri.Store.Get("noteedited", "") ?? "").Split('\u001e');
+        string s = " " + said.ToLowerInvariant() + " ";
+        if (Regex.IsMatch(s, @"\b(?:last|latest|newest|recent)\s+(?:notes?|picture|screenshot|file)\b")) return "";
+        foreach (string book in Books()) if (Regex.IsMatch(s, @"\b" + Regex.Escape(book.ToLowerInvariant()) + @"\s+(?:notes?|notebook|chat)\b")) return "book:" + book;
+        if (Regex.IsMatch(s, @"\b(?:browser|main|noted)\s+notes?\b")) return "book:";
+        bool open = Regex.IsMatch(s, @"\b(?:open(?:ed)?|current|these|this)\s+(?:notes?|notebook|chat)\b");
+        string shown = InBrowser(delegate(Browser b) { return b.NotesOpen || open ? "book:" + (b.NoteBookShown ?? "*") : null; });
+        return shown == null || !shown.StartsWith("book:") || shown == "book:*" ? "" : shown;
+    }
+
+    // A note in Noted as text: its words, a picture read with Windows' own text reader, and a text file's contents.
+    // pick: "" the newest, "book:Name" the newest in that chat, "at:ticks" the one last changed then.
+    private string NoteToRead(string pick)
+    {
+        string[] all = (capri.Store.Get("notelist", "") ?? "").Split('\u001e'), when = (capri.Store.Get("noteedited", "") ?? "").Split('\u001e'), of = (capri.Store.Get("notebookof", "") ?? "").Split('\u001e');
+        string book = pick.StartsWith("book:") ? pick.Substring(5) : null;
+        long at = -1;
+        if (pick.StartsWith("at:")) long.TryParse(pick.Substring(3), out at);
         int best = -1;
         long most = -1;
-        for (int i = 0; i < all.Length; i++) { long t = 0; if (i < when.Length) long.TryParse(when[i], out t); if (all[i].Trim().Length > 0 && t >= most) { most = t; best = i; } }
+        for (int i = 0; i < all.Length; i++)
+        {
+            long t = 0;
+            if (i < when.Length) long.TryParse(when[i], out t);
+            if (all[i].Trim().Length == 0 || (at >= 0 && t != at) || (book != null && !string.Equals(i < of.Length ? of[i] : "", book, StringComparison.OrdinalIgnoreCase))) continue;
+            if (t >= most) { most = t; best = i; }
+        }
         if (best < 0) return null;
         string rtf = all[best], words = rtf;
         if (rtf.StartsWith("{\\rtf", StringComparison.Ordinal))
@@ -9011,7 +9034,7 @@ public class CapriInternalBrowser : ICapriMod
                 .Append(Row("Put Capri's brain first", "Gives Capri's thinking the PC before the browser's pages. Turning it off can slow her down.", Switch("x-brainfirst", Flag("brainfirst", true))))
                 .Append("</div>");
             html.Append(open(2)).Append(Row("How hard she looks", "Deep reads up to 5 sites, Quick reads 2 and is faster. Off turns research off.", Pick("research", new[] { "deep", "quick", "off" }, new[] { "Deep", "Quick", "Off" }, ResearchMode, false)))
-                .Append(extras("research")).Append("<p class='hint'>Say “research …”, “what's the best …”, “best website for …”, “fact check …”, “compare my tabs”, “what have I got open?”, “work out my last note”, "
+                .Append(extras("research")).Append("<p class='hint'>Say “research …”, “what's the best …”, “best website for …”, “fact check …”, “compare my tabs”, “what have I got open?”, “work out my last note” (or “… my open notes”, or right-click a note for Work on this), "
                 + "“watch this page” or “fill in this form with …”, or highlight words and right-click for Let Capri research this. She works in the background, then asks if you want it brought up, put in your notes, or both.</p></div>");
             html.Append(open(3)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : ""))
                 .Append(Row("Anime site", "Where Capri looks when you ask for anime without naming a site.", Pick("animesite", AnimeHosts, AnimeNames, Kept("animesite").Length > 0 ? Kept("animesite") : AnimeHosts[0], false)))
@@ -9914,7 +9937,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             public int Top, Height, Wide;
             public float Shown, Appear, Hover;
             public bool Open, Long;
-            public Bitmap Picture;
+            public float Seen;                  // while opening or folding: how tall it's drawn (0 the rest of the time)
+            public Bitmap Picture, Was;         // Was: the open card, kept while it folds
             public string Url;
             public Rectangle Link, More;
         }
@@ -10192,12 +10216,19 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                             using (LinearGradientBrush fade = new LinearGradientBrush(new Rectangle(1, y + show - 40, w - 2, 41), Color.FromArgb(0, back), back, 90f))
                                 g.FillRectangle(fade, 1, y + show - 39, w - 2, 40);
                         y += show;
+                        // A small notch to open or fold it (the whole line can be clicked).
                         if (row.Long)
                         {
-                            string more = row.Open ? "SHOW LESS  ▴" : "SHOW MORE  ▾";
-                            Size m = TextRenderer.MeasureText(more, divider);
-                            TextRenderer.DrawText(g, more, divider, new Point(Pad, y + 6), look.Shade(5), TextFormatFlags.NoPrefix);
-                            row.More = new Rectangle(Pad - 4, y + 2, m.Width + 8, 22);
+                            int nx = w / 2 - 24;
+                            g.SmoothingMode = SmoothingMode.AntiAlias;
+                            using (SolidBrush notch = new SolidBrush(Mix(back, look.Shade(5), .22f))) g.FillPolygon(notch, new[] { new Point(nx, y + 6), new Point(nx + 48, y + 6), new Point(nx + 42, y + 20), new Point(nx + 6, y + 20) });
+                            using (Pen chevron = new Pen(look.Shade(5), 1.6f))
+                            {
+                                int cy = y + 13, d = row.Open ? -3 : 3;
+                                g.DrawLines(chevron, new[] { new Point(nx + 18, cy - d), new Point(nx + 24, cy + d), new Point(nx + 30, cy - d) });
+                            }
+                            g.SmoothingMode = SmoothingMode.None;
+                            row.More = new Rectangle(Pad, y, w - Pad * 2, 26);
                             y += 26;
                         }
                     }
@@ -10224,7 +10255,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 }
                 return pic;
             };
-            Action<NoteRow> forget = delegate(NoteRow row) { if (row.Picture != null) { row.Picture.Dispose(); row.Picture = null; } row.Wide = 0; };
+            Action<NoteRow> forget = delegate(NoteRow row) { if (row.Picture != null) { row.Picture.Dispose(); row.Picture = null; } if (row.Was != null) { row.Was.Dispose(); row.Was = null; } row.Seen = 0; row.Wide = 0; };
 
             // Where everything goes. Rows ease from where they're drawn now to here.
             Action lay = delegate
@@ -10290,7 +10321,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 foreach (NoteRow row in rows)
                 {
                     int y = (int)Math.Round(row.Shown) - top + (int)((1 - row.Appear) * 14);
-                    if (y > high || y + row.Height < 0) continue;
+                    int ch = row.Seen > 0 ? (int)row.Seen : row.Height;
+                    if (y > high || y + Math.Max(ch, row.Height) < 0) continue;
                     if (row.Header != null)
                     {
                         Size t = TextRenderer.MeasureText(row.Header, divider);
@@ -10299,9 +10331,19 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                         using (Pen line = new Pen(Mix(look.Shade(0), look.Shade(6), row.Appear))) g.DrawLine(line, Side + t.Width + 8, y + 17, Side + w, y + 17);
                         continue;
                     }
-                    if (row.Picture == null || row.Wide != w) { forget(row); row.Picture = drawCard(row, w); row.Wide = w; }
+                    if (row.Picture == null || row.Wide != w) { if (row.Picture != null) row.Picture.Dispose(); row.Picture = drawCard(row, w); row.Wide = w; }
                     if (row.Picture == null) continue;
-                    if (row.Appear >= .99f) g.DrawImageUnscaled(row.Picture, Side, y);
+                    Bitmap face = row.Was ?? row.Picture;
+                    if (row.Seen > 0 && face.Height > 60 && face.Width == w)
+                    {
+                        // Opening or folding: the top as far as it's grown, then the card's own bottom line under it.
+                        int foot = Math.Min(30, ch / 2);
+                        g.SetClip(new Rectangle(Side, y, w, Math.Max(0, ch - foot)));
+                        g.DrawImageUnscaled(face, Side, y);
+                        g.ResetClip();
+                        g.DrawImage(face, new Rectangle(Side, y + ch - foot, w, foot), new Rectangle(0, face.Height - foot, w, foot), GraphicsUnit.Pixel);
+                    }
+                    else if (row.Appear >= .99f) g.DrawImageUnscaled(row.Picture, Side, y);
                     else
                     {
                         ColorMatrix m = new ColorMatrix { Matrix33 = row.Appear };
@@ -10311,8 +10353,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     if (row.Hover > .02f)
                     {
                         int a = (int)(255 * row.Hover);
-                        using (SolidBrush bar = new SolidBrush(Color.FromArgb(a, look.Shade(5)))) g.FillRectangle(bar, Side, y + 10, 3, row.Height - 20);
-                        using (Pen edge = new Pen(Color.FromArgb(a, Mix(look.Shade(6), look.Shade(5), .6f)))) g.DrawPolygon(edge, CutEdge(Side, y, w, row.Height, 10));
+                        using (SolidBrush bar = new SolidBrush(Color.FromArgb(a, look.Shade(5)))) g.FillRectangle(bar, Side, y + 10, 3, ch - 20);
+                        using (Pen edge = new Pen(Color.FromArgb(a, Mix(look.Shade(6), look.Shade(5), .6f)))) g.DrawPolygon(edge, CutEdge(Side, y, w, ch, 10));
                         // Edit, Copy and Delete, top right.
                         string[] icons = { "", "", "" };
                         Color back = Mix(look.Shade(1), look.Shade(5), .05f);
@@ -10360,6 +10402,11 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 {
                     if (Math.Abs(row.Top - row.Shown) > .5f) { row.Shown += (row.Top - row.Shown) * .22f; moving = true; } else row.Shown = row.Top;
                     if (row.Appear < 1) { row.Appear = Math.Min(1, row.Appear + .08f); moving = true; }
+                    if (row.Seen > 0)
+                    {
+                        if (Math.Abs(row.Height - row.Seen) > .5f) { row.Seen += (row.Height - row.Seen) * .22f; moving = true; }
+                        else { row.Seen = 0; if (row.Was != null) { row.Was.Dispose(); row.Was = null; } }
+                    }
                     float want = row == hovered ? 1 : 0;
                     if (Math.Abs(want - row.Hover) > .02f) { row.Hover += (want - row.Hover) * .3f; moving = true; } else row.Hover = want;
                 }
@@ -10441,6 +10488,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 Match link = Regex.Match(plain[i], @"(?:https?|file)://\S+");
                 Item(m.Items, "Edit", "", true, delegate { edit(id); });
                 Item(m.Items, "Copy", "", true, delegate { copy(id); });
+                Item(m.Items, "Work on this", "", true, delegate { int j = ids.IndexOf(id); if (j >= 0) mod.Study("solve", "at:" + edited[j], "work on this note"); });
+                string first = Regex.Replace(plain[i].Replace("\r", "").Trim().Split('\n')[0], @"(?:https?|file)://\S+", "").Trim();
+                if (first.Length > 2) Item(m.Items, "Research this", "", true, delegate { mod.Study("research", Clip(first, 150), first); });
+                if (plain[i].Trim().Length > 0) Item(m.Items, "Read it to me", "", true, delegate { int j = ids.IndexOf(id); if (j >= 0) mod.Tell(Clip(Regex.Replace(plain[j], @"(?:https?|file)://\S+", "a link"), 700)); });
                 if (link.Success) Item(m.Items, "Open link", "", true, delegate { OpenTab(null, link.Value, true); });
                 ToolStripMenuItem move = new ToolStripMenuItem("Move to") { ForeColor = mod.look.Shade(2) };
                 List<string> places = new List<string> { "" };
@@ -10488,7 +10539,21 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 if (button == 1) { copy(row.Id); return; }
                 if (button == 2) { drop(row.Id); return; }
                 Point local = inCard(row, e.Location);
-                if (row.More.Contains(local)) { row.Open = !row.Open; forget(row); row.Height = 0; lay(); return; }
+                if (row.More.Contains(local))
+                {
+                    // The open card is kept while it folds; the new one is drawn as it grows. The cards under it move with it.
+                    int was = row.Height;
+                    Bitmap open = row.Open ? row.Picture : null;
+                    if (open != null) row.Picture = null;
+                    forget(row);
+                    row.Open = !row.Open;
+                    row.Height = 0;
+                    lay();
+                    row.Was = open;
+                    row.Seen = was;
+                    kick();
+                    return;
+                }
                 if (row.Link.Contains(local) && row.Url != null) OpenTab(null, row.Url, true);
             };
             feed.DoubleClick += delegate { NoteRow row = rowAt(feed.PointToClient(Cursor.Position)); if (row != null && row.Link.IsEmpty) edit(row.Id); };
@@ -10512,8 +10577,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             noteText.Font = new Font(Ui, 10.5f);
             Label cue = new Label { Text = "Leave a note for yourself...", Left = 1, Top = 1, AutoSize = true, Cursor = Cursors.IBeam, Font = new Font(Ui, 10.5f) };
             cue.Click += delegate { noteText.Focus(); };
-            noteText.Controls.Add(cue);
-            noteText.TextChanged += delegate { cue.Visible = noteText.TextLength == 0; };
+            Action hint = delegate { bool show = noteText.TextLength == 0 && !noteText.Focused; if (cue.Visible != show) { cue.Visible = show; noteText.Invalidate(); } };
+            noteText.TextChanged += delegate { hint(); };
             // It grows with what's written (smoothly), up to a point, then scrolls.
             int grow = 0;
             noteText.ContentsResized += delegate(object sender, ContentsResizedEventArgs e)
@@ -10526,6 +10591,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             paper.Controls.Add(pageLink);
             paper.Controls.Add(attach);
             paper.Controls.Add(send);
+            paper.Controls.Add(cue);
+            cue.Location = new Point(13, 10);
+            cue.BringToFront();
             composer.Controls.Add(paper);
             paper.Paint += delegate(object sender, PaintEventArgs e)
             {
@@ -10538,8 +10606,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 bool on = noteText.Focused;
                 using (Pen edge = new Pen(editing != null ? look.Shade(4) : on ? look.Shade(5) : Mix(look.Shade(6), look.Shade(5), .3f), on || editing != null ? 1.6f : 1f)) g.DrawPolygon(edge, shape);
             };
-            noteText.GotFocus += delegate { paper.Invalidate(); };
-            noteText.LostFocus += delegate { paper.Invalidate(); };
+            noteText.GotFocus += delegate { hint(); paper.Invalidate(); };
+            noteText.LostFocus += delegate { hint(); paper.Invalidate(); };
             composer.Paint += delegate(object sender, PaintEventArgs e) { using (Pen line = new Pen(mod.look.Shade(6))) e.Graphics.DrawLine(line, 0, 0, composer.Width, 0); };
             notePaper = composer;
 
@@ -10580,7 +10648,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 using (Bitmap shrunk = new Bitmap(Math.Max(1, (int)(picture.Width * scale)), Math.Max(1, (int)(picture.Height * scale))))
                 {
                     using (Graphics g = Graphics.FromImage(shrunk)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(picture, 0, 0, shrunk.Width, shrunk.Height); }
-                    try { held = Clipboard.GetDataObject(); Clipboard.SetImage(shrunk); noteText.Paste(); } catch (Exception) { }
+                    try { held = Clipboard.GetDataObject(); Clipboard.SetImage(shrunk); noteText.Paste(); noteText.ScrollToCaret(); noteText.Refresh(); } catch (Exception) { }
                 }
                 try { if (held != null) Clipboard.SetDataObject(held, true); } catch (Exception) { }
             };
@@ -10601,6 +10669,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                     store();
                     foreach (NoteRow row in rows) if (row.Id == id0) { forget(row); row.Height = 0; }
                     lay();
+                    feed.Refresh();
                     return;
                 }
                 stopEditing();
@@ -10619,8 +10688,12 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 float from = total;
                 if (rows.Count == 0 || rows.FindLastIndex(delegate(NoteRow x) { return x.Header != null; }) < 0 || rows[rows.FindLastIndex(delegate(NoteRow x) { return x.Header != null; })].Header != "TODAY")
                     rows.Add(new NoteRow { Header = "TODAY", Shown = from, Appear = 0 });
-                rows.Add(newRow(id, from + 30));
+                NoteRow fresh = newRow(id, from + 30);
+                fresh.Appear = .5f;
+                rows.Add(fresh);
                 toEnd();
+                feed.Refresh();
+                noteText.Refresh();
                 layPills();
                 pills.Invalidate();
             };
@@ -10631,7 +10704,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 else if (e.KeyCode == Keys.Escape && editing != null) { e.SuppressKeyPress = true; stopEditing(); noteText.Clear(); }
                 else if (e.KeyCode == Keys.Escape) { e.SuppressKeyPress = true; SlideIn(notes, notes.Width); }
                 else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && Clipboard.ContainsImage()) { e.SuppressKeyPress = true; using (Image pasted = Clipboard.GetImage()) putPicture(pasted); }
-                else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && !Clipboard.ContainsImage() && Clipboard.ContainsText()) { e.SuppressKeyPress = true; noteText.SelectionColor = mod.look.Shade(2); noteText.SelectedText = Clipboard.GetText(); }
+                else if (((e.Control && e.KeyCode == Keys.V) || (e.Shift && e.KeyCode == Keys.Insert)) && !Clipboard.ContainsImage() && Clipboard.ContainsText()) { e.SuppressKeyPress = true; noteText.SelectionColor = mod.look.Shade(2); noteText.SelectedText = Clipboard.GetText(); noteText.ScrollToCaret(); noteText.Refresh(); }
             };
             noteText.LinkClicked += delegate(object sender, LinkClickedEventArgs e) { OpenLink(e.LinkText); };
             attach.Click += delegate
@@ -10685,6 +10758,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             ShowBook = delegate
             {
                 if (inBook != null && inBook.Length > 0 && !new List<string>(Notebooks()).Contains(inBook)) inBook = "";
+                NoteBookShown = inBook;
                 named.Text = inBook == null || inBook.Length == 0 ? (inBook == null ? "Noted  ·  All" : "Noted") : "Noted  ·  " + inBook;
                 glidePill();
             };
@@ -12640,6 +12714,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         }
         private Action<string, string> noteInto;
         private Action ShowBook = delegate { };
+        internal string NoteBookShown = "";     // the Noted chat on show ("" is Noted, null is All), for "work out my open notes"
+        internal bool NotesOpen { get { return notes.Visible; } }
 
         // Their own notebooks, by name, in the order they made them.
         internal string[] Notebooks() { return Kept("notebooks").Split(new[] { '\u001e' }, StringSplitOptions.RemoveEmptyEntries); }
