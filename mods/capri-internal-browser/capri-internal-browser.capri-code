@@ -23,6 +23,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
+using WinTimer = System.Windows.Forms.Timer;
 using System.Collections;
 using System.Net.Cache;
 using System.Globalization;
@@ -228,12 +229,12 @@ public class CapriInternalBrowser : ICapriMod
     if (host.Store.Get("welcomed", "") != "1")
     {
       host.Store.Set("welcomed", "1");
-      ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); try { if (!stopped) capri.Say("Capri Browser is on, choom! Say \"open Capri Browser\", or right-click me and find it under Play."); } catch (Exception) { } });
+      ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(4000); try { if (!stopped) capri.Say("Capri Browser is on, choom! Say \"open Capri Browser\", or right-click me and find it under Play."); } catch { } });
     }
     UseLanguages(host.Store.Get("langpack", ""));
     UseLists(host.Store.Get("lists", ""));
     UseCommands(host.Store.Get("commands", ""));
-    try { if (AdblockFile != null && File.Exists(AdblockFile)) UseAdblock(File.ReadAllText(AdblockFile)); } catch (Exception) { }
+    try { if (AdblockFile != null && File.Exists(AdblockFile)) UseAdblock(File.ReadAllText(AdblockFile)); } catch { }
     HomeCss = host.Store.Get("css-home", "") ?? "";
     PagesCss = host.Store.Get("css-pages", "") ?? "";
     look = Look.Load(host.Store);
@@ -244,9 +245,9 @@ public class CapriInternalBrowser : ICapriMod
       if (Regex.IsMatch(line, @"^https?://\S+$") && saved.Count < 15) saved.Add(new Kept { Address = line });
     lock (gate) kept = saved;
     // A first search pays for DNS and a TLS handshake; doing that now makes her first answer quicker.
-    ThreadPool.QueueUserWorkItem(delegate { try { Fetch("https://www.bing.com/"); } catch (Exception) { } });
-    try { capri.Brain.AddTool("capri_browser", BrowserHelp, BrowserArgs, BrowserTool); } catch (Exception) { }
-    try { capri.Chat.AddContext(delegate { if (newsAsked) { newsAsked = false; return NewsContext(); } Browser now = open; List<string> often = Often(); string usual = often.Count == 0 ? "" : " Sites they use most in it: " + string.Join(", ", often.GetRange(0, Math.Min(8, often.Count)).ToArray()) + " (open one with capri_browser open <site> if they want it)."; return now == null || now.IsDisposed ? "You have Capri Browser: use it (capri_browser, look_up_web) for websites and web searches, never another browser." + usual : "Capri Browser is open on their screen. " + Front + " You can use it with your capri_browser tool." + usual; }); } catch (Exception) { }
+    ThreadPool.QueueUserWorkItem(delegate { try { Fetch("https://www.bing.com/"); } catch { } });
+    try { capri.Brain.AddTool("capri_browser", BrowserHelp, BrowserArgs, BrowserTool); } catch { }
+    try { capri.Chat.AddContext(delegate { if (newsAsked) { newsAsked = false; return NewsContext(); } Browser now = open; List<string> often = Often(); string usual = often.Count == 0 ? "" : " Sites they use most in it: " + string.Join(", ", often.GetRange(0, Math.Min(8, often.Count)).ToArray()) + " (open one with capri_browser open <site> if they want it)."; return now == null || now.IsDisposed ? "You have Capri Browser: use it (capri_browser, look_up_web) for websites and web searches, never another browser." + usual : "Capri Browser is open on their screen. " + Front + " You can use it with your capri_browser tool." + usual; }); } catch { }
     capri.Brain.AddTool("look_up_web",
       "Look something up on the web in your own browser, which only you see, and read the top results yourself: facts, news, scores, prices, release dates, anything you're unsure of or that changes. Nothing opens on their screen. Use it instead of guessing or opening Google, and answer from what it gives back.",
       "what to search for, like their question",
@@ -265,7 +266,7 @@ public class CapriInternalBrowser : ICapriMod
     // Her hologram follows her voice ("voice" permission); each hook on its own, so one refused can't take the others with it.
     try { capri.Voice.Started += delegate(string text) { Holo(text ?? "", true); }; } catch (Exception error) { capri.Log("hologram: can't hear her voice start: " + error.Message); }
     try { capri.Voice.Finished += delegate { Holo(null, false); }; } catch (Exception error) { capri.Log("hologram: can't hear her voice stop: " + error.Message); }
-    try { capri.Chat.Replied += delegate(CapriMessage message) { try { if (message != null && !string.IsNullOrEmpty(message.Text) && !capri.Voice.Talking) Holo(message.Text, false); } catch (Exception) { } }; } catch (Exception error) { capri.Log("hologram: can't see her replies: " + error.Message); }
+    try { capri.Chat.Replied += delegate(CapriMessage message) { try { if (message != null && !string.IsNullOrEmpty(message.Text) && !capri.Voice.Talking) Holo(message.Text, false); } catch { } }; } catch (Exception error) { capri.Log("hologram: can't see her replies: " + error.Message); }
     // After her brain used the tool by itself, her reply gets the offer.
     capri.Chat.Replying += delegate(CapriMessage message)
     {
@@ -673,7 +674,7 @@ public class CapriInternalBrowser : ICapriMod
       if (now != null && now.InvokeRequired) run.Wait(15000);
       else { DateTime until = DateTime.Now.AddSeconds(15); while (!run.IsCompleted && DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(15); } }
     }
-    catch (Exception) { }
+    catch { }
     if (run.Status != TaskStatus.RanToCompletion) { why = "The page didn't answer."; return null; }
     return Unjson(run.Result);
   }
@@ -681,7 +682,7 @@ public class CapriInternalBrowser : ICapriMod
   private static string Unjson(string json)
   {
     if (json == null || json == "null") return "";
-    if (json.Length >= 2 && json[0] == '"') try { return Regex.Unescape(json.Substring(1, json.Length - 2)); } catch (Exception) { }
+    if (json.Length >= 2 && json[0] == '"') try { return Regex.Unescape(json.Substring(1, json.Length - 2)); } catch { }
     return json;
   }
 
@@ -878,7 +879,7 @@ public class CapriInternalBrowser : ICapriMod
               lock (gate) fresh = asked || !chatsSeen.Contains(site + "|" + one.Id + "|" + one.Count);
               if (fresh && one.Who.Equals("someone", StringComparison.OrdinalIgnoreCase)) { string n = DcNameOf(t, one.Id); if (n.Length > 0) one.Who = n; }
             }
-          if (site == "Discord" && (asked || (DateTime.Now - lastNameCheck).TotalMinutes > 10) && found.Exists(delegate(ChatAt c) { return c.Who.Equals("someone", StringComparison.OrdinalIgnoreCase); })) { lastNameCheck = DateTime.Now; try { File.WriteAllText(Path.Combine(Folder, "discord-check.txt"), DateTime.Now.ToString("d MMM HH:mm") + " (a name was missed)\n" + (InTab(t, DcShape) ?? "(no answer)")); } catch (Exception) { } }
+          if (site == "Discord" && (asked || (DateTime.Now - lastNameCheck).TotalMinutes > 10) && found.Exists(delegate(ChatAt c) { return c.Who.Equals("someone", StringComparison.OrdinalIgnoreCase); })) { lastNameCheck = DateTime.Now; try { File.WriteAllText(Path.Combine(Folder, "discord-check.txt"), DateTime.Now.ToString("d MMM HH:mm") + " (a name was missed)\n" + (InTab(t, DcShape) ?? "(no answer)")); } catch { } }
           foreach (ChatAt chat in found)
           {
             string key = site + "|" + chat.Id + "|" + chat.Count, where = site + "|" + chat.Id;
@@ -901,7 +902,7 @@ public class CapriInternalBrowser : ICapriMod
           if (told) break;
         }
         // Asked and nobody found: the page's layout goes in discord-check.txt (no names or messages), for fixing.
-        if (asked && !told) { Tab dt = null; InBrowser(delegate(Browser b) { dt = b.ChatTab("Discord"); return null; }); if (dt != null) { try { File.WriteAllText(Path.Combine(Folder, "discord-check.txt"), DateTime.Now.ToString("d MMM HH:mm") + "\n" + (InTab(dt, DcShape) ?? "(no answer)")); } catch (Exception) { } } }
+        if (asked && !told) { Tab dt = null; InBrowser(delegate(Browser b) { dt = b.ChatTab("Discord"); return null; }); if (dt != null) { try { File.WriteAllText(Path.Combine(Folder, "discord-check.txt"), DateTime.Now.ToString("d MMM HH:mm") + "\n" + (InTab(dt, DcShape) ?? "(no answer)")); } catch { } } }
         if (asked && !told) Tell(any ? "No new Discord messages, choom." : "Sign in to Discord in Capri Browser, and I'll keep an eye on it for you.");
       }
       catch (Exception error) { Note("messages: " + error.Message); }
@@ -1004,7 +1005,7 @@ public class CapriInternalBrowser : ICapriMod
           if (!stopped && line.Length > 0 && line.Length < 200 && !Regex.IsMatch(line, @"^skip\b", RegexOptions.IgnoreCase) && !capri.Chat.Busy) capri.Say(line);
         });
       }
-      catch (Exception) { }
+      catch { }
     });
   }
 
@@ -1317,7 +1318,7 @@ public class CapriInternalBrowser : ICapriMod
     if (!Waited(run)) return null;
     string json = run.Result;
     if (json == null || json == "null") return "";
-    if (json.Length >= 2 && json[0] == '"') try { return Regex.Unescape(json.Substring(1, json.Length - 2)); } catch (Exception) { }
+    if (json.Length >= 2 && json[0] == '"') try { return Regex.Unescape(json.Substring(1, json.Length - 2)); } catch { }
     return json;
   }
 
@@ -1338,7 +1339,7 @@ public class CapriInternalBrowser : ICapriMod
       if (now != null && !now.InvokeRequired) { DateTime until = DateTime.Now.AddSeconds(10); while (!run.IsCompleted && DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(15); } }
       else run.Wait(10000);
     }
-    catch (Exception) { }
+    catch { }
     return run.Status == TaskStatus.RanToCompletion;
   }
 
@@ -1367,13 +1368,13 @@ public class CapriInternalBrowser : ICapriMod
       if (now != null && now.InvokeRequired) run.Wait(5000);
       else { DateTime until = DateTime.Now.AddSeconds(5); while (!run.IsCompleted && DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(15); } }
     }
-    catch (Exception) { }
+    catch { }
   }
 
   private const string Gone = "That number isn't on the page any more. Use links to number things again.";
 
   private object takeover;
-  private System.Windows.Forms.Timer letGo;
+  private WinTimer letGo;
 
   private DateTime holdUntil;
 
@@ -1397,13 +1398,13 @@ public class CapriInternalBrowser : ICapriMod
         }
       }
     }
-    catch (Exception) { }
+    catch { }
     return null;
   }
 
   private static Icon CapriIcon(Form host)
   {
-    try { return Icon.ExtractAssociatedIcon(typeof(ICapriHost).Assembly.Location); } catch (Exception) { }
+    try { return Icon.ExtractAssociatedIcon(typeof(ICapriHost).Assembly.Location); } catch { }
     return host == null ? null : host.Icon;
   }
 
@@ -1712,7 +1713,7 @@ public class CapriInternalBrowser : ICapriMod
           if (line.Length > 0) capri.Say(Clip(line, 300));
         });
       }
-      catch (Exception) { }
+      catch { }
     });
   }
 
@@ -1753,7 +1754,7 @@ public class CapriInternalBrowser : ICapriMod
         if (letGo != null) letGo.Stop();
         if (takeover != null) takeover.GetType().GetMethod("Release", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic).Invoke(takeover, null);
       }
-      catch (Exception) { }
+      catch { }
       return null;
     });
     if (capri != null) capri.Say("Okay, stopping, choom.");
@@ -1778,7 +1779,7 @@ public class CapriInternalBrowser : ICapriMod
         holdUntil = DateTime.UtcNow.AddSeconds(5);
         if (letGo == null)
         {
-          letGo = new System.Windows.Forms.Timer { Interval = 1000 };
+          letGo = new WinTimer { Interval = 1000 };
           letGo.Tick += delegate
           {
             try
@@ -1786,13 +1787,13 @@ public class CapriInternalBrowser : ICapriMod
               if (DateTime.UtcNow > holdUntil || form.IsDisposed || !form.Visible) { letGo.Stop(); type.GetMethod("Release", any).Invoke(takeover, null); return; }
               if (form.WindowState != FormWindowState.Minimized) type.GetMethod("Follow", any).Invoke(takeover, new object[] { form.Handle, "Capri Browser", form.Bounds, 1f });
             }
-            catch (Exception) { }
+            catch { }
           };
         }
         letGo.Stop();
         letGo.Start();
       }
-      catch (Exception) { }
+      catch { }
       return null;
     });
   }
@@ -2110,7 +2111,7 @@ public class CapriInternalBrowser : ICapriMod
       // Words as they are; spaces may be there or not (some languages don't use them); {n} {m} numbers, {x} any words.
       string pattern = Regex.Escape(p[2].ToLowerInvariant()).Replace("\\ ", "\\s*")
         .Replace("\\{n}", "\\s*(?<n>\\d+(?:[.,]\\d+)?)\\s*").Replace("\\{m}", "\\s*(?<m>\\d+(?:[.,]\\d+)?)\\s*").Replace("\\{x}", "\\s*(?<x>.+?)\\s*");
-      try { got.Add(new KeyValuePair<Regex, string>(new Regex("^" + pattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), p[3])); } catch (Exception) { }
+      try { got.Add(new KeyValuePair<Regex, string>(new Regex("^" + pattern + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant), p[3])); } catch { }
     }
     Commands = got;
     JobGuides = guides;
@@ -2339,7 +2340,7 @@ public class CapriInternalBrowser : ICapriMod
     {
       Task<string> read = null;
       InBrowser(delegate(Browser b) { read = b.ReadQuiet(shop); return null; });
-      try { if (read != null && read.Wait(15000)) { string j = read.Result ?? ""; text = j.Length >= 2 && j[0] == (char)34 ? Regex.Unescape(j.Substring(1, j.Length - 2)) : j; } } catch (Exception) { }
+      try { if (read != null && read.Wait(15000)) { string j = read.Result ?? ""; text = j.Length >= 2 && j[0] == (char)34 ? Regex.Unescape(j.Substring(1, j.Length - 2)) : j; } } catch { }
       if (string.IsNullOrEmpty(text)) Thread.Sleep(2500);
     }
     if (string.IsNullOrEmpty(text) || !capri.Brain.Ready) { InBrowser(delegate(Browser b) { b.BringQuiet(shop, null); return null; }); capri.Say("I couldn't read the prices myself, so I've put the comparison up for you, choom."); return; }
@@ -2614,7 +2615,7 @@ public class CapriInternalBrowser : ICapriMod
     DateTime until = DateTime.UtcNow.AddSeconds(seconds);
     Thread.Sleep(700);
     while (t.Busy && DateTime.UtcNow < until && !stopped) Thread.Sleep(200);
-    InBrowser(delegate(Browser b) { try { if (t.Viewer.Core != null) t.Viewer.Muted = true; } catch (Exception) { } return null; });
+    InBrowser(delegate(Browser b) { try { if (t.Viewer.Core != null) t.Viewer.Muted = true; } catch { } return null; });
     Thread.Sleep(900);
     return InTab(t, script);
   }
@@ -2629,7 +2630,7 @@ public class CapriInternalBrowser : ICapriMod
   {
     if (open == null || open.IsDisposed) return null;
     List<Result> background = null;
-    Thread gather = new Thread(delegate() { try { background = Gather(query); } catch (Exception) { } });
+    Thread gather = new Thread(delegate() { try { background = Gather(query); } catch { } });
     gather.IsBackground = true;
     gather.Start();
     List<Result> found = new List<Result>();
@@ -2742,7 +2743,7 @@ public class CapriInternalBrowser : ICapriMod
       for (int i = 0; i < tabs.Count; i++)
       {
         string text = "";
-        try { if (reads[i] != null && reads[i].Wait(8000)) text = Unjson(reads[i].Result); } catch (Exception) { }
+        try { if (reads[i] != null && reads[i].Wait(8000)) text = Unjson(reads[i].Result); } catch { }
         add(tabs[i][0], tabs[i][1], text);
       }
     }
@@ -2781,7 +2782,7 @@ public class CapriInternalBrowser : ICapriMod
         Thread reader = new Thread(delegate()
         {
           string got = null;
-          try { got = Read(pick[which].Address, query, deep ? 1600 : 900); } catch (Exception) { }
+          try { got = Read(pick[which].Address, query, deep ? 1600 : 900); } catch { }
           int now;
           lock (read) { read[which] = got; now = ++count; }
           if (!stopped) capri.Ui.Bubble("Researching: looked at " + now + " of " + pick.Count + " sites (" + pick[which].Host + ")");
@@ -2942,7 +2943,7 @@ public class CapriInternalBrowser : ICapriMod
       BitConverter.GetBytes(file.Length).CopyTo(file, 2);
       BitConverter.GetBytes(54 + colors * 4 + (packed == 3 ? 12 : 0)).CopyTo(file, 10);
       Array.Copy(w, i, file, 14, w.Length - i);
-      try { pic = new Bitmap(new MemoryStream(file)); } catch (Exception) { }
+      try { pic = new Bitmap(new MemoryStream(file)); } catch { }
     }
     if (pic == null) return null;
     string saved = Path.Combine(Path.GetTempPath(), "capri-note-read.png");
@@ -3050,7 +3051,7 @@ public class CapriInternalBrowser : ICapriMod
       foreach (string[] w in which)
       {
         string now = "";
-        try { now = Words(Fetch(w[0])); } catch (Exception) { }
+        try { now = Words(Fetch(w[0])); } catch { }
         if (now.Length < 200) { unread.Add(w[1]); continue; }
         if (now == w[4]) continue;
         string answer = null;
@@ -3152,7 +3153,7 @@ public class CapriInternalBrowser : ICapriMod
     ThreadPool.QueueUserWorkItem(delegate
     {
       string words = "";
-      try { words = Words(Fetch(url)); } catch (Exception) { }
+      try { words = Words(Fetch(url)); } catch { }
       if (words.Length < 200) { capri.Say("Heads up, choom: " + name + " won't let me read it in the background, so I can't watch it. Sorry."); return; }
       lock (gate) { List<string[]> all = Watches(); all.Add(new[] { url, name, want, DateTime.Now.Ticks.ToString(), words.Replace("\t", " ") }); SaveWatches(all); }
     });
@@ -3169,7 +3170,7 @@ public class CapriInternalBrowser : ICapriMod
       long since;
       long.TryParse(w[3], out since);
       string now = "";
-      if (DateTime.Now.Ticks - since < TimeSpan.TicksPerDay * 14) try { now = Words(Fetch(w[0])); } catch (Exception) { }
+      if (DateTime.Now.Ticks - since < TimeSpan.TicksPerDay * 14) try { now = Words(Fetch(w[0])); } catch { }
       else { lock (gate) { List<string[]> keep = Watches(); keep.RemoveAll(delegate(string[] x) { return x[0] == w[0] && x[3] == w[3]; }); SaveWatches(keep); } capri.Say("I've stopped watching " + w[1] + ", choom. It's been two weeks."); continue; }
       if (now.Length < 200 || now == w[4]) continue;
       string answer = null;
@@ -3249,7 +3250,7 @@ public class CapriInternalBrowser : ICapriMod
   private static string WindowsName()
   {
     int build = 0;
-    try { using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion")) if (k != null) int.TryParse(k.GetValue("CurrentBuildNumber") as string, out build); } catch (Exception) { }
+    try { using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion")) if (k != null) int.TryParse(k.GetValue("CurrentBuildNumber") as string, out build); } catch { }
     return build >= 22000 ? "Windows 11 (build " + build + ")" : build >= 10240 ? "Windows 10 (build " + build + ")" : "Windows";
   }
 
@@ -3279,7 +3280,7 @@ public class CapriInternalBrowser : ICapriMod
     if (got == null || got.Length > 4000) return null;
     Match say = Regex.Match(got, "\"(?:message|why)\":\"((?:[^\"\\\\]|\\\\.){1,400})\"");
     string text = "";
-    try { text = say.Success ? Regex.Unescape(say.Groups[1].Value) : ""; } catch (Exception) { }
+    try { text = say.Success ? Regex.Unescape(say.Groups[1].Value) : ""; } catch { }
     return new[] { got.StartsWith("{\"ok\":true", StringComparison.Ordinal) ? "ok" : got.Contains("\"full\":true") ? "full" : "no", Regex.Replace(text, "[\\x00-\\x1f<>]", " ").Trim() };
   }
 
@@ -3417,7 +3418,7 @@ public class CapriInternalBrowser : ICapriMod
             });
           understood.WaitOne(20000);
         }
-        catch (Exception) { }
+        catch { }
         Check();
         if (question != null)
         {
@@ -3478,7 +3479,7 @@ public class CapriInternalBrowser : ICapriMod
             delegate(string answer) { Match m = Regex.Match(answer ?? "", @"\d+"); int n; if (m.Success && int.TryParse(m.Value, out n) && n >= 0 && n <= count) choice = n; picked.Set(); });
           picked.WaitOne(25000);
         }
-        catch (Exception) { }
+        catch { }
         Check();
         if (choice == 0) { capri.Say("I couldn't see anything there that's really " + (what.Length > 0 ? Clip(what, 60) : "what you asked for") + ", choom. Tell me a bit more and I'll look again."); lock (gate) { findAsked = said; findKind = kind; findAskUntil = Now().AddMinutes(1); } return; }
         Controlling();
@@ -3518,7 +3519,7 @@ public class CapriInternalBrowser : ICapriMod
         if (OnPage("(function(){return document.fullscreenElement?'yes':'no';})()", out why) != "yes") VideoFull();
       }
       catch (OperationCanceledException) { }
-      catch (Exception) { }
+      catch { }
     }); });
   }
 
@@ -3540,7 +3541,7 @@ public class CapriInternalBrowser : ICapriMod
       FieldInfo menu = companion == null ? null : companion.GetType().GetField("menu", BindingFlags.Instance | BindingFlags.NonPublic);
       found = menu == null ? null : menu.GetValue(companion) as ContextMenuStrip;
     }
-    catch (Exception) { }
+    catch { }
     if (found == null) { IntoMods(); return; }
     HookPlay(found);
   }
@@ -3555,7 +3556,7 @@ public class CapriInternalBrowser : ICapriMod
   {
     if (inMods || capri == null) return;
     inMods = true;
-    try { capri.Ui.AddMenuItem("Capri Browser", delegate { OpenBrowser(null, null); }); } catch (Exception) { }
+    try { capri.Ui.AddMenuItem("Capri Browser", delegate { OpenBrowser(null, null); }); } catch { }
   }
 
   private void MenuOpening(object sender, System.ComponentModel.CancelEventArgs e)
@@ -3607,7 +3608,7 @@ public class CapriInternalBrowser : ICapriMod
       for (int i = play.DropDownItems.Count - 1; i >= 0; i--)
         if (PlayTag.Equals(play.DropDownItems[i].Tag)) { ToolStripItem gone = play.DropDownItems[i]; play.DropDownItems.RemoveAt(i); gone.Dispose(); }
     };
-    try { if (menu.InvokeRequired) menu.BeginInvoke(clean); else clean(); } catch (Exception) { }
+    try { if (menu.InvokeRequired) menu.BeginInvoke(clean); else clean(); } catch { }
     herMenu = null;
     playItem = null;
   }
@@ -3763,7 +3764,7 @@ public class CapriInternalBrowser : ICapriMod
 
   internal void RemoveWallpaper()
   {
-    try { if (File.Exists(WallpaperFile)) File.Delete(WallpaperFile); } catch (Exception) { }
+    try { if (File.Exists(WallpaperFile)) File.Delete(WallpaperFile); } catch { }
     lock (gate) { wallpaper = null; wallpaperRead = true; }
   }
 
@@ -3834,7 +3835,7 @@ public class CapriInternalBrowser : ICapriMod
 
   internal void RemoveTilePicture(string site)
   {
-    try { string file = TileFile(site); if (File.Exists(file)) File.Delete(file); } catch (Exception) { }
+    try { string file = TileFile(site); if (File.Exists(file)) File.Delete(file); } catch { }
     lock (tilePictures) tilePictures[site] = null;
   }
 
@@ -5272,7 +5273,7 @@ public class CapriInternalBrowser : ICapriMod
       Controls.Add(holder);
       BuildSide();
       // Every 15 seconds a video's playing out loud in a tab counts toward this week's watch time.
-      System.Windows.Forms.Timer watching = new System.Windows.Forms.Timer { Interval = 15000 };
+      WinTimer watching = new WinTimer { Interval = 15000 };
       watching.Tick += delegate
       {
         if (++autoTicks % 120 == 0) AutoSend(false);
@@ -5286,11 +5287,11 @@ public class CapriInternalBrowser : ICapriMod
         foreach (Tab g in tabs) if (g.Special == "games") LiveWeek(g);
       };
       watching.Start();
-      System.Windows.Forms.Timer dozing = new System.Windows.Forms.Timer { Interval = 120000 }, later = new System.Windows.Forms.Timer { Interval = 6000 };
+      WinTimer dozing = new WinTimer { Interval = 120000 }, later = new WinTimer { Interval = 6000 };
       dozing.Tick += delegate { Doze(); };
       dozing.Start();
       // Every 5 seconds, a look for new Discord messages (only when that reader's on in Settings).
-      System.Windows.Forms.Timer chatting = new System.Windows.Forms.Timer { Interval = 5000 };
+      WinTimer chatting = new WinTimer { Interval = 5000 };
       chatting.Tick += delegate { if (Flag("readdiscord", false)) mod.CheckMessages(false); else if (!Flag("quietmsg", false)) DropHiddenDiscord(); };
       chatting.Start();
       later.Tick += delegate { later.Dispose(); Wrap(false); };
@@ -5463,7 +5464,7 @@ public class CapriInternalBrowser : ICapriMod
       {
         was.LeftAt = DateTime.Now;
         Task<string> read = was.Viewer.Script(Viewer.ReadScript);
-        if (read != null) read.ContinueWith(delegate(Task<string> done) { try { was.Seen = Unjson(done.Result); } catch (Exception) { } });
+        if (read != null) read.ContinueWith(delegate(Task<string> done) { try { was.Seen = Unjson(done.Result); } catch { } });
       }
       if (t != was && t.Seen != null && !t.Private && !t.OnReader && (DateTime.Now - t.LeftAt).TotalMinutes >= 3 && Flag("catchup", true))
       {
@@ -5609,7 +5610,7 @@ public class CapriInternalBrowser : ICapriMod
     {
       Control page = t.Viewer.Control;
       page.Visible = false;
-      System.Windows.Forms.Timer later = new System.Windows.Forms.Timer { Interval = 350 };
+      WinTimer later = new WinTimer { Interval = 350 };
       later.Tick += delegate { later.Stop(); later.Dispose(); holder.Controls.Remove(page); page.Dispose(); };
       later.Start();
     }
@@ -5641,11 +5642,11 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // While the mouse is on the tab strip after closing a tab, the tabs keep their width; they settle once it leaves.
-    private System.Windows.Forms.Timer chipHold;
+    private WinTimer chipHold;
     private void HoldChips()
     {
       if (chipHold != null) return;
-      chipHold = new System.Windows.Forms.Timer { Interval = 120 };
+      chipHold = new WinTimer { Interval = 120 };
       chipHold.Tick += delegate
       {
         if (chips.ClientRectangle.Contains(chips.PointToClient(Cursor.Position)) && chips.FindForm() == Form.ActiveForm) return;
@@ -5682,7 +5683,7 @@ public class CapriInternalBrowser : ICapriMod
 
     // While tabs are moving, the strip's own layout waits and each tab glides to its place (the dragged one is the mouse's).
     private Tab dragged;
-    private System.Windows.Forms.Timer glide;
+    private WinTimer glide;
     private int glideBase, glideStep;
     private void GlideChips()
     {
@@ -5692,7 +5693,7 @@ public class CapriInternalBrowser : ICapriMod
       foreach (Tab one in shown) glideBase = Math.Min(glideBase, one.Chip.Left);
       glideStep = shown[0].Chip.Width + shown[0].Chip.Margin.Right;
       chips.SuspendLayout();
-      glide = new System.Windows.Forms.Timer { Interval = 15 };
+      glide = new WinTimer { Interval = 15 };
       glide.Tick += delegate
       {
         bool moving = dragged != null;
@@ -6380,7 +6381,7 @@ public class CapriInternalBrowser : ICapriMod
     private bool cleaning, measuring;
     private readonly HashSet<string> cleanOpen = new HashSet<string>();
     private readonly List<KeyValuePair<Rectangle, Action>> cleanHits = new List<KeyValuePair<Rectangle, Action>>();
-    private System.Windows.Forms.Timer cleanTimer;
+    private WinTimer cleanTimer;
 
     private static readonly string[,] CleanParts =
     {
@@ -6485,18 +6486,18 @@ public class CapriInternalBrowser : ICapriMod
       long total = 0;
       try
       {
-        if (inCache) foreach (string file in Directory.GetFiles(folder)) try { total += new FileInfo(file).Length; } catch (Exception) { }
+        if (inCache) foreach (string file in Directory.GetFiles(folder)) try { total += new FileInfo(file).Length; } catch { }
         foreach (string sub in Directory.GetDirectories(folder))
           total += CacheSize(sub, inCache || Path.GetFileName(sub).IndexOf("cache", StringComparison.OrdinalIgnoreCase) >= 0);
       }
-      catch (Exception) { }
+      catch { }
       return total;
     }
 
     private long DownloadedBytes()
     {
       long total = 0;
-      foreach (Got g in Gots()) if (g.State == "done") try { if (File.Exists(g.File)) total += new FileInfo(g.File).Length; } catch (Exception) { }
+      foreach (Got g in Gots()) if (g.State == "done") try { if (File.Exists(g.File)) total += new FileInfo(g.File).Length; } catch { }
       return total;
     }
 
@@ -6517,7 +6518,7 @@ public class CapriInternalBrowser : ICapriMod
       mod.Tell(Line("cleanstart", "Getting rid of all the gunk!"));
       if (cleanTimer == null)
       {
-        cleanTimer = new System.Windows.Forms.Timer { Interval = 40 };
+        cleanTimer = new WinTimer { Interval = 40 };
         cleanTimer.Tick += delegate { cleanSpin++; if (cleanBody != null) cleanBody.Invalidate(); };
       }
       cleanTimer.Start();
@@ -6541,7 +6542,7 @@ public class CapriInternalBrowser : ICapriMod
         MeasureClean(delegate
         {
           int wait = Math.Max(0, 1400 - (int)(DateTime.Now - began).TotalMilliseconds);
-          System.Windows.Forms.Timer settle = new System.Windows.Forms.Timer { Interval = Math.Max(1, wait) };
+          WinTimer settle = new WinTimer { Interval = Math.Max(1, wait) };
           settle.Tick += delegate
           {
             settle.Stop();
@@ -6573,7 +6574,7 @@ public class CapriInternalBrowser : ICapriMod
         if (fs == null || ui == null || bin == null) return;
         fs.GetMethod("DeleteFile", new[] { typeof(string), ui, bin }).Invoke(null, new object[] { file, Enum.Parse(ui, "OnlyErrorDialogs"), Enum.Parse(bin, "SendToRecycleBin") });
       }
-      catch (Exception) { }
+      catch { }
     }
 
     private static PointF[] Oct(RectangleF r, float c)
@@ -6831,8 +6832,8 @@ public class CapriInternalBrowser : ICapriMod
           string now = Get(operation, "ResultFilePath") as string;
           if (!string.IsNullOrEmpty(now)) got.File = now;
         }
-        catch (Exception) { }
-        if (got.State != "going") { if (got.State == "done") Blip("done"); if (got.State == "done") try { got.Total = new FileInfo(got.File).Length; } catch (Exception) { } SaveGots(); }
+        catch { }
+        if (got.State != "going") { if (got.State == "done") Blip("done"); if (got.State == "done") try { got.Total = new FileInfo(got.File).Length; } catch { } SaveGots(); }
         if (downloadsButton != null) downloadsButton.Invalidate();
         if (downloadsShown != null && (got.State != "going" || (DateTime.Now - downloadsDrawn).TotalMilliseconds > 400)) { downloadsDrawn = DateTime.Now; downloadsShown(); }
       };
@@ -6841,7 +6842,7 @@ public class CapriInternalBrowser : ICapriMod
         Hook(operation, "BytesReceivedChanged", delegate { Post(changed); });
         Hook(operation, "StateChanged", delegate { Post(changed); });
       }
-      catch (Exception) { }
+      catch { }
       if (downloadsButton != null) downloadsButton.Invalidate();
     }
 
@@ -6904,7 +6905,7 @@ public class CapriInternalBrowser : ICapriMod
         card.Controls.Clear();
         Later(delegate { foreach (Control c in old) c.Dispose(); });
         card.Controls.Add(new Label { Text = "Downloads", Left = 18, Top = 12, Width = 200, Height = 28, ForeColor = ink, BackColor = back, Font = new Font(UiBold, 12f), TextAlign = ContentAlignment.MiddleLeft });
-        glyph("", "Open the downloads folder", wide - 76, 12).Click += delegate { drop.Close(); try { Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { } };
+        glyph("", "Open the downloads folder", wide - 76, 12).Click += delegate { drop.Close(); try { Process.Start("explorer.exe", "\"" + folder + "\""); } catch { } };
         glyph("", "Close", wide - 44, 12).Click += delegate { drop.Close(); };
         int y = 50;
         List<Got> all = Gots();
@@ -6919,7 +6920,7 @@ public class CapriInternalBrowser : ICapriMod
           bool there = g.State != "done" || File.Exists(g.File);
           Panel row = new Panel { Left = 0, Top = y, Width = wide, Height = 54, BackColor = back, Cursor = there && g.State == "done" ? Cursors.Hand : Cursors.Default };
           PictureBox icon = new PictureBox { Left = 18, Top = 11, Width = 32, Height = 32, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Transparent };
-          try { if (g.State == "done" && File.Exists(g.File)) using (Icon ic = Icon.ExtractAssociatedIcon(g.File)) icon.Image = ic.ToBitmap(); } catch (Exception) { }
+          try { if (g.State == "done" && File.Exists(g.File)) using (Icon ic = Icon.ExtractAssociatedIcon(g.File)) icon.Image = ic.ToBitmap(); } catch { }
           Label name = new Label { Text = Path.GetFileName(g.File), Left = 60, Top = 8, Width = wide - 110, Height = 20, ForeColor = there ? ink : faint, BackColor = Color.Transparent, Font = new Font(Ui, 10.5f, there ? FontStyle.Regular : FontStyle.Strikeout), AutoEllipsis = true, UseMnemonic = false };
           string from = HostOf(g.Url) ?? "";
           string about = g.State == "going" ? (g.Total > 0 ? (int)(100 * g.Received / g.Total) + "%, " + Bytes(g.Received) + " of " + Bytes(g.Total) : Bytes(g.Received) + " so far")
@@ -6943,14 +6944,14 @@ public class CapriInternalBrowser : ICapriMod
           act.BringToFront();
           act.Click += delegate
           {
-            if (g.State == "going") { try { Call(g.Operation, "Cancel"); } catch (Exception) { } return; }
+            if (g.State == "going") { try { Call(g.Operation, "Cancel"); } catch { } return; }
             drop.Close();
-            try { if (File.Exists(g.File)) Process.Start("explorer.exe", "/select,\"" + g.File + "\""); else Process.Start("explorer.exe", "\"" + folder + "\""); } catch (Exception) { }
+            try { if (File.Exists(g.File)) Process.Start("explorer.exe", "/select,\"" + g.File + "\""); else Process.Start("explorer.exe", "\"" + folder + "\""); } catch { }
           };
           if (there && g.State == "done")
           {
             EventHandler enter = delegate { row.BackColor = hover; }, leave = delegate { if (!row.IsDisposed && !row.ClientRectangle.Contains(row.PointToClient(Cursor.Position))) row.BackColor = back; };
-            EventHandler open = delegate { drop.Close(); try { Process.Start(g.File); } catch (Exception) { } };
+            EventHandler open = delegate { drop.Close(); try { Process.Start(g.File); } catch { } };
             foreach (Control c in new Control[] { row, icon, name, info }) { c.MouseEnter += enter; c.MouseLeave += leave; c.Click += open; c.Cursor = Cursors.Hand; }
           }
           y += 54;
@@ -7244,7 +7245,7 @@ public class CapriInternalBrowser : ICapriMod
           if (waveOutPrepareHeader(device, header, size) == 0 && waveOutWrite(device, header, size) == 0)
             Thread.Sleep(pcm.Length * 1000 / BlipRate + 120);
         }
-        catch (Exception) { }
+        catch { }
         finally
         {
           try
@@ -7253,7 +7254,7 @@ public class CapriInternalBrowser : ICapriMod
             if (header != IntPtr.Zero) Marshal.FreeHGlobal(header);
             if (data != IntPtr.Zero) Marshal.FreeHGlobal(data);
           }
-          catch (Exception) { }
+          catch { }
           Interlocked.Decrement(ref blipsPlaying);
         }
       });
@@ -7498,7 +7499,7 @@ public class CapriInternalBrowser : ICapriMod
         }
         Array.Clear(plain, 0, plain.Length);
       }
-      catch (Exception) { }
+      catch { }
       return logins;
     }
 
@@ -7529,8 +7530,8 @@ public class CapriInternalBrowser : ICapriMod
     {
       if (string.IsNullOrEmpty(text)) return;
       try { Clipboard.SetText(text); } catch (Exception) { return; }
-      System.Windows.Forms.Timer wipe = new System.Windows.Forms.Timer { Interval = 30000 };
-      wipe.Tick += delegate { wipe.Stop(); wipe.Dispose(); try { if (Clipboard.ContainsText() && Clipboard.GetText() == text) Clipboard.Clear(); } catch (Exception) { } };
+      WinTimer wipe = new WinTimer { Interval = 30000 };
+      wipe.Tick += delegate { wipe.Stop(); wipe.Dispose(); try { if (Clipboard.ContainsText() && Clipboard.GetText() == text) Clipboard.Clear(); } catch { } };
       wipe.Start();
     }
 
@@ -7775,7 +7776,7 @@ public class CapriInternalBrowser : ICapriMod
       c.Top = top - 20;
       Ease(c, 200, delegate(float e) { c.Top = top - 20 + (int)(20 * e); }, null);
       DateTime shown = DateTime.UtcNow;
-      System.Windows.Forms.Timer away = new System.Windows.Forms.Timer { Interval = 2000 };
+      WinTimer away = new WinTimer { Interval = 2000 };
       away.Tick += delegate
       {
         if (c.IsDisposed || pwCard != c) { away.Dispose(); return; }
@@ -7913,7 +7914,7 @@ public class CapriInternalBrowser : ICapriMod
 
     // ---- Capri's brain first (Settings > Mods, on unless they switch it off) ----
     // Capri's own process gets the PC first, and Edge's engine processes behind this browser wait their turn.
-    private System.Windows.Forms.Timer brainTimer;
+    private WinTimer brainTimer;
     private bool brainWasFirst;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -7952,7 +7953,7 @@ public class CapriInternalBrowser : ICapriMod
 
     private void StartBrainFirst()
     {
-      brainTimer = new System.Windows.Forms.Timer { Interval = 8000 };
+      brainTimer = new WinTimer { Interval = 8000 };
       brainTimer.Tick += delegate { BrainFirst(); };
       brainTimer.Start();
       Disposed += delegate { brainTimer.Dispose(); };
@@ -7968,11 +7969,11 @@ public class CapriInternalBrowser : ICapriMod
       if (hiddenDc != null && !hiddenDc.Viewer.Control.IsDisposed) { int hid = hiddenDc.Viewer.EngineId; if (hid > 0 && !roots.Contains(hid)) roots.Add(hid); }
       ThreadPool.QueueUserWorkItem(delegate
       {
-        try { Process.GetCurrentProcess().PriorityClass = on ? ProcessPriorityClass.AboveNormal : ProcessPriorityClass.Normal; } catch (Exception) { }
+        try { Process.GetCurrentProcess().PriorityClass = on ? ProcessPriorityClass.AboveNormal : ProcessPriorityClass.Normal; } catch { }
         foreach (int root in roots)
           foreach (int id in EngineFamily(root))
             try { using (Process p = Process.GetProcessById(id)) p.PriorityClass = on ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal; }
-            catch (Exception) { }
+            catch { }
       });
       brainWasFirst = on;
     }
@@ -8081,7 +8082,7 @@ public class CapriInternalBrowser : ICapriMod
       if (sleepy.Count == 0) return;
       long before = WebMemory();
       foreach (Tab w in sleepy) if (w.Viewer.Sleep()) { w.Asleep = true; Retitle(w, w.Title); }
-      System.Windows.Forms.Timer check = new System.Windows.Forms.Timer { Interval = 5000 };
+      WinTimer check = new WinTimer { Interval = 5000 };
       check.Tick += delegate
       {
         check.Dispose();
@@ -8094,7 +8095,7 @@ public class CapriInternalBrowser : ICapriMod
     private static long WebMemory()
     {
       long sum = 0;
-      foreach (Process p in Process.GetProcessesByName("msedgewebview2")) { try { sum += p.WorkingSet64; } catch (Exception) { } p.Dispose(); }
+      foreach (Process p in Process.GetProcessesByName("msedgewebview2")) { try { sum += p.WorkingSet64; } catch { } p.Dispose(); }
       return sum;
     }
 
@@ -8148,7 +8149,7 @@ public class CapriInternalBrowser : ICapriMod
             if (found.Count > 0) title = found[dice.Next(Math.Min(5, found.Count))];
           }
         }
-        catch (Exception) { }
+        catch { }
         Post(delegate
         {
           if (title == null) { mod.Tell("Couldn't find anything right now, so here's something random."); Roulette(); return; }
@@ -8181,7 +8182,7 @@ public class CapriInternalBrowser : ICapriMod
       ThreadPool.QueueUserWorkItem(delegate
       {
         string got = null;
-        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = Pinned(web, file); } } catch (Exception) { }
+        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = Pinned(web, file); } } catch { }
         Post(delegate { if (got == null) mod.Tell("Couldn't reach Browser addons right now. Try again later."); else done(got); });
       });
     }
@@ -8235,13 +8236,13 @@ public class CapriInternalBrowser : ICapriMod
       ThreadPool.QueueUserWorkItem(delegate
       {
         string got = null;
-        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(WorkerUrl + "featured.txt"); } } catch (Exception) { }
+        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(WorkerUrl + "featured.txt"); } } catch { }
         if (got == null || got.Length > 5000 || !got.StartsWith("# Capri Browser featured", StringComparison.Ordinal)) return;
         Post(delegate
         {
           if (got == Kept("featured")) return;
           Keep("featured", got);
-          foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+          RefreshGames();
         });
       });
     }
@@ -8305,8 +8306,11 @@ public class CapriInternalBrowser : ICapriMod
       string[,] stats = WeekStats();
       StringBuilder js = new StringBuilder("(function(v){for(var i=0;i<v.length;i++){var e=document.getElementById('wk'+i);if(e&&e.textContent!=v[i])e.textContent=v[i];}})([");
       for (int i = 0; i < stats.GetLength(0); i++) js.Append(i > 0 ? "," : "").Append(Quote(stats[i, 0]));
-      try { g.Viewer.Script(js.Append("])").ToString()); } catch (Exception) { }
+      try { g.Viewer.Script(js.Append("])").ToString()); } catch { }
     }
+
+    // Redraws any open Games page (after its settings or games change).
+    private void RefreshGames() { foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open); }
 
     private void ShowGames()
     {
@@ -8338,7 +8342,7 @@ public class CapriInternalBrowser : ICapriMod
 
     private void Installed(string name)
     {
-      foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+      RefreshGames();
       mod.Tell(name + " is ready. Have fun, choom.");
     }
 
@@ -8473,7 +8477,7 @@ public class CapriInternalBrowser : ICapriMod
         int lv = Array.IndexOf(Levels, RaceLevel);
         made += CodeLetters[dice.Next(CodeLetters.Length / 3) * 3 + lv];
         for (int i = 1; i < 4; i++) made += CodeLetters[dice.Next(CodeLetters.Length)];
-        try { Clipboard.SetText(made); } catch (Exception) { }
+        try { Clipboard.SetText(made); } catch { }
         Lobby(made, "Race code " + made + " (" + LevelName(CodeLevel(made)) + ") is copied. Send it to your friend, then you both press Start.");
         return;
       }
@@ -8497,7 +8501,7 @@ public class CapriInternalBrowser : ICapriMod
         OpenTab(null, null, true); tab.Special = "addon"; tab.Html = page; tab.Title = name; ShowReader(tab);
         return;
       }
-      if (which == "more") { Fetch("games.txt", delegate(string got) { Keep("gamepack", got); foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open); mod.Tell("Here are the games, choom. Pick one to download it."); }); return; }
+      if (which == "more") { Fetch("games.txt", delegate(string got) { Keep("gamepack", got); RefreshGames(); mod.Tell("Here are the games, choom. Pick one to download it."); }); return; }
       if (which == "guess")
       {
         if (guessLives < 1) { guessLives = 3; guessScore = 0; guessStreak = 0; }
@@ -8541,7 +8545,7 @@ public class CapriInternalBrowser : ICapriMod
         mod.Tell(score + (score == 1 ? " word" : " words") + " before they got you." + (score > best ? " New best!" : " Your best is " + best + "."));
         return;
       }
-      if (which == "timed") { bool on = !Flag("timed", false); if (Host != null) Host.Store.Set("opt-timed", on ? "1" : "0"); foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open); mod.Tell(on ? "Wiki races now have a 3-minute limit." : "Time limit off. Take as long as you like."); return; }
+      if (which == "timed") { bool on = !Flag("timed", false); if (Host != null) Host.Store.Set("opt-timed", on ? "1" : "0"); RefreshGames(); mod.Tell(on ? "Wiki races now have a 3-minute limit." : "Time limit off. Take as long as you like."); return; }
       if (which == "quit") { Tab here = tab; if (here != null) { here.Special = "games"; here.Html = null; ShowReader(here); } return; }
       if (which == "typing") { TypingRace(); return; }
       if (which == "typed")
@@ -8576,7 +8580,7 @@ public class CapriInternalBrowser : ICapriMod
       {
         string next = Levels[(Array.IndexOf(Levels, RaceLevel) + 1) % Levels.Length];
         if (Host != null) Host.Store.Set("opt-racelevel", next);
-        foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+        RefreshGames();
         mod.Tell("Wiki races are " + LevelName(next) + " now: the goal is " + LevelClicks(next) + ".");
         return;
       }
@@ -8601,7 +8605,7 @@ public class CapriInternalBrowser : ICapriMod
         if (t.Private || t.OnReader || t.Address == null || into.Count >= 10) continue;
         into.Add(new[] { t.Title ?? t.Address, t.Address });
         Task<string> run = null;
-        if (read) try { run = t.Viewer.Script(Viewer.ReadScript); } catch (Exception) { }
+        if (read) try { run = t.Viewer.Script(Viewer.ReadScript); } catch { }
         reads.Add(run);
       }
     }
@@ -8635,7 +8639,7 @@ public class CapriInternalBrowser : ICapriMod
       for (int i = 0; i < f.Sources.Count; i++)
       {
         string at = f.Sources[i].Address ?? "", site = "";
-        try { site = new Uri(at).Host; } catch (Exception) { }
+        try { site = new Uri(at).Host; } catch { }
         h.Append("<li id='s" + (i + 1) + "'>" + (at.StartsWith("http", StringComparison.Ordinal) ? "<a target='_blank' href='" + Esc(at) + "'>" + Esc(f.Sources[i].Title) + "</a>" : Esc(f.Sources[i].Title)) + "<span>" + Esc(site) + "</span></li>");
       }
       if (f.Sources.Count > 0) h.Append("</ol>");
@@ -8705,12 +8709,12 @@ public class CapriInternalBrowser : ICapriMod
     private void Lobby(string code, string said)
     {
       lobby = code;
-      foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+      RefreshGames();
       mod.Tell(said);
     }
 
     // 3, 2, 1, go: then the start page opens and the clock runs.
-    private System.Windows.Forms.Timer countdown;
+    private WinTimer countdown;
 
     private void CancelRace()
     {
@@ -8720,8 +8724,8 @@ public class CapriInternalBrowser : ICapriMod
       if (limitTimer != null) { limitTimer.Dispose(); limitTimer = null; }
       bool any = r != null || lobby != null;
       lobby = null;
-      if (r != null && r.Tab != null) try { r.Tab.Viewer.Script("(function(){clearInterval(window.__cr);['capri-race','capri-count'].forEach(function(i){var d=document.getElementById(i);if(d)d.remove();});})()"); } catch (Exception) { }
-      foreach (Tab open in tabs) if (open.Special == "games") ShowReader(open);
+      if (r != null && r.Tab != null) try { r.Tab.Viewer.Script("(function(){clearInterval(window.__cr);['capri-race','capri-count'].forEach(function(i){var d=document.getElementById(i);if(d)d.remove();});})()"); } catch { }
+      RefreshGames();
       mod.Tell(any ? "Race cancelled." : "There's no race going, choom.");
     }
 
@@ -8747,7 +8751,7 @@ public class CapriInternalBrowser : ICapriMod
       if (r == null || r.Tab == null || r.Tab.Viewer == null) return;
       long ms = (long)((done ? r.Ended : DateTime.UtcNow) - r.Started).TotalMilliseconds;
       string help = r.HelpText != null && r.Clicks < r.HelpUntil ? "[" + string.Join(",", new List<string>(r.HelpText).ConvertAll(Quote).ToArray()) + "]" : "[]";
-      try { r.Tab.Viewer.Script(ClockScript + "(" + ms + "," + Math.Max(0, r.Clicks) + "," + Quote(r.Goal.Replace('_', ' ')) + "," + (done ? "true" : "false") + "," + r.Limit + "," + r.Helps + "," + Quote(r.Level == null ? "" : LevelName(r.Level).ToUpperInvariant()) + "," + Quote(r.From == null ? "" : r.From.Replace('_', ' ')) + "," + (r.Route == null ? 0 : r.Route.Length - 1) + "," + help + "," + (r.Thinking ? "true" : "false") + ")"); if (!done) r.Tab.Viewer.Script(RaceGuard); } catch (Exception) { }
+      try { r.Tab.Viewer.Script(ClockScript + "(" + ms + "," + Math.Max(0, r.Clicks) + "," + Quote(r.Goal.Replace('_', ' ')) + "," + (done ? "true" : "false") + "," + r.Limit + "," + r.Helps + "," + Quote(r.Level == null ? "" : LevelName(r.Level).ToUpperInvariant()) + "," + Quote(r.From == null ? "" : r.From.Replace('_', ' ')) + "," + (r.Route == null ? 0 : r.Route.Length - 1) + "," + help + "," + (r.Thinking ? "true" : "false") + ")"); if (!done) r.Tab.Viewer.Script(RaceGuard); } catch { }
     }
 
     // The page's title says they're there, even if the address was a redirect.
@@ -8765,7 +8769,7 @@ public class CapriInternalBrowser : ICapriMod
       if (!Uri.TryCreate(url, UriKind.Absolute, out at)) return;
       if (at.Host.EndsWith("wikipedia.org", StringComparison.Ordinal) && (at.Query.Contains("search=") || at.AbsolutePath.Contains("Special:Search")))
       {
-        try { r.Tab.Viewer.Script("history.back()"); } catch (Exception) { }
+        try { r.Tab.Viewer.Script("history.back()"); } catch { }
         mod.Tell("No searching in a wiki race, choom. Links only!");
         return;
       }
@@ -8815,7 +8819,7 @@ public class CapriInternalBrowser : ICapriMod
           if (got == null) { keep = 1; got = mod.RaceHint(goal); }
           if (got != null && via != null) { List<string> more = new List<string>(got); more.Add(" You're off my checked route, it goes via "); more.Add(via); got = more.ToArray(); }
         }
-        catch (Exception) { }
+        catch { }
         Post(delegate
         {
           r.Thinking = false;
@@ -8831,21 +8835,21 @@ public class CapriInternalBrowser : ICapriMod
       + "function f(){clearTimeout(wait);wait=setTimeout(function(){var t=(m.innerText||'').replace(/\\s+/g,' ').trim();if(t&&t!=last){last=t;try{chrome.webview.postMessage('capri-game|'+t.slice(0,200));}catch(e){}}},180);}"
       + "new MutationObserver(f).observe(m,{childList:true,subtree:true,characterData:true});f();return '';})()";
 
-    private System.Windows.Forms.Timer limitTimer;
+    private WinTimer limitTimer;
 
     private void Arm(Race r)
     {
       if (limitTimer != null) { limitTimer.Dispose(); limitTimer = null; }
       if (!Flag("timed", false)) return;
       r.Limit = 180;
-      System.Windows.Forms.Timer up = limitTimer = new System.Windows.Forms.Timer { Interval = r.Limit * 1000 + Math.Max(1, (int)(r.Started - DateTime.UtcNow).TotalMilliseconds) };
+      WinTimer up = limitTimer = new WinTimer { Interval = r.Limit * 1000 + Math.Max(1, (int)(r.Started - DateTime.UtcNow).TotalMilliseconds) };
       up.Tick += delegate
       {
         up.Dispose();
         if (limitTimer == up) limitTimer = null;
         if (race != r) return;
         race = null;
-        try { r.Tab.Viewer.Script("(function(){clearInterval(window.__cr);var d=document.getElementById('capri-race');if(d)d.innerHTML='<span style=\"color:#e84246\">TIME\\'S UP</span><br><span style=\"color:#92828c;font-size:13px\">Goal was: " + Esc(r.Goal.Replace('_', ' ')).Replace("'", "") + "</span>';setTimeout(function(){d.remove();},8000);})()"); } catch (Exception) { }
+        try { r.Tab.Viewer.Script("(function(){clearInterval(window.__cr);var d=document.getElementById('capri-race');if(d)d.innerHTML='<span style=\"color:#e84246\">TIME\\'S UP</span><br><span style=\"color:#92828c;font-size:13px\">Goal was: " + Esc(r.Goal.Replace('_', ' ')).Replace("'", "") + "</span>';setTimeout(function(){d.remove();},8000);})()"); } catch { }
         mod.Tell("Time's up! You didn't reach " + r.Goal.Replace('_', ' ') + " in 3 minutes, choom. Try again?");
       };
       up.Start();
@@ -8870,7 +8874,7 @@ public class CapriInternalBrowser : ICapriMod
       int best, seconds = (int)took.TotalSeconds;
       bool record = !r.Cheated && (!int.TryParse(Kept("race-" + r.Code), out best) || seconds < best);
       if (record) Keep("race-" + r.Code, seconds.ToString());
-      try { Clipboard.SetText(card); } catch (Exception) { }
+      try { Clipboard.SetText(card); } catch { }
       mod.Tell("Finished in " + time + "!" + known + (r.Cheated ? " You used search though, choom, I saw that." : "") + (record ? " Your best on this code." : "") + " Your result card is copied, paste it in Discord.");
     }
 
@@ -9003,7 +9007,7 @@ public class CapriInternalBrowser : ICapriMod
     private string SendWeek()
     {
       // Which round the boards are on first, so a reset or a new week starts their numbers from 0 before they're sent.
-      try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); LearnRound(web.DownloadString(BoardData)); } } catch (Exception) { }
+      try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); LearnRound(web.DownloadString(BoardData)); } } catch { }
       int round = RoundNow();
       string[] n = BoardWeek();
       string[] got = ToWorker("stats", "{\"name\":" + Quote(Kept("lbname")) + ",\"key\":" + Quote(BoardKey()) + ",\"hours\":" + n[0] + ",\"videos\":" + n[1]
@@ -9052,7 +9056,7 @@ public class CapriInternalBrowser : ICapriMod
       ThreadPool.QueueUserWorkItem(delegate
       {
         string got = null, rank = null;
-        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(BoardData); } } catch (Exception) { }
+        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; web.CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore); got = web.DownloadString(BoardData); } } catch { }
         if (got != null) LearnRound(got);
         // Their own place on each board: only with a name, and only their own (the worker knows them by their key).
         if (got != null && lbName.Length > 0 && Regex.IsMatch(lbKey, "^[a-f0-9]{32}$"))
@@ -9180,7 +9184,7 @@ public class CapriInternalBrowser : ICapriMod
         return;
       }
       string name = "";
-      try { name = Uri.UnescapeDataString(Regex.Match(all, "[&]n=([^&]*)").Groups[1].Value.Replace('+', ' ')); } catch (Exception) { }
+      try { name = Uri.UnescapeDataString(Regex.Match(all, "[&]n=([^&]*)").Groups[1].Value.Replace('+', ' ')); } catch { }
       ThreadPool.QueueUserWorkItem(delegate
       {
         string said = SaveBoardName(name);
@@ -9573,7 +9577,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       address.AutoCompleteCustomSource = known;
     }
     private Shimmer summary;
-    private readonly System.Windows.Forms.Timer giveUp = new System.Windows.Forms.Timer { Interval = 90000 };
+    private readonly WinTimer giveUp = new WinTimer { Interval = 90000 };
 
     // She reads the page in front and says what it's about. Her results page she sums up from what she read.
     internal void Summarise() { Summarise(null); }
@@ -9780,7 +9784,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       {
         if (pointer == null)
           try { pointer = typeof(ICapriHost).Assembly.GetType("CapriDesktop.Look").GetProperty("Pointer", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic).GetValue(null, null) as Cursor; }
-          catch (Exception) { }
+          catch { }
         return pointer ?? Cursors.Default;
       }
     }
@@ -9828,7 +9832,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       logo.HandleCreated += delegate
       {
         Form form = FindForm();
-        if (form != null && form.Icon != null) try { logo.Image = new Bitmap(form.Icon.ToBitmap(), 20, 20); } catch (Exception) { }
+        if (form != null && form.Icon != null) try { logo.Image = new Bitmap(form.Icon.ToBitmap(), 20, 20); } catch { }
       };
       logo.Click += delegate { if (!JustShut) PageMenu().Show(logo, new Point(0, logo.Height)); };
       new ToolTip().SetToolTip(logo, "Capri Browser");
@@ -9934,7 +9938,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       if (mod.capri != null && key != "adblock") mod.capri.Store.Set(key, value);
       if (key == "lists") UseLists(value);
       else if (key == "commands") UseCommands(value);
-      else if (key == "adblock") { try { if (AdblockFile != null) File.WriteAllText(AdblockFile, value); } catch (Exception) { } UseAdblock(value); }
+      else if (key == "adblock") { try { if (AdblockFile != null) File.WriteAllText(AdblockFile, value); } catch { } UseAdblock(value); }
       else if (key == "css-home") HomeCss = value;
       else if (key == "css-pages") PagesCss = value;
     }
@@ -9992,7 +9996,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           for (int i = 0; i < 50 && !b.IsHandleCreated && !b.IsDisposed; i++) Thread.Sleep(100);
           if (b.IsHandleCreated) b.BeginInvoke((Action)delegate { logos[b] = logo; b.Text = ""; b.Image = Reddened(logo); });
         }
-        catch (Exception) { }
+        catch { }
       });
       return b;
     }
@@ -10005,7 +10009,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     {
       bool exit = ms < 0;
       ms = Math.Max(1, Math.Abs(ms));
-      System.Windows.Forms.Timer clock = new System.Windows.Forms.Timer { Interval = 15 };
+      WinTimer clock = new WinTimer { Interval = 15 };
       DateTime start = DateTime.Now;
       clock.Tick += delegate
       {
@@ -10018,14 +10022,14 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         clock.Dispose();
         if (done != null && !owner.IsDisposed) done();
       };
-      try { step(0f); } catch (Exception) { }
+      try { step(0f); } catch { }
       clock.Start();
     }
 
     // Menus and panels under buttons fade in instead of popping up.
     private static void FadeIn(ToolStripDropDown menu)
     {
-      menu.Opening += delegate { try { menu.Opacity = .15; } catch (Exception) { } };
+      menu.Opening += delegate { try { menu.Opacity = .15; } catch { } };
       menu.Opened += delegate { Ease(menu, 150, delegate(float e) { menu.Opacity = .15 + .85 * e; }, delegate { menu.Opacity = 1; }); };
     }
 
@@ -10172,7 +10176,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     // Dark scrollbars and tree arrows on dark looks.
     private void DarkScroll(Control c)
     {
-      Action theme = delegate { try { SetWindowTheme(c.Handle, mod.look.Shade(1).GetBrightness() < .5f ? "DarkMode_Explorer" : "Explorer", null); } catch (Exception) { } };
+      Action theme = delegate { try { SetWindowTheme(c.Handle, mod.look.Shade(1).GetBrightness() < .5f ? "DarkMode_Explorer" : "Explorer", null); } catch { } };
       if (c.IsHandleCreated) theme(); else c.HandleCreated += delegate { theme(); };
     }
 
@@ -10504,7 +10508,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       Font glyphs = new Font("Segoe MDL2 Assets", 9f);
       const TextFormatFlags Wrap = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.TextBoxControl;
       const int Side = 12, Pad = 14, Folded = 230;
-      System.Windows.Forms.Timer clock = new System.Windows.Forms.Timer { Interval = 15 };
+      WinTimer clock = new WinTimer { Interval = 15 };
 
       Func<int> cardWide = delegate { return Math.Max(120, feed.ClientSize.Width - Side - 18); };
       Func<int> maxScroll = delegate { return Math.Max(0, total - feed.ClientSize.Height); };
@@ -10824,7 +10828,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         lay();
         layPills();
         pills.Invalidate();
-        System.Windows.Forms.Timer gone = new System.Windows.Forms.Timer { Interval = 6100 };
+        WinTimer gone = new WinTimer { Interval = 6100 };
         gone.Tick += delegate { gone.Stop(); gone.Dispose(); kick(); };
         gone.Start();
       };
@@ -10845,7 +10849,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       {
         int j = ids.IndexOf(id);
         if (j < 0) return;
-        try { DataObject d = new DataObject(); if (all[j].StartsWith("{\\rtf")) d.SetData(DataFormats.Rtf, all[j]); d.SetData(DataFormats.UnicodeText, plain[j]); Clipboard.SetDataObject(d, true); } catch (Exception) { }
+        try { DataObject d = new DataObject(); if (all[j].StartsWith("{\\rtf")) d.SetData(DataFormats.Rtf, all[j]); d.SetData(DataFormats.UnicodeText, plain[j]); Clipboard.SetDataObject(d, true); } catch { }
         mod.Tell("Copied, choom.");
       };
       Action<object> menuFor = delegate(object id)
@@ -11009,16 +11013,16 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       Action<Image> putPicture = delegate(Image picture)
       {
         if (picture == null) return;
-        try { picture.Save(Path.Combine(Path.GetTempPath(), "capri-noted-last.png"), ImageFormat.Png); Keep("notedlast", DateTime.Now.Ticks.ToString()); } catch (Exception) { }
+        try { picture.Save(Path.Combine(Path.GetTempPath(), "capri-noted-last.png"), ImageFormat.Png); Keep("notedlast", DateTime.Now.Ticks.ToString()); } catch { }
         int widest = Math.Max(140, Math.Min(320, noteText.ClientSize.Width - 30));
         float scale = Math.Min(1f, Math.Min(widest / (float)picture.Width, widest * .75f / picture.Height));
         IDataObject held = null;
         using (Bitmap shrunk = new Bitmap(Math.Max(1, (int)(picture.Width * scale)), Math.Max(1, (int)(picture.Height * scale))))
         {
           using (Graphics g = Graphics.FromImage(shrunk)) { g.InterpolationMode = InterpolationMode.HighQualityBicubic; g.DrawImage(picture, 0, 0, shrunk.Width, shrunk.Height); }
-          try { held = Clipboard.GetDataObject(); Clipboard.SetImage(shrunk); noteText.Paste(); noteText.ScrollToCaret(); noteText.Refresh(); } catch (Exception) { }
+          try { held = Clipboard.GetDataObject(); Clipboard.SetImage(shrunk); noteText.Paste(); noteText.ScrollToCaret(); noteText.Refresh(); } catch { }
         }
-        try { if (held != null) Clipboard.SetDataObject(held, true); } catch (Exception) { }
+        try { if (held != null) Clipboard.SetDataObject(held, true); } catch { }
       };
 
       // Sends what's in the box as a new card (or saves the card being edited).
@@ -11088,7 +11092,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           else
           {
             long size = 0;
-            try { size = new FileInfo(f).Length; } catch (Exception) { }
+            try { size = new FileInfo(f).Length; } catch { }
             noteText.SelectedText = Path.GetFileName(f) + "  (" + (size >= 1048576 ? (size / 1048576.0).ToString("0.0") + " MB" : Math.Max(1, size / 1024) + " KB") + ")\n" + new Uri(f).AbsoluteUri + "\n";
           }
           noteText.Focus();
@@ -11104,7 +11108,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         noteText.Clear();
         work();
         post();
-        if (draft != null) { try { noteText.Rtf = draft; } catch (Exception) { } }
+        if (draft != null) { try { noteText.Rtf = draft; } catch { } }
         editing = wasEditing;
         editingNote.Visible = editing != null;
       };
@@ -11181,7 +11185,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       // Search waits until they stop typing for a moment.
       TextBox search = new TextBox();
       Panel searchRow = Ring(search, "Search Noted");
-      System.Windows.Forms.Timer typing = new System.Windows.Forms.Timer { Interval = 160 };
+      WinTimer typing = new WinTimer { Interval = 160 };
       typing.Tick += delegate { typing.Stop(); string now = search.Text.Trim(); if (now == finding) return; finding = now; fill(); };
       search.TextChanged += delegate { typing.Stop(); typing.Start(); };
       search.KeyDown += delegate(object sender, KeyEventArgs e) { if (e.KeyCode == Keys.Escape && search.TextLength > 0) { e.SuppressKeyPress = true; search.Clear(); } };
@@ -11232,7 +11236,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     {
       if (link.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
       {
-        try { Process.Start("explorer.exe", "/select,\"" + new Uri(link).LocalPath + "\""); } catch (Exception) { }
+        try { Process.Start("explorer.exe", "/select,\"" + new Uri(link).LocalPath + "\""); } catch { }
         return;
       }
       OpenTab(null, link, true);
@@ -11544,7 +11548,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       // The star in the address box: hollow, or filled red when the page is bookmarked.
       star.Click += delegate { MarkThis(true); };
       box.Controls.Add(star);
-      System.Windows.Forms.Timer watchStar = new System.Windows.Forms.Timer { Interval = 500 };
+      WinTimer watchStar = new WinTimer { Interval = 500 };
       watchStar.Tick += delegate { Tab t = tab; string at = t == null || t.OnReader ? null : t.Address; if (at != starAt) ShowStar(); };
       watchStar.Start();
       Disposed += delegate { watchStar.Dispose(); };
@@ -11557,7 +11561,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       if (m != null)
       {
         Item(menu.Items, "Open in new tab", "", true, delegate { OpenTab(null, m.Url, true); });
-        Item(menu.Items, "Copy link", "", true, delegate { try { Clipboard.SetText(m.Url); } catch (Exception) { } });
+        Item(menu.Items, "Copy link", "", true, delegate { try { Clipboard.SetText(m.Url); } catch { } });
         Item(menu.Items, "Rename", "", true, delegate
         {
           string name = AskName("Rename bookmark", "A new name for this bookmark.", Clip(m.Title, 40));
@@ -11744,7 +11748,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         if (t.Private) continue;
         object core = t.Viewer.Core;
         if (core == null) continue;
-        try { return Get(core, "Profile"); } catch (Exception) { }
+        try { return Get(core, "Profile"); } catch { }
       }
       return null;
     }
@@ -11813,7 +11817,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         string notHere = BrowserOnly(File.ReadAllText(Path.Combine(folder, "manifest.json")));
         if (notHere != null)
         {
-          try { Directory.Delete(made, true); } catch (Exception) { }
+          try { Directory.Delete(made, true); } catch { }
           done("it changes the browser itself (" + notHere + "), and Capri Browser only takes extensions that change pages.");
           return;
         }
@@ -11831,9 +11835,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           Post(delegate
           {
             string id = null;
-            if (why == null) try { id = (string)Get(finished.GetType().GetProperty("Result").GetValue(finished, null), "Id"); } catch (Exception) { }
+            if (why == null) try { id = (string)Get(finished.GetType().GetProperty("Result").GetValue(finished, null), "Id"); } catch { }
             if (id != null) Keep("extfolders", Kept("extfolders") + id + "\t" + kept + "\n");
-            else if (why != null && unpacked != null) try { Directory.Delete(unpacked, true); } catch (Exception) { }
+            else if (why != null && unpacked != null) try { Directory.Delete(unpacked, true); } catch { }
             done(why);
           });
         });
@@ -11867,7 +11871,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           if (file == null) { button("Couldn't download it"); mod.Tell("I couldn't get that extension from the store, choom."); return; }
           AddExtension(file, delegate(string failed)
           {
-            try { File.Delete(file); } catch (Exception) { }
+            try { File.Delete(file); } catch { }
             if (failed != null && failed.StartsWith("it changes the browser itself", StringComparison.Ordinal)) { button("Not supported in Capri Browser"); mod.Tell("I can't add that one, choom: " + failed); return; }
             if (failed != null) { button("Couldn't add it"); mod.Tell("That extension didn't go in, choom: " + failed); return; }
             Bump("extensions", 1);
@@ -12005,7 +12009,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             {
               // A folder of extension folders: each one goes in.
               if (!File.Exists(Path.Combine(f.SelectedPath, "manifest.json")))
-                try { foreach (string inner in Directory.GetDirectories(f.SelectedPath)) if (File.Exists(Path.Combine(inner, "manifest.json"))) chosen.Add(inner); } catch (Exception) { }
+                try { foreach (string inner in Directory.GetDirectories(f.SelectedPath)) if (File.Exists(Path.Combine(inner, "manifest.json"))) chosen.Add(inner); } catch { }
               if (chosen.Count < 2) { chosen.Clear(); chosen.Add(f.SelectedPath); }
             }
           }
@@ -12059,7 +12063,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             object one = ext;
             string id = "", name = "Extension";
             bool on = true;
-            try { id = (string)Get(one, "Id"); name = (string)Get(one, "Name"); on = (bool)Get(one, "IsEnabled"); } catch (Exception) { }
+            try { id = (string)Get(one, "Id"); name = (string)Get(one, "Name"); on = (bool)Get(one, "IsEnabled"); } catch { }
             Label icon = new Label { Text = "\uEA86", Left = 18, Top = y + 4, Width = 24, Height = 24, ForeColor = on ? red : faint, BackColor = back, Font = new Font("Segoe MDL2 Assets", 12f) };
             Label called = new Label { Text = name, Left = 46, Top = y + 6, Width = 170, Height = 22, ForeColor = on ? ink : faint, BackColor = back, Font = new Font(UiBold, 10f), AutoEllipsis = true, UseMnemonic = false };
             Button toggle = small(on ? "On" : "Off", 222);
@@ -12088,7 +12092,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
                 {
                   if (failed != null) { say("Couldn't remove it, choom: " + failed); return; }
                   string folder = ExtensionFolder(extId);
-                  try { if (folder != null && ExtensionsHome != null && folder.StartsWith(ExtensionsHome, StringComparison.OrdinalIgnoreCase)) Directory.Delete(folder, true); } catch (Exception) { }
+                  try { if (folder != null && ExtensionsHome != null && folder.StartsWith(ExtensionsHome, StringComparison.OrdinalIgnoreCase)) Directory.Delete(folder, true); } catch { }
                   build();
                 });
               });
@@ -12157,8 +12161,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       t.Viewer.Shot(file, delegate(string failed)
       {
         Bitmap b = null;
-        if (failed == null) try { using (Image i = Image.FromFile(file)) b = new Bitmap(i); } catch (Exception) { }
-        try { File.Delete(file); } catch (Exception) { }
+        if (failed == null) try { using (Image i = Image.FromFile(file)) b = new Bitmap(i); } catch { }
+        try { File.Delete(file); } catch { }
         Post(delegate { got(b); });
       });
     }
@@ -12174,7 +12178,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       ask.ContinueWith(delegate(Task<string> done)
       {
         string[] p = new string[0];
-        try { p = Unjson(done.Result).Trim('[', ']').Split(','); } catch (Exception) { }
+        try { p = Unjson(done.Result).Trim('[', ']').Split(','); } catch { }
         Post(delegate
         {
           double iw, ih, sx, sy;
@@ -12199,10 +12203,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             moved.ContinueWith(delegate(Task<string> m)
             {
               double at = top;
-              try { double.TryParse(Unjson(m.Result), NumberStyles.Float, inv, out at); } catch (Exception) { }
+              try { double.TryParse(Unjson(m.Result), NumberStyles.Float, inv, out at); } catch { }
               Post(delegate
               {
-                System.Windows.Forms.Timer settle = new System.Windows.Forms.Timer { Interval = 220 };
+                WinTimer settle = new WinTimer { Interval = 220 };
                 settle.Tick += delegate
                 {
                   settle.Stop();
@@ -12273,7 +12277,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       run.ContinueWith(delegate(Task<string> done)
       {
         string place = "";
-        try { place = Unjson(done.Result); } catch (Exception) { }
+        try { place = Unjson(done.Result); } catch { }
         Post(delegate
         {
           Match m = Regex.Match(place, @"^(-?[\d.]+),(-?[\d.]+),([\d.]+),([\d.]+)$");
@@ -12368,7 +12372,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         LastShot = file;
       }
       catch (Exception) { file = null; }
-      try { Clipboard.SetImage(shot); } catch (Exception) { }
+      try { Clipboard.SetImage(shot); } catch { }
       ShotCard(t, shot, file);
       if (said != null) said(Line("shotdone", "Got it, choom. Saved in your Pictures and copied, so you can paste it anywhere.", "Snapped it, choom. It's copied and saved.", "Done, choom. Screenshot's on your clipboard and in Pictures."));
     }
@@ -12400,8 +12404,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       hiddenDc = t;
       Go(t, "https://discord.com/channels/@me");
       int tries = 0;
-      System.Windows.Forms.Timer hush = new System.Windows.Forms.Timer { Interval = 500 };
-      hush.Tick += delegate { tries++; try { if (t.Viewer.Core != null) { t.Viewer.Muted = true; tries = 99; } } catch (Exception) { } if (tries >= 60) { hush.Stop(); hush.Dispose(); } };
+      WinTimer hush = new WinTimer { Interval = 500 };
+      hush.Tick += delegate { tries++; try { if (t.Viewer.Core != null) { t.Viewer.Muted = true; tries = 99; } } catch { } if (tries >= 60) { hush.Stop(); hush.Dispose(); } };
       hush.Start();
       return t;
     }
@@ -12442,7 +12446,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       }
       if (n >= researchViews.Count) return null;
       Tab one = researchViews[n];
-      try { if (one.Viewer.Core != null) one.Viewer.Muted = true; } catch (Exception) { }
+      try { if (one.Viewer.Core != null) one.Viewer.Muted = true; } catch { }
       one.Busy = true;
       Go(one, url);
       return one;
@@ -12469,7 +12473,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     private bool chatMoves;
     private string chatFull = "";
     private int chatShown;
-    private System.Windows.Forms.Timer chatType;
+    private WinTimer chatType;
     private static readonly Color HoloCyan = Color.FromArgb(94, 240, 246), HoloDim = Color.FromArgb(62, 150, 160), HoloRed = Color.FromArgb(232, 66, 70), HoloInk = Color.FromArgb(9, 12, 18);
     private const int ChatWide = 340;
 
@@ -12506,7 +12510,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         Controls.Add(c);
         c.BringToFront();
         // Typed out a couple of letters at a time, then the block blinks.
-        chatType = new System.Windows.Forms.Timer { Interval = 22 };
+        chatType = new WinTimer { Interval = 22 };
         chatType.Tick += delegate
         {
           if (c.IsDisposed || chatCard != c) { chatType.Dispose(); return; }
@@ -12626,7 +12630,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         return b;
       };
       Action close = null;
-      Action open = delegate { if (file != null) try { Process.Start(file); } catch (Exception) { } };
+      Action open = delegate { if (file != null) try { Process.Start(file); } catch { } };
       pic.Click += delegate { open(); };
       button("Open", open);
       button("To Noted", delegate
@@ -12636,7 +12640,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         using (Bitmap small = new Bitmap(shot, Math.Max(1, (int)(shot.Width * s)), Math.Max(1, (int)(shot.Height * s)))) snapNote(t.Title + "  " + t.Address, small);
         close();
       });
-      button("Folder", delegate { if (file != null) try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch (Exception) { } });
+      button("Folder", delegate { if (file != null) try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { } });
       Controls.Add(c);
       c.BringToFront();
       int restY = Height - c.Height - 18, startY = Height + 4;
@@ -12652,7 +12656,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         Ease(c, -180, delegate(float e) { c.Top = from + (int)((Height + 4 - from) * e); }, delegate { Controls.Remove(c); c.Dispose(); thumb.Dispose(); shot.Dispose(); });
       };
       x.Click += delegate { close(); };
-      System.Windows.Forms.Timer away = new System.Windows.Forms.Timer { Interval = 9000 };
+      WinTimer away = new WinTimer { Interval = 9000 };
       away.Tick += delegate { away.Stop(); away.Dispose(); if (!c.IsDisposed && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) close(); };
       away.Start();
       Resize += delegate { if (!c.IsDisposed && !going) { c.Left = Width - c.Width - 18; c.Top = Height - c.Height - 18; } };
@@ -12828,7 +12832,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       ThreadPool.QueueUserWorkItem(delegate
       {
         string got = null;
-        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = Pinned(web, file); } } catch (Exception) { }
+        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = Pinned(web, file); } } catch { }
         if (got != null) Post(delegate { Keep("help-" + lang, got); RefreshSettingsTabs(); });
       });
     }
@@ -12968,7 +12972,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     {
       Look look = mod.look;
       ContextMenuStrip m = new ContextMenuStrip { Renderer = new ToolStripProfessionalRenderer(new MenuColors(look)) { RoundedEdges = false }, ShowImageMargin = false, Font = new Font(Ui, 10.5f), BackColor = look.Shade(1), ForeColor = look.Shade(2) };
-      System.Windows.Forms.Timer watch = new System.Windows.Forms.Timer { Interval = 60 };
+      WinTimer watch = new WinTimer { Interval = 60 };
       watch.Tick += delegate
       {
         if (!m.Visible) return;
@@ -13034,7 +13038,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       Item(i, T(59), null, true, delegate { OpenTab(null, t.OnReader ? null : t.Address, true, t.Private); });
       Item(i, t.Muted ? T(55) : T(54), "Ctrl+M", t.Viewer.Modern, delegate { Mute(t); });
       Item(i, "Add to bookmarks", "Ctrl+D", !t.OnReader && t.Address != null, delegate { AddToDial(t.Address); });
-      Item(i, "Copy link address", null, !t.OnReader && t.Address != null, delegate { try { Clipboard.SetText(t.Address); } catch (Exception) { } });
+      Item(i, "Copy link address", null, !t.OnReader && t.Address != null, delegate { try { Clipboard.SetText(t.Address); } catch { } });
       i.Add(new ToolStripSeparator());
       if (Split && (t == splitA || t == splitB)) Item(i, "Close split screen", null, true, Unsplit);
       else Item(i, t == tab ? "Split screen" : "Split screen with this tab", null, !t.Hidden && !full, delegate { SplitWith(t); });
@@ -13207,10 +13211,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       {
         Post(delegate
         {
-          if (failed != null) { try { File.Delete(file); } catch (Exception) { } mod.Tell("I couldn't save that screenshot, choom: " + failed); return; }
+          if (failed != null) { try { File.Delete(file); } catch { } mod.Tell("I couldn't save that screenshot, choom: " + failed); return; }
           LastShot = file;
           if (!ShowShots) return;
-          try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch (Exception) { }
+          try { Process.Start("explorer.exe", "/select,\"" + file + "\""); } catch { }
         });
       });
     }
@@ -13366,7 +13370,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     private MethodInfo holoDraw, holoMouth, holoLine;
     private int holoWide, holoHigh;
     private HoloScreen holoScreen;
-    private System.Windows.Forms.Timer holoBeat;
+    private WinTimer holoBeat;
     private readonly Stopwatch holoClock = Stopwatch.StartNew();
     private double holoShown = -1, holoLeaving = -1, holoUntil, holoLevel, holoLast, holoStarted, holoIdle;
     private bool holoVoice, holoWarned;
@@ -13442,7 +13446,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         }
         holoScreen = new HoloScreen(new Size(holoWide, holoHigh));
         holoScreen.Begin(owner);
-        holoBeat = new System.Windows.Forms.Timer { Interval = 15 };
+        holoBeat = new WinTimer { Interval = 15 };
         holoBeat.Tick += delegate { try { HoloTick(); } catch (Exception) { holoBeat.Stop(); } };
         Disposed += delegate { holoBeat.Dispose(); holoScreen.Dispose(); IDisposable d = holoLook as IDisposable; if (d != null) d.Dispose(); };
         return true;
@@ -14053,7 +14057,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         BackColor = c;
         Invalidate();
       }
-      catch (Exception) { }
+      catch { }
     }
   }
 
@@ -14080,7 +14084,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
   // Start-up: Capri's name glitching in over scanlines, a load bar, then SYSTEM ONLINE. A click skips it.
   internal sealed class BootScreen : Control
   {
-    private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 16 };
+    private readonly WinTimer tick = new WinTimer { Interval = 16 };
     private readonly DateTime from = DateTime.UtcNow;
     private readonly Random dice = new Random();
     private static readonly Color Ink = Color.FromArgb(9, 12, 18), Cyan = Color.FromArgb(94, 240, 246), Dim = Color.FromArgb(62, 150, 160), Red = Color.FromArgb(232, 66, 70);
@@ -14171,7 +14175,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
   internal sealed class Shimmer : Control
   {
-    private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer { Interval = 33 };
+    private readonly WinTimer tick = new WinTimer { Interval = 33 };
     private readonly Func<Look> look;
     private int frame;
     private bool hover, working;
@@ -14336,7 +14340,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       {
         if (over) return;
         over = true;
-        try { if (id >= 0) Set(asked, "SelectedCommandId", id); Call(wait, "Complete"); } catch (Exception) { }
+        try { if (id >= 0) Set(asked, "SelectedCommandId", id); Call(wait, "Complete"); } catch { }
       };
       Color accent = m.Tag is Color ? (Color)m.Tag : m.ForeColor;
       foreach (KeyValuePair<string, Action> one in mine)
@@ -14458,14 +14462,14 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         {
           string uri = Get(request, "Uri") as string;
           bool clicked = true;
-          try { clicked = (bool)Get(request, "IsUserInitiated"); } catch (Exception) { }
+          try { clicked = (bool)Get(request, "IsUserInitiated"); } catch { }
           if (!clicked) { Set(request, "Handled", true); return; }
           Uri popTo;
           // Where the click was: the page itself tells us about clicks on it; no word from it means the click
           // was inside a frame, like an embedded video player from another site.
           bool inFrame = (DateTime.UtcNow - topClick).TotalMilliseconds > 1500;
           string frameSite = null;
-          try { Uri from; object frame = Get(request, "OriginalSourceFrameInfo"); if (frame != null && Uri.TryCreate(Get(frame, "Source") as string ?? "", UriKind.Absolute, out from)) frameSite = SiteOf(from.Host); } catch (Exception) { }
+          try { Uri from; object frame = Get(request, "OriginalSourceFrameInfo"); if (frame != null && Uri.TryCreate(Get(frame, "Source") as string ?? "", UriKind.Absolute, out from)) frameSite = SiteOf(from.Host); } catch { }
           if (Shielding && SitePerm(pageHost, "pop") != "allow" && Uri.TryCreate(uri ?? "", UriKind.Absolute, out popTo) && (IsAd(uri) || PopAd.IsMatch(uri)
             || (JustClickedNothing && SiteOf(popTo.Host) != SiteOf(pageHost))
             || (inFrame && SiteOf(popTo.Host) != SiteOf(pageHost) && SiteOf(popTo.Host) != frameSite)))
@@ -14480,7 +14484,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           // A real popup (one that asks for a size, like "Sign in with Google" on other sites) opens as Edge's
           // own small window so it can talk back to the page that opened it. Links just open as a new tab.
           bool popup = false;
-          try { object features = Get(request, "WindowFeatures"); popup = (bool)Get(features, "HasSize") || (bool)Get(features, "HasPosition"); } catch (Exception) { }
+          try { object features = Get(request, "WindowFeatures"); popup = (bool)Get(features, "HasSize") || (bool)Get(features, "HasPosition"); } catch { }
           if (popup && !string.IsNullOrEmpty(uri)) return;
           Set(request, "Handled", true);
           if (string.IsNullOrEmpty(uri)) return;
@@ -14501,7 +14505,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             PropertyInfo state = asked.GetType().GetProperty("State");
             state.SetValue(asked, Enum.ToObject(state.PropertyType, v == "allow" ? 1 : 2), null);
           }
-          catch (Exception) { }
+          catch { }
         });
         Hook(core, "DOMContentLoaded", delegate { ShieldPage(); if (Ready != null) Ready(); });
         Hook(core, "DocumentTitleChanged", delegate { if (Titled != null) Titled(Get(core, "DocumentTitle") as string); });
@@ -14518,7 +14522,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             if (Key(pressed)) Set(key, "Handled", true);
           });
         }
-        catch (Exception) { }
+        catch { }
         // A video's full screen button: the window goes full screen with it.
         Hook(core, "ContainsFullScreenElementChanged", delegate { if (FullScreen != null) FullScreen((bool)Get(core, "ContainsFullScreenElement")); });
         // Saved passwords and form filling, like Edge.
@@ -14529,11 +14533,11 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           Set(settings, "IsPasswordAutosaveEnabled", false);
           Set(settings, "IsGeneralAutofillEnabled", true);
         }
-        catch (Exception) { }
+        catch { }
         // Sound on the tab, and the ad blocker.
         Hook(core, "IsDocumentPlayingAudioChanged", delegate { Heard(); });
         Hook(core, "IsMutedChanged", delegate { Heard(); });
-        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", ShieldScript); } catch (Exception) { }
+        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", ShieldScript); } catch { }
         if (Flag("darkweb", false)) Dark(true);
         Hook(core, "DownloadStarting", delegate(object starting)
         {
@@ -14547,10 +14551,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             if (Flag("glitch", true)) Call(core, "ExecuteScriptAsync", RedGlitch);
             Host.Say("Careful, choom: " + Path.GetFileName(file) + " is a program from " + at.Host + ". Only run it if you really trust that site.");
           }
-          catch (Exception) { }
+          catch { }
         });
-        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", EndedScript); } catch (Exception) { }
-        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", LoginScript); } catch (Exception) { }
+        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", EndedScript); } catch { }
+        try { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", LoginScript); } catch { }
         Hook(core, "WebMessageReceived", delegate(object message)
         {
           try
@@ -14573,7 +14577,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
               if (Shield != null) Shield(what);
             }
           }
-          catch (Exception) { }
+          catch { }
         });
         Hook(core, "ContextMenuRequested", delegate(object asked)
         {
@@ -14598,10 +14602,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
               items.Insert(0, item);
             }
           }
-          catch (Exception) { }
+          catch { }
         });
         // Her mouse pointer on web pages too.
-        try { if (PagePointer().Length > 0) { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", PagePointer()); Call(core, "ExecuteScriptAsync", PagePointer()); } } catch (Exception) { }
+        try { if (PagePointer().Length > 0) { Call(core, "AddScriptToExecuteOnDocumentCreatedAsync", PagePointer()); Call(core, "ExecuteScriptAsync", PagePointer()); } } catch { }
         Hook(core, "WebResourceRequested", delegate(object asked)
         {
           try
@@ -14628,7 +14632,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
               if (Tracks != null) Tracks(tracked);
             }
           }
-          catch (Exception) { }
+          catch { }
         });
         if (guard != null) Privacy(guard);
         if (styled != null) Scheme(styled);
@@ -14643,7 +14647,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         if (Ours(going)) { Set(args, "Cancel", true); return; }
         Uri to;
         bool byYou = true;
-        try { byYou = (bool)Get(args, "IsUserInitiated"); } catch (Exception) { }
+        try { byYou = (bool)Get(args, "IsUserInitiated"); } catch { }
         if (Shielding && SitePerm(pageHost, "pop") != "allow" && pageHost != null && Uri.TryCreate(going ?? "", UriKind.Absolute, out to) && to.Scheme.StartsWith("http", StringComparison.Ordinal)
           && (((IsAd(going) || PopAd.IsMatch(going)) && (!byYou || JustClickedNothing)) || (JustClickedNothing && SiteOf(to.Host) != SiteOf(pageHost))))
         {
@@ -14734,7 +14738,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         if (startPrivate) Set(properties, "IsInPrivateModeEnabled", true);
         Set(view, "CreationProperties", properties);
       }
-      catch (Exception) { }
+      catch { }
       MethodInfo ensure = null;
       foreach (MethodInfo method in type.GetMethods()) if (method.Name == "EnsureCoreWebView2Async" && (ensure == null || method.GetParameters().Length < ensure.GetParameters().Length)) ensure = method;
       ensure.Invoke(view, new object[ensure.GetParameters().Length]);
@@ -14766,27 +14770,27 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         bool js = pageHost == null || SitePerm(pageHost, "js") != "block";
         if ((bool)Get(settings, "IsScriptEnabled") != js) Set(settings, "IsScriptEnabled", js);
       }
-      catch (Exception) { }
+      catch { }
       try
       {
         if (pageHost != null && SitePerm(pageHost, "sound") == "block") { Set(core, "IsMuted", true); siteMuted = true; }
         else if (siteMuted) { Set(core, "IsMuted", false); siteMuted = false; }
       }
-      catch (Exception) { }
+      catch { }
     }
 
-    private void ShieldNote(string text) { try { if (core != null) Call(core, "ExecuteScriptAsync", "window.__capriToast&&__capriToast(" + Quote(text) + ")"); } catch (Exception) { } }
+    private void ShieldNote(string text) { try { if (core != null) Call(core, "ExecuteScriptAsync", "window.__capriToast&&__capriToast(" + Quote(text) + ")"); } catch { } }
 
     // The shield on: page parts hidden for this site, and its click guards switched on (or off, for sites they allow).
     private void ShieldPage()
     {
-      try { if (core != null) Call(core, "ExecuteScriptAsync", "window.__capriShieldOn&&__capriShieldOn(" + (Shielding ? "true," + Quote(HideFor(pageHost)) : "false,''") + ")"); } catch (Exception) { }
+      try { if (core != null) Call(core, "ExecuteScriptAsync", "window.__capriShieldOn&&__capriShieldOn(" + (Shielding ? "true," + Quote(HideFor(pageHost)) : "false,''") + ")"); } catch { }
     }
 
     private void Heard()
     {
       if (Sound == null || core == null) return;
-      try { Sound((bool)Get(core, "IsDocumentPlayingAudio"), (bool)Get(core, "IsMuted")); } catch (Exception) { }
+      try { Sound((bool)Get(core, "IsDocumentPlayingAudio"), (bool)Get(core, "IsMuted")); } catch { }
     }
 
     public override void Privacy(Look look)
@@ -14800,13 +14804,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         if (level != null) level.SetValue(profile, Enum.ToObject(level.PropertyType, look.Track), null);
         Set(profile, "DefaultDownloadFolderPath", !string.IsNullOrEmpty(look.Downloads) && Directory.Exists(look.Downloads) ? look.Downloads : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"));
       }
-      catch (Exception) { }
+      catch { }
       try
       {
         bool want = look.Ads || look.Track >= 2 || ImagesBlocked();
         if (want != filtering) { Call(core, want ? "AddWebResourceRequestedFilter" : "RemoveWebResourceRequestedFilter", "*", 0); filtering = want; }
       }
-      catch (Exception) { }
+      catch { }
     }
 
     private const string DarkScript = "(function(){function go(){if(document.getElementById('capri-dark')||!document.body)return;var e=getComputedStyle(document.body).backgroundColor,h=getComputedStyle(document.documentElement).backgroundColor;var c=((e.indexOf('rgba(0, 0, 0, 0)')<0&&e!='transparent')?e:h).match(/[0-9.]+/g)||[];if(c.length>3&&c[3]==0||c.length<3)c=[255,255,255];if(c[0]*.3+c[1]*.59+c[2]*.11<140)return;var s=document.createElement('style');s.id='capri-dark';s.textContent='html{filter:invert(.92) hue-rotate(180deg)!important}img,video,picture,canvas,iframe,embed,object,[style*=background-image]{filter:invert(1) hue-rotate(180deg)!important}';document.documentElement.appendChild(s);}if(document.readyState=='loading')document.addEventListener('DOMContentLoaded',go);else go();})();";
@@ -15007,17 +15011,17 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           Task<string> id = blurId;
           blurId = null;
           if (id.Status == TaskStatus.RanToCompletion) { Call(core, "RemoveScriptToExecuteOnDocumentCreated", id.Result); return; }
-          System.Windows.Forms.Timer wait = new System.Windows.Forms.Timer { Interval = 300 };
+          WinTimer wait = new WinTimer { Interval = 300 };
           wait.Tick += delegate
           {
             if (!id.IsCompleted) return;
             wait.Dispose();
-            try { if (core != null && id.Status == TaskStatus.RanToCompletion) Call(core, "RemoveScriptToExecuteOnDocumentCreated", id.Result); } catch (Exception) { }
+            try { if (core != null && id.Status == TaskStatus.RanToCompletion) Call(core, "RemoveScriptToExecuteOnDocumentCreated", id.Result); } catch { }
           };
           wait.Start();
         }
       }
-      catch (Exception) { }
+      catch { }
     }
 
     public override void Dark(bool on)
@@ -15033,7 +15037,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           Call(core, "ExecuteScriptAsync", "(function(){var s=document.getElementById('capri-dark');if(s)s.remove();})()");
         }
       }
-      catch (Exception) { }
+      catch { }
     }
 
     public override Task<string> Script(string script) { return core == null ? null : (Task<string>)Call(core, "ExecuteScriptAsync", script); }
@@ -15058,7 +15062,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           pagePointer = "(function(){function a(){if(document.getElementById('capri-pointer'))return;var s=document.createElement('style');s.id='capri-pointer';s.textContent=" + Quote(css) + ";(document.head||document.documentElement).appendChild(s);}if(document.documentElement)a();document.addEventListener('DOMContentLoaded',a);})();";
         }
       }
-      catch (Exception) { }
+      catch { }
       return pagePointer;
     }
 
@@ -15072,7 +15076,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     public override void Print()
     {
       if (core == null) return;
-      try { Call(core, "ShowPrintUI"); } catch (Exception) { try { Call(core, "ExecuteScriptAsync", "window.print()"); } catch (Exception) { } }
+      try { Call(core, "ShowPrintUI"); } catch (Exception) { try { Call(core, "ExecuteScriptAsync", "window.print()"); } catch { } }
     }
 
     public override bool Muted
@@ -15092,7 +15096,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         run.ContinueWith(delegate(Task finished)
         {
           Bitmap got = null;
-          try { if (!finished.IsFaulted) { saved.Position = 0; using (Image raw = Image.FromStream(saved)) got = new Bitmap(raw); } } catch (Exception) { }
+          try { if (!finished.IsFaulted) { saved.Position = 0; using (Image raw = Image.FromStream(saved)) got = new Bitmap(raw); } } catch { }
           saved.Dispose();
           done(got);
         });
@@ -15140,7 +15144,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         int state = value == "allow" ? 1 : value == "block" ? 2 : 0;
         foreach (string origin in SiteOrigins(host, true)) Call(profile, "SetPermissionStateAsync", kind, origin, state);
       }
-      catch (Exception) { }
+      catch { }
     }
 
     // How much a site keeps on this PC, and its cookies: "bytes|cookies" (-1 when unknown).
@@ -15195,7 +15199,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
           {
             if (f.Status != TaskStatus.RanToCompletion) return;
             ICollection list = Get(f, "Result") as ICollection;
-            if (list != null) foreach (object cookie in list) try { Call(jar, "DeleteCookie", cookie); } catch (Exception) { }
+            if (list != null) foreach (object cookie in list) try { Call(jar, "DeleteCookie", cookie); } catch { }
           }, ui));
         }
         Task.Factory.ContinueWhenAll(work.ToArray(), delegate(Task[] finished)
@@ -15225,7 +15229,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         Type kind = wipe.GetParameters()[0].ParameterType;
         long all = 0;
         foreach (string name in kinds.Split(','))
-          try { all |= Convert.ToInt64(Enum.Parse(kind, name.Trim())); } catch (Exception) { }
+          try { all |= Convert.ToInt64(Enum.Parse(kind, name.Trim())); } catch { }
         if (all == 0) { done(null); return; }
         Task run = (Task)wipe.Invoke(profile, new[] { Enum.ToObject(kind, all) });
         run.ContinueWith(delegate(Task finished) { done(finished.IsFaulted ? finished.Exception.GetBaseException().Message : null); });
@@ -15257,7 +15261,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     public override void Html(string html) { Run(delegate { Call(core, "NavigateToString", html); }); }
     public override void Go(string url) { Run(delegate { Call(core, "Navigate", url); }); }
     public override void Reload() { Run(delegate { Call(core, "Reload"); }); }
-    public override void Downloads() { try { if (core != null) Call(core, "OpenDefaultDownloadDialog"); } catch (Exception) { } }
+    public override void Downloads() { try { if (core != null) Call(core, "OpenDefaultDownloadDialog"); } catch { } }
     public override void Text(Action<string> got)
     {
       if (core == null) { got(null); return; }
@@ -15280,7 +15284,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     public override void Back() { if (CanBack) Call(view, "GoBack"); }
     public override void Forward() { if (core != null && (bool)Get(view, "CanGoForward")) Call(view, "GoForward"); }
     public override string Address { get { Uri at = core == null ? null : Get(view, "Source") as Uri; return at == null ? null : at.AbsoluteUri; } }
-    public override void Background(Color color) { try { Set(view, "DefaultBackgroundColor", color); } catch (Exception) { } }
+    public override void Background(Color color) { try { Set(view, "DefaultBackgroundColor", color); } catch { } }
 
     public override void Style(Look look, bool reader)
     {
@@ -15292,7 +15296,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         Scheme(look);
         if (reader) Set(view, "ZoomFactor", 1.0);
       }
-      catch (Exception) { }
+      catch { }
     }
 
     // Sites with their own dark mode, like YouTube, follow this.
@@ -15396,7 +15400,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       return File.Exists(file) ? File.ReadAllBytes(file) : null;
     }
     catch (Exception) { return null; }
-    finally { try { Directory.Delete(folder, true); } catch (Exception) { } }
+    finally { try { Directory.Delete(folder, true); } catch { } }
   }
 
   // Files out of a zip into folder (just only, when given) with Windows' own tar, which reads zips and won't write
@@ -15414,12 +15418,12 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       ProcessStartInfo start = new ProcessStartInfo(tar, "-xf \"" + file + "\" -C \"" + folder.TrimEnd('\\') + "\"" + (only == null ? "" : " \"" + only + "\"")) { UseShellExecute = false, CreateNoWindow = true };
       using (Process run = Process.Start(start))
       {
-        if (!run.WaitForExit(120000)) { try { run.Kill(); } catch (Exception) { } return "unpacking took too long"; }
+        if (!run.WaitForExit(120000)) { try { run.Kill(); } catch { } return "unpacking took too long"; }
         return run.ExitCode == 0 ? null : "it couldn't be unpacked";
       }
     }
     catch (Exception error) { return error.Message; }
-    finally { try { File.Delete(file); } catch (Exception) { } }
+    finally { try { File.Delete(file); } catch { } }
   }
 
   private static byte[] DownloadBytes(string address, Action<int> progress)
@@ -15540,7 +15544,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     for (int i = 0; i < 4; i++)
     {
       int which = i;
-      Thread fetcher = new Thread(delegate() { try { pages[which] = Fetch(addresses[which]); } catch (Exception) { } finally { done[which].Set(); } });
+      Thread fetcher = new Thread(delegate() { try { pages[which] = Fetch(addresses[which]); } catch { } finally { done[which].Set(); } });
       fetcher.IsBackground = true;
       fetcher.Start();
     }
@@ -15624,7 +15628,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     for (int i = 0; i < 3; i++)
     {
       int which = i;
-      Thread fetcher = new Thread(delegate() { string got = null; try { got = Fetch(addresses[which]); } catch (Exception) { } lock (pages) pages[which] = got; });
+      Thread fetcher = new Thread(delegate() { string got = null; try { got = Fetch(addresses[which]); } catch { } lock (pages) pages[which] = got; });
       fetcher.IsBackground = true;
       fetcher.Start();
       fetchers.Add(fetcher);
