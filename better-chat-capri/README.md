@@ -11,6 +11,8 @@ Tired of messy speech cutoffs and sticky chat bubbles? Take full control over Ca
 | 2.5s Smart Debounce | Waits 2.5 seconds after you stop speaking before sending your message, resetting the timer if you continue talking and filtering out background noise or short filler sounds. |
 | Native Audio Chimes | Follows your selected `Sound set` when opening a voice command (suppressing duplicate native chimes), plays `Shard` once the 2.5s pause sends your prompt, and plays `Pulse` when cancelled with `Esc`. |
 
+- Compatibilities: Mute Button (by: Potato)
+
 - Kind: code mod
 - Made by: CyberPhantxm
 - Needs: chat and voice permissions
