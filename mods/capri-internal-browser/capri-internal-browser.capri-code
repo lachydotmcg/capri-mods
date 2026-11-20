@@ -3,7 +3,7 @@
 // name: Capri Browser
 // version: 2.0.0
 // author: tob7as
-// description: Capri's own web browser, built on Edge. Ad blocker, Noted, bookmarks, extensions, screenshots, custom jobs, and Capri can browse, play and skip videos for you. Say "open Capri Browser".
+// description: Capri's own Edge browser. She researches anything, finds and plays videos, learns and runs your custom jobs, and plays games with you. Strong ad blocker, Noted, split screen, 20 themes.
 // permissions: chat, brain, tools, voice
 
 using System;
