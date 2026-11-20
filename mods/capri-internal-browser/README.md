@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 1,040 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 944 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -26,8 +26,10 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | "what's the best ..." / "what's the best website for ..." | Her top picks with prices and sources, or the best sites for it |
 | "fact check ..." / "is it true that ..." | True, false, partly true or not clear, with sources |
 | "compare my tabs" / "which of these should I buy?" / "what have I got open?" | Compares or sums up your open tabs |
-| "work out my last note" | Works out the newest note in Noted, even a screenshot (Windows reads the text in it) or a text file |
+| "work out my last note" / "work out my School notes" / "... my open notes" (or right-click a note > Work on this) | Works out that note in Noted, even a screenshot (Windows reads the text in it) or a text file |
 | "watch this page" / "tell me when the price drops" | Checks up to 5 pages every 20 minutes and tells you when it happens |
+| "any new changes on my page?" | Checks the pages she is watching right now, asks which one if there are several, and tells you what is new on your yes |
+| "find me a YouTube logo" / "find me an anime pfp" | Picture results on Bing Images, with strict safe search |
 | "fill in this form with ..." | Fills in what you told her (never passwords, card, bank or ID numbers), outlines it, and sends only on your yes |
 | Highlight text, right-click, Let Capri research this | Researches what you highlighted. The right-click menu is in Capri's colours (Settings > Appearance) |
 | "screenshot this and add it to my notes" | Puts a screenshot of the page in a new Browser note |
@@ -85,7 +87,10 @@ Make your own commands from the sidebar's Custom jobs button (or say "open custo
 - **Bookmarks**: the star on the sidebar (Ctrl+Shift+B), with folders, search, drag and drop, and Import from Opera GX, Opera, Chrome, Edge, Brave or Vivaldi (read from their file on your PC only when you press it). The star in the address box bookmarks the page (Ctrl+Shift+D).
 - **Extensions**: the puzzle next to Summarise. Add Chrome-style extensions you downloaded yourself (a folder, .zip or .crx), turn them on or off, open their popup or options, or remove them. Capri Browser never downloads extensions for you.
 - **Screenshots**: the camera next to the puzzle. Pick an area (Ctrl+Shift+X), what's on screen, or the whole page. Each one is saved in Pictures\Capri Browser, copied, and can go into Noted.
-- Smoother: side panels slide, tabs grow in and shrink away, a red line glides to the tab you pick, menus fade in
+- Smoother: side panels slide, tabs grow in and shrink away, glide into place when moved and pop when picked, a red line glides to the tab you pick, menus fade in
+- Split screen: right-click a tab for two tabs side by side, with a bar to drag between them
+- Tabs you have not used for 20 minutes snooze to save memory (a setting, on by default), with a moon on them; a click wakes one
+- Press Esc any time to stop Capri taking control
 - Offer to skip (off until you turn it on): when Skip ad, Skip intro or Skip recap shows up, she asks, and presses it on your yes
 - Watch-along (off until you turn it on): she reacts now and then during videos
 - Catch-up: coming back to a tab that changed, she tells you what's new
@@ -110,7 +115,7 @@ The mod itself (not the pages you visit) contacts:
 | Host | Why |
 | --- | --- |
 | raw.githubusercontent.com ([tob7as/Browser-addons](https://github.com/tob7as/Browser-addons)) | The ad blocker lists, voice commands in other languages, games, game lists, languages, the settings, Speed Dial, results, Games and History looks, video-site, search-engine and achievement lists, help, the Welcome page and update notes. The Welcome page offers **Download browser** (all at once, with progress) or **Download quietly in the background**; until then the browser uses small built-in English defaults |
-| en.wikipedia.org (or your language's Wikipedia), search.brave.com, www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, and finding videos and games |
+| en.wikipedia.org (or your language's Wikipedia), search.brave.com, www.bing.com, html.duckduckgo.com | Answers for "look up ..." and "research this", Wiki Race, finding videos and games, and picture searches |
 | www.google.com/s2/favicons, github.githubassets.com, and each Speed Dial site | Little site icons for Speed Dial and the sidebar |
 | capri-browser.tobiasprojects77.workers.dev (tob7as's own Cloudflare worker) | Gets the weekly leaderboards and the Featured boxes on the Games page (plain text, shown escaped, and not pinned, since they change without a mod update). Only if you pick a leaderboard name: that name, then your weekly game and browsing counts every 12 hours, and your place when you look it up. And whatever you type into the bug and idea box when you press Send. Nothing else; your IP address is never stored (only a salted hash that changes daily, for rate limits), and Featured can be turned off in Settings |
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
