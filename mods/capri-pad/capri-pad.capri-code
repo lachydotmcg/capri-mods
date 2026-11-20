@@ -1,7 +1,7 @@
 // capri-mod: 1
 // id: capri-pad
 // name: Capri // Pad
-// version: 1.0
+// version: 1.0.1
 // author: CyberPhantxm
 // description: An interactive audio-reactive perch pad with custom visualizer bars, live microphone tracking, and dynamic scaling.
 // permissions: settings, music, voice
@@ -265,12 +265,17 @@ public class CapriPerchPadMod : ICapriMod
     
     private bool autoPerch = true;
     private bool onPad = false;
+    private bool resumePadOnReturn = false;
     public bool lastFacingLeft = false;
     
     private Point savedPadHip = new Point(260, 260);
     private Form companionWindow;
     private object capriOwner;
     private PropertyInfo hologramStateProp;
+    private object talkPill;
+    private PropertyInfo talkPillMutedProp;
+    private FieldInfo seatField;
+    private FieldInfo onPanelField;
     private Action<IntPtr, Bitmap, Point> drawLayered;
     private Mirror mirror;
     private Bitmap rawSurface;
@@ -288,6 +293,7 @@ public class CapriPerchPadMod : ICapriMod
     private const string PAD_TITLE = "CyberPerchNode";
 
     private bool moveMenuInjected = false;
+    private ToolStripMenuItem moveMenuItem = null;
     private ToolStripMenuItem perchPadCheckMenuItem = null;
 
     [DllImport("user32.dll")]
@@ -297,6 +303,7 @@ public class CapriPerchPadMod : ICapriMod
     {
         capri = host;
         ResolveCompanionWindow();
+        TryInjectMenu();
         InitMic();
 
         autoPerch = capri.Store.Flag("auto_perch", true);
@@ -344,14 +351,67 @@ public class CapriPerchPadMod : ICapriMod
             pad = null;
         }
 
+        if (moveMenuItem != null)
+        {
+            try
+            {
+                moveMenuItem.DropDownOpening -= OnMoveMenuOpening;
+                for (int i = moveMenuItem.DropDownItems.Count - 1; i >= 0; i--)
+                {
+                    ToolStripItem sub = moveMenuItem.DropDownItems[i];
+                    if (sub == perchPadCheckMenuItem || sub.Text == "Auto Perch Pad" || sub.Text == "Sit on pad")
+                    {
+                        moveMenuItem.DropDownItems.RemoveAt(i);
+                    }
+                }
+            }
+            catch { }
+            moveMenuItem = null;
+        }
+
+        perchPadCheckMenuItem = null;
+
         if (companionWindow != null)
         {
             try
             {
                 ContextMenuStrip cms = companionWindow.ContextMenuStrip;
+                if (cms == null)
+                {
+                    Type t = companionWindow.GetType();
+                    while (t != null && cms == null)
+                    {
+                        FieldInfo[] fields = t.GetFields(AnyFlags);
+                        foreach (FieldInfo f in fields)
+                        {
+                            if (f.FieldType == typeof(ContextMenuStrip))
+                            {
+                                cms = f.GetValue(companionWindow) as ContextMenuStrip;
+                                if (cms != null) break;
+                            }
+                        }
+                        t = t.BaseType;
+                    }
+                }
                 if (cms != null)
                 {
                     cms.Opening -= OnMainMenuOpening;
+                    foreach (ToolStripItem topItem in cms.Items)
+                    {
+                        ToolStripMenuItem mi = topItem as ToolStripMenuItem;
+                        if (mi != null && mi.Text.Trim().Equals("Move", StringComparison.OrdinalIgnoreCase))
+                        {
+                            mi.DropDownOpening -= OnMoveMenuOpening;
+                            for (int i = mi.DropDownItems.Count - 1; i >= 0; i--)
+                            {
+                                ToolStripItem sub = mi.DropDownItems[i];
+                                if (sub.Text == "Auto Perch Pad" || sub.Text == "Sit on pad")
+                                {
+                                    mi.DropDownItems.RemoveAt(i);
+                                }
+                            }
+                        }
+                    }
                 }
             }
             catch { }
@@ -370,6 +430,14 @@ public class CapriPerchPadMod : ICapriMod
                 {
                     Type ownerType = capriOwner.GetType();
                     hologramStateProp = ownerType.GetProperty("HologramOn", AnyFlags);
+                    seatField = ownerType.GetField("seat", AnyFlags);
+                    onPanelField = ownerType.GetField("onPanel", AnyFlags);
+                    FieldInfo pf = ownerType.GetField("pill", AnyFlags);
+                    if (pf != null)
+                    {
+                        talkPill = pf.GetValue(capriOwner);
+                        if (talkPill != null) talkPillMutedProp = talkPill.GetType().GetProperty("Muted", AnyFlags);
+                    }
                     Type native = ownerType.Assembly.GetType("CapriDesktop.Native", false);
                     MethodInfo render = native == null ? null : native.GetMethod("DrawLayered",
                         BindingFlags.Static | BindingFlags.NonPublic, null,
@@ -388,9 +456,22 @@ public class CapriPerchPadMod : ICapriMod
 
             if (companionWindow != null)
             {
+                Type winType = companionWindow.GetType();
+                if (seatField == null) seatField = winType.GetField("seat", AnyFlags);
+                if (onPanelField == null) onPanelField = winType.GetField("onPanel", AnyFlags);
+
+                if (talkPill == null)
+                {
+                    FieldInfo pf = winType.GetField("pill", AnyFlags);
+                    if (pf != null)
+                    {
+                        talkPill = pf.GetValue(companionWindow);
+                        if (talkPill != null) talkPillMutedProp = talkPill.GetType().GetProperty("Muted", AnyFlags);
+                    }
+                }
+
                 if (hologramStateProp == null)
                 {
-                    Type winType = companionWindow.GetType();
                     hologramStateProp = winType.GetProperty("HologramOn", AnyFlags);
                     if (hologramStateProp != null && capriOwner == null) capriOwner = companionWindow;
                     if (drawLayered == null)
@@ -427,6 +508,68 @@ public class CapriPerchPadMod : ICapriMod
             }
         }
         catch { }
+    }
+
+    private bool IsMicMuted()
+    {
+        try
+        {
+            if (talkPill != null && talkPillMutedProp != null)
+            {
+                return (bool)talkPillMutedProp.GetValue(talkPill, null);
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private bool IsOnTaskPanel()
+    {
+        try
+        {
+            object target = capriOwner ?? companionWindow;
+            if (target != null && onPanelField != null)
+            {
+                return (bool)onPanelField.GetValue(target);
+            }
+        }
+        catch { }
+        return false;
+    }
+
+    private bool IsOnWindowOrPanel()
+    {
+        if (IsOnTaskPanel()) return true;
+        try
+        {
+            object target = capriOwner ?? companionWindow;
+            if (target == null || seatField == null) return false;
+            object seat = seatField.GetValue(target);
+            if (seat == null) return false;
+
+            IntPtr padHandle = (pad != null && !pad.IsDisposed && pad.IsHandleCreated) ? pad.Handle : IntPtr.Zero;
+            IntPtr mirrorHandle = (mirror != null && !mirror.IsDisposed && mirror.IsHandleCreated) ? mirror.Handle : IntPtr.Zero;
+
+            Type st = seat.GetType();
+            foreach (FieldInfo f in st.GetFields(AnyFlags))
+            {
+                if (f.FieldType == typeof(IntPtr))
+                {
+                    IntPtr h = (IntPtr)f.GetValue(seat);
+                    if (h != IntPtr.Zero && h != padHandle && h != mirrorHandle) return true;
+                }
+            }
+            foreach (PropertyInfo p in st.GetProperties(AnyFlags))
+            {
+                if (p.PropertyType == typeof(IntPtr) && p.GetIndexParameters().Length == 0)
+                {
+                    IntPtr h = (IntPtr)p.GetValue(seat, null);
+                    if (h != IntPtr.Zero && h != padHandle && h != mirrorHandle) return true;
+                }
+            }
+        }
+        catch { }
+        return false;
     }
 
     private void ReleaseHologramSurfaces()
@@ -549,12 +692,22 @@ public class CapriPerchPadMod : ICapriMod
             {
                 cms.Opening -= OnMainMenuOpening;
                 cms.Opening += OnMainMenuOpening;
+                foreach (ToolStripItem topItem in cms.Items)
+                {
+                    ToolStripMenuItem mi = topItem as ToolStripMenuItem;
+                    if (mi != null && mi.Text.Trim().Equals("Move", StringComparison.OrdinalIgnoreCase))
+                    {
+                        moveMenuItem = mi;
+                        mi.DropDownOpening -= OnMoveMenuOpening;
+                        mi.DropDownOpening += OnMoveMenuOpening;
+                    }
+                }
                 moveMenuInjected = true;
             }
         }
         catch { }
     }
-
+    
     private void OnMainMenuOpening(object sender, System.ComponentModel.CancelEventArgs e)
     {
         ContextMenuStrip cms = sender as ContextMenuStrip;
@@ -565,6 +718,7 @@ public class CapriPerchPadMod : ICapriMod
             ToolStripMenuItem mi = topItem as ToolStripMenuItem;
             if (mi != null && mi.Text.Trim().Equals("Move", StringComparison.OrdinalIgnoreCase))
             {
+                moveMenuItem = mi;
                 mi.DropDownOpening -= OnMoveMenuOpening;
                 mi.DropDownOpening += OnMoveMenuOpening;
             }
@@ -611,6 +765,7 @@ public class CapriPerchPadMod : ICapriMod
 
     private void OnHerDragged()
     {
+        resumePadOnReturn = false;
         if (onPad && pad != null && pad.Visible)
         {
             ClosePadInstantly();
@@ -619,6 +774,7 @@ public class CapriPerchPadMod : ICapriMod
 
     private void OnHerDropped(Point hip)
     {
+        resumePadOnReturn = false;
         if (autoPerch && !IsOnTaskbar(hip) && currentVelocity < 850)
         {
             if (!onPad) SpawnPadAtCurrentPos();
@@ -635,6 +791,7 @@ public class CapriPerchPadMod : ICapriMod
 
     public void ClosePadAndStand()
     {
+        resumePadOnReturn = false;
         ClosePadInstantly();
         string anim = (capri.Her.Animation ?? "").ToLowerInvariant();
         if (anim.Contains("perch") || anim.Contains("sleep") || anim.Contains("sit"))
@@ -650,6 +807,7 @@ public class CapriPerchPadMod : ICapriMod
 
         if (!autoPerch)
         {
+            resumePadOnReturn = false;
             ClosePadInstantly();
         }
     }
@@ -786,6 +944,7 @@ public class CapriPerchPadMod : ICapriMod
         tickCount++;
         realMic *= 0.8f;
         PollMicBuffer();
+        if (IsMicMuted()) realMic = 0f;
 
         Rectangle hb = capri.Her.Bounds;
         Point currentHip = new Point(hb.Left + (hb.Width / 2), hb.Top + (int)(hb.Height * 0.72));
@@ -806,9 +965,18 @@ public class CapriPerchPadMod : ICapriMod
         
         bool isSitting = anim.Contains("sit") || anim.Contains("perch") || anim.Contains("sleep") || st == "asleep";
 
-        if (onPad && !isSitting)
+        if (onPad && (!isSitting || IsOnTaskPanel()))
         {
+            resumePadOnReturn = true;
             ClosePadInstantly();
+        }
+        else if (!onPad && resumePadOnReturn && autoPerch && isSitting && !IsHangingOrRiding() && !IsOnTaskbar(currentHip) && !IsOnWindowOrPanel())
+        {
+            if (Math.Abs(currentHip.X - savedPadHip.X) <= 100 && Math.Abs(currentHip.Y - savedPadHip.Y) <= 100)
+            {
+                resumePadOnReturn = false;
+                SpawnPadAtCurrentPos();
+            }
         }
 
         if (onPad && pad != null && !pad.IsDisposed && pad.Visible)
