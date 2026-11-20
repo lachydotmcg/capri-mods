@@ -1752,16 +1752,20 @@ public class CapriInternalBrowser : ICapriMod
   [DllImport("user32.dll")] private static extern short GetAsyncKeyState(int key);
   private static bool EscDown() { return (GetAsyncKeyState(0x1B) & 0x8000) != 0; }
 
+  // Her thinking card in Capri Browser: what she's on (null hides it), and step of steps (0 when unknown).
+  private void ShowThinking(string doing, int step = 0, int steps = 0) { InBrowser(delegate(Browser b) { b.Working(doing, step, steps); return null; }); }
+
   // While a job runs, Esc stops it wherever they are (even with Capri Browser behind another window).
   private void EscJob(Action work)
   {
+    if (jobSite == null) ShowThinking("Finding it for you");
     Interlocked.Increment(ref jobs);
     Thread esc = new Thread(delegate() { while (Thread.VolatileRead(ref jobs) > 0) { if (EscDown() && !Halted) Halt(); Thread.Sleep(50); } });
     esc.IsBackground = true;
     esc.Start();
     try { work(); }
     catch (OperationCanceledException) { }
-    finally { Interlocked.Decrement(ref jobs); }
+    finally { Interlocked.Decrement(ref jobs); if (jobSite == null) ShowThinking(null); }
   }
 
   // Between her steps: stops the job if they pressed Esc.
@@ -5032,6 +5036,7 @@ public class CapriInternalBrowser : ICapriMod
         string next = i + 1 < steps.Length ? steps[i + 1].Trim() : "";
         Match notes = Regex.Match(next, @"^(?:then\s+)?(?:add|put|save|write)\s+(?:it|that|this|them)?\s*(?:to|in|into)\s+(?:my\s+|the\s+)?(?<book>[\w' -]*?)\s*notes?(?:book)?$", Plain);
         if (Regex.IsMatch(step, @"^(?:summari[sz]e|sum\s+(?:it\s+)?up|tl;?dr)", Plain) && notes.Success) { NoteFromPage("summarise", notes.Groups["book"].Value); i++; Thread.Sleep(1500); continue; }
+        ShowThinking(job.Trigger + ": " + step, i + 1, steps.Length);
         string said = Step(step);
         if (said == null) continue;
         if (said.StartsWith("ASK:", StringComparison.Ordinal))
@@ -5040,6 +5045,7 @@ public class CapriInternalBrowser : ICapriMod
           Func<string> act;
           lock (gate) act = pend;
           if (act != null) lock (gate) pend = delegate { string done = act(); ThreadPool.QueueUserWorkItem(delegate { Thread.Sleep(1200); RunJob(job, carry); }); return done; };
+          ShowThinking(null);
           capri.Say(said.Substring(4));
           return;
         }
@@ -5048,11 +5054,12 @@ public class CapriInternalBrowser : ICapriMod
         Thread.Sleep(700);
       }
       jobSite = null;
+      ShowThinking(null);
       if (i < steps.Length) return;
       lock (jobMissed) if (missed.Count > 0) jobMissed[job.Trigger] = string.Join(", ", missed.ToArray()); else jobMissed.Remove(job.Trigger);
       if (missed.Count > 0) capri.Say("Done with " + job.Trigger + ", choom, but I didn't know how to do " + string.Join(", ", missed.ToArray()) + ". You can fix that on your Custom jobs page.");
     }
-    catch (Exception error) { jobSite = null; capri.Log("job: " + error.Message); capri.Say("That job glitched partway, choom."); }
+    catch (Exception error) { jobSite = null; ShowThinking(null); capri.Log("job: " + error.Message); capri.Say("That job glitched partway, choom."); }
   }
 
   // One step in plain words, done. Null when it's done (or said), "ASK:question" when it needs their yes, else what happened.
@@ -8301,7 +8308,46 @@ public class CapriInternalBrowser : ICapriMod
     // ---- Capri's brain first (Settings > Mods, on unless they switch it off) ----
     // Capri's own process gets the PC first, and Edge's engine processes behind this browser wait their turn.
     private WinTimer brainTimer;
-    private bool brainWasFirst;
+    private bool brainWasFirst, gameMode;
+    private Button gameBtn;
+    private Thinking thinking;
+
+    // Game mode on or off, and what she says about it.
+    internal string GameMode(bool on)
+    {
+      gameMode = on;
+      int n = 0;
+      if (on) foreach (Tab t in tabs) if (t != tab && !(Split && (t == splitA || t == splitB)) && !t.Asleep && !t.Playing && !t.OnReader && !t.Hidden && t.Viewer.Sleep()) { t.Asleep = true; Retitle(t, t.Title); n++; }
+      foreach (Tab t in tabs) t.Viewer.Saver(on);
+      BrainFirst();
+      GameLook();
+      if (!on) return "Game mode's off, choom. Back to full speed.";
+      return "Game mode's on, choom. " + (n > 0 ? "I snoozed " + n + (n == 1 ? " tab" : " tabs") + " and I'm" : "I'm") + " running super low so your game gets the PC.";
+    }
+
+    // The game mode button lit in her cyan while it's on.
+    private void GameLook()
+    {
+      if (gameBtn == null) return;
+      gameBtn.ForeColor = gameMode ? mod.look.Shade(4) : mod.look.Shade(5);
+      gameBtn.BackColor = gameMode ? Mix(mod.look.Shade(0), mod.look.Shade(4), .22f) : Color.Transparent;
+    }
+
+    // Her thinking card over the page while she works: what she's on (null hides it), and step of steps (0 when unknown).
+    internal void Working(string doing, int step, int steps)
+    {
+      if (thinking == null)
+      {
+        if (doing == null) return;
+        thinking = new Thinking(delegate { return mod.look; }) { Visible = false };
+        holder.Controls.Add(thinking);
+        holder.Resize += delegate { thinking.Left = holder.ClientSize.Width - thinking.Width - 16; };
+      }
+      if (doing == null) { thinking.Off(); return; }
+      thinking.Location = new Point(holder.ClientSize.Width - thinking.Width - 16, 12);
+      thinking.On(doing, step, steps);
+      thinking.BringToFront();
+    }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct ProcessEntry
@@ -8347,18 +8393,19 @@ public class CapriInternalBrowser : ICapriMod
 
     private void BrainFirst()
     {
-      bool on = Flag("brainfirst", true);
+      bool game = gameMode, on = Flag("brainfirst", true) || game;
       if (!on && !brainWasFirst) return;
+      if (game) foreach (Tab t in tabs) t.Viewer.Saver(true);
       List<int> roots = new List<int>();
       foreach (Tab t in tabs) { int id = t.Viewer.EngineId; if (id > 0 && !roots.Contains(id)) roots.Add(id); }
       // Her hidden Discord counts too, though it has no tab in the strip.
       if (hiddenDc != null && !hiddenDc.Viewer.Control.IsDisposed) { int hid = hiddenDc.Viewer.EngineId; if (hid > 0 && !roots.Contains(hid)) roots.Add(hid); }
       ThreadPool.QueueUserWorkItem(delegate
       {
-        try { Process.GetCurrentProcess().PriorityClass = on ? ProcessPriorityClass.AboveNormal : ProcessPriorityClass.Normal; } catch { }
+        try { Process.GetCurrentProcess().PriorityClass = on && !game ? ProcessPriorityClass.AboveNormal : ProcessPriorityClass.Normal; } catch { }
         foreach (int root in roots)
           foreach (int id in EngineFamily(root))
-            try { using (Process p = Process.GetProcessById(id)) p.PriorityClass = on ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal; }
+            try { using (Process p = Process.GetProcessById(id)) p.PriorityClass = game ? ProcessPriorityClass.Idle : on ? ProcessPriorityClass.BelowNormal : ProcessPriorityClass.Normal; }
             catch { }
       });
       brainWasFirst = on;
@@ -13134,6 +13181,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       Button welcome = SideButton(((char)0xE946).ToString(), "Welcome and useful information", null);
       welcome.Dock = DockStyle.Bottom;
       welcome.Click += delegate { ShowWelcome(); };
+      gameBtn = SideButton("\uE945", "Game mode: Capri Browser goes super low so your game gets the PC (click again to turn it off)", null);
+      gameBtn.Dock = DockStyle.Bottom;
+      gameBtn.Click += delegate { mod.Tell(GameMode(!gameMode)); };
       for (int i = sideButtons.Count - 1; i >= 0; i--)
       {
         Button b = sideButtons[i];
@@ -13353,6 +13403,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         b.FlatAppearance.MouseOverBackColor = Mix(look.Shade(0), look.Shade(5), .35f);
         b.FlatAppearance.MouseDownBackColor = look.Shade(5);
       }
+      GameLook();
       side.Invalidate(true);
     }
 
@@ -14716,6 +14767,91 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     }
   }
 
+  // Capri thinking while she works in the browser: three sparks orbiting in her red and cyan, "CAPRI // THINKING", what
+  // she's on, and a bar for how far through the job she is (a sweep when she can't tell). It never takes the focus and
+  // only redraws while it shows.
+  internal sealed class Thinking : Control
+  {
+    private readonly WinTimer tick = new WinTimer { Interval = 33 };
+    private readonly Func<Look> look;
+    private readonly Font head = new Font("Segoe UI Semibold", 7.5f), body = new Font("Segoe UI", 9f);
+    private int frame, step, steps;
+    private float shown;
+    private string doing = "";
+
+    public Thinking(Func<Look> look)
+    {
+      this.look = look;
+      SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
+      SetStyle(ControlStyles.Selectable, false);
+      TabStop = false;
+      Size = new Size(300, 58);
+      tick.Tick += delegate { frame++; shown += (step - shown) * .15f; Invalidate(); };
+    }
+
+    public void On(string doing, int step, int steps)
+    {
+      this.doing = doing;
+      this.steps = steps;
+      this.step = step;
+      if (!Visible) { frame = 0; shown = Math.Max(0, step - 1); }
+      Visible = true;
+      tick.Start();
+      Invalidate();
+    }
+
+    public void Off() { tick.Stop(); Visible = false; }
+
+    protected override void Dispose(bool disposing) { if (disposing) { tick.Dispose(); head.Dispose(); body.Dispose(); } base.Dispose(disposing); }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+      Look l = look();
+      Graphics g = e.Graphics;
+      g.SmoothingMode = SmoothingMode.AntiAlias;
+      Color accent = l.Shade(4), red = l.Shade(5);
+      g.Clear(l.Shade(1));
+      Rectangle r = new Rectangle(0, 0, Width - 1, Height - 1);
+      double breath = (Math.Sin(frame / 9.0) + 1) / 2;
+      using (Pen line = new Pen(Color.FromArgb(110 + (int)(120 * breath), accent))) g.DrawRectangle(line, r);
+      using (Pen r2 = new Pen(red, 2f)) { g.DrawLine(r2, 1, 1, 10, 1); g.DrawLine(r2, 1, 1, 1, 10); }
+      using (Pen c2 = new Pen(accent, 2f)) { g.DrawLine(c2, r.Right - 10, r.Bottom - 1, r.Right, r.Bottom - 1); g.DrawLine(c2, r.Right - 1, r.Bottom - 10, r.Right - 1, r.Bottom); }
+
+      // The orbit: three sparks with fading trails round a breathing core.
+      float cx = 28, cy = Height / 2f;
+      for (int k = 0; k < 3; k++)
+        for (int trail = 5; trail >= 0; trail--)
+        {
+          double a = (frame - trail * 1.6) / 7.0 + k * Math.PI * 2 / 3;
+          float x = cx + (float)Math.Cos(a) * 13, y = cy + (float)Math.Sin(a) * 13, size = 4.6f - trail * .6f;
+          using (SolidBrush dot = new SolidBrush(Color.FromArgb(255 - trail * 40, k == 1 ? red : accent))) g.FillEllipse(dot, x - size / 2, y - size / 2, size, size);
+        }
+      float big = 4f + (float)breath * 1.6f, small = big * .32f;
+      PointF[] star = {
+        new PointF(cx, cy - big), new PointF(cx + small, cy - small), new PointF(cx + big, cy), new PointF(cx + small, cy + small),
+        new PointF(cx, cy + big), new PointF(cx - small, cy + small), new PointF(cx - big, cy), new PointF(cx - small, cy - small) };
+      using (SolidBrush core = new SolidBrush(l.Shade(2))) g.FillPolygon(core, star);
+
+      // The words: what she's doing, and which step.
+      string title = "CAPRI // THINKING" + new string('.', 1 + frame / 10 % 3);
+      TextRenderer.DrawText(g, title, head, new Rectangle(52, 8, Width - 60, 14), red, TextFormatFlags.Left | TextFormatFlags.NoPadding);
+      if (steps > 0) TextRenderer.DrawText(g, step + "/" + steps, head, new Rectangle(52, 8, Width - 62, 14), l.Shade(3), TextFormatFlags.Right | TextFormatFlags.NoPadding);
+      TextRenderer.DrawText(g, doing, body, new Rectangle(52, 22, Width - 62, 18), l.Shade(2), TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine);
+
+      // The bar: how far through, or a sweep of her cyan.
+      Rectangle bar = new Rectangle(52, Height - 12, Width - 62, 3);
+      using (SolidBrush track = new SolidBrush(l.Shade(6))) g.FillRectangle(track, bar);
+      if (steps > 0) using (SolidBrush done = new SolidBrush(accent)) g.FillRectangle(done, bar.Left, bar.Top, (int)(bar.Width * Math.Min(1f, shown / steps)), bar.Height);
+      else
+      {
+        int band = bar.Width / 3, x = bar.Left - band + (frame * 5) % (bar.Width + band);
+        g.SetClip(bar);
+        using (SolidBrush sweep = new SolidBrush(accent)) g.FillRectangle(sweep, x, bar.Top, band, bar.Height);
+        g.ResetClip();
+      }
+    }
+  }
+
   // ---- The two engines behind Capri Browser ----
 
   internal abstract class Viewer
@@ -14752,6 +14888,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     public virtual void Zoom(int step) { }
     public virtual void Print() { }
     public virtual bool Sleep() { return false; }
+    public virtual void Saver(bool low) { }
     public virtual Task<string> Script(string script) { return null; }
     public virtual Task<string> Gesture(string script) { return null; }
     public virtual Task<string> Cdp(string method, string json) { return null; }
@@ -15436,6 +15573,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
     // Dark mode for sites that are bright: on now and for every page after, or off again.
     public override bool Sleep() { if (core == null) return false; try { Call(core, "TrySuspendAsync"); return true; } catch (Exception) { return false; } }
+    // Game mode: Edge keeps this page's memory as low as it can (its Low level), or back to Normal.
+    public override void Saver(bool low)
+    {
+      if (core == null) return;
+      try { PropertyInfo p = core.GetType().GetProperty("MemoryUsageTargetLevel"); if (p != null) p.SetValue(core, Enum.ToObject(p.PropertyType, low ? 1 : 0), null); }
+      catch (Exception) { }
+    }
 
     // Guess the Site: every page this tab opens starts blurred, before anything shows. Waits for Edge if it isn't ready.
     private const string BlurScript = "(function(){function b(){var h=document.documentElement;if(h)h.style.setProperty('filter','blur(18px)','important');return !!h;}if(!b())new MutationObserver(function(m,o){if(b())o.disconnect();}).observe(document,{childList:true});})()";
