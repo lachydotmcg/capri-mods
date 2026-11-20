@@ -4984,7 +4984,8 @@ public class CapriInternalBrowser : ICapriMod
         public bool OnReader, Busy;
         public bool Playing, Muted;     // the page is making sound / its sound is off
         public DateTime Used = DateTime.UtcNow;
-        public bool Asleep;
+        public bool Asleep;              // snoozed: put to sleep after 20 minutes unused, woken by a click
+        public float Pop;                // 1 to 0 just after it's picked, for the pop
         public string Seen;             // the page's words when they last left it, for "what did I miss?"
         public DateTime LeftAt;
         public int Tracked;             // trackers stopped on the page it's showing
@@ -5148,33 +5149,48 @@ public class CapriInternalBrowser : ICapriMod
                 else if (e.Button == MouseButtons.Left) Select(t);
                 else if (e.Button == MouseButtons.Right) TabMenu(t).Show(Cursor.Position);
             };
-            // Dragged sideways, the tab moves between the others, like any browser.
-            int downX = 0;
+            // Dragged sideways, the tab follows the mouse and the others glide out of its way.
+            int downX = 0, grab = 0;
             bool moved = false;
             MouseEventHandler down = delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { downX = Cursor.Position.X; moved = false; } };
             MouseEventHandler drag = delegate(object sender, MouseEventArgs e)
             {
                 if (e.Button != MouseButtons.Left || t.Chip == null || t.Chip.IsDisposed) return;
                 if (!moved && Math.Abs(Cursor.Position.X - downX) < 8) return;
-                if (!moved) { moved = true; Select(t); }
-                int px = chips.PointToClient(Cursor.Position).X, to = 0;
-                foreach (Tab other in tabs) if (other != t && other.Chip != null && !other.Chip.IsDisposed && other.Chip.Left + other.Chip.Width / 2 < px) to++;
-                MoveTab(t, to);
+                int px = chips.PointToClient(Cursor.Position).X;
+                if (!moved) { moved = true; Select(t); GlideChips(); dragged = t; grab = px - t.Chip.Left; }
+                List<Tab> shown = ChipTabs();
+                int left = Math.Max(glideBase, Math.Min(glideBase + (shown.Count - 1) * glideStep, px - grab));
+                t.Chip.Left = left;
+                if (tab == t) Slide(false);
+                int slot = Math.Max(0, Math.Min(shown.Count - 1, (left - glideBase + glideStep / 2) / Math.Max(1, glideStep)));
+                if (shown[slot] != t) MoveTab(t, tabs.IndexOf(shown[slot]));
             };
             chip.MouseDown += down;
             name.MouseDown += down;
             chip.MouseMove += drag;
             name.MouseMove += drag;
             MouseEventHandler pick0 = pick;
-            pick = delegate(object sender, MouseEventArgs e) { if (moved && e.Button == MouseButtons.Left) { moved = false; Remember(); return; } pick0(sender, e); };
+            pick = delegate(object sender, MouseEventArgs e) { if (moved && e.Button == MouseButtons.Left) { moved = false; dragged = null; Remember(); return; } pick0(sender, e); };
             chip.MouseUp += pick;
             name.MouseUp += pick;
             x.Click += delegate { Later(delegate { Close(t); }); };
             new ToolTip().SetToolTip(x, "Close tab (Ctrl+W)");
             chip.Paint += delegate(object sender, PaintEventArgs e)
             {
-                if (t != tab) { Haze(chip, e.Graphics); using (Pen line = new Pen(mod.look.Shade(6))) e.Graphics.DrawLine(line, chip.Width - 1, 6, chip.Width - 1, chip.Height - 6); return; }
-                using (Pen bracket = new Pen(mod.look.Shade(4), 2)) { e.Graphics.DrawLine(bracket, 1, 1, 9, 1); e.Graphics.DrawLine(bracket, 1, 1, 1, 9); }
+                Graphics g = e.Graphics;
+                if (t != tab)
+                {
+                    Haze(chip, g);
+                    using (Pen line = new Pen(mod.look.Shade(6))) g.DrawLine(line, chip.Width - 1, 6, chip.Width - 1, chip.Height - 6);
+                    // The other half of a split screen: a line under it, fainter than the picked tab's.
+                    if (Split && (t == splitA || t == splitB)) using (Pen half = new Pen(Color.FromArgb(150, mod.look.Shade(4)), 2)) g.DrawLine(half, 8, chip.Height - 1, chip.Width - 8, chip.Height - 1);
+                    return;
+                }
+                // Just picked: a flash that fades, and the corner bracket springs out and back.
+                if (t.Pop > 0) using (SolidBrush flash = new SolidBrush(Color.FromArgb((int)(70 * t.Pop), mod.look.Shade(5)))) g.FillRectangle(flash, 0, 0, chip.Width, chip.Height);
+                int arm = 9 + (int)(10 * t.Pop);
+                using (Pen bracket = new Pen(mod.look.Shade(4), 2)) { g.DrawLine(bracket, 1, 1, arm, 1); g.DrawLine(bracket, 1, 1, 1, arm); }
             };
             chip.Controls.Add(name);
             chip.Controls.Add(x);
@@ -5232,7 +5248,7 @@ public class CapriInternalBrowser : ICapriMod
 
         private const string AutoPop = "(async function(){if(document.pictureInPictureElement)return;var v=[].slice.call(document.querySelectorAll('video')).filter(function(e){return!e.paused})[0];if(v)try{await v.requestPictureInPicture();}catch(e){}})()";
 
-        private const string SwitchFade = "(function(){var d=document.documentElement;if(d&&d.animate&&!matchMedia('(prefers-reduced-motion: reduce)').matches)d.animate([{opacity:.6},{opacity:1}],{duration:140,easing:'cubic-bezier(.22,1,.36,1)'});return 1})()";
+        private const string SwitchFade = "(function(){var d=document.documentElement;if(d&&d.animate&&!matchMedia('(prefers-reduced-motion: reduce)').matches)d.animate([{opacity:.45},{opacity:1}],{duration:200,easing:'cubic-bezier(.22,1,.36,1)'});return 1})()";
         private void Select(Tab t)
         {
             if (t == null) return;
@@ -5259,12 +5275,21 @@ public class CapriInternalBrowser : ICapriMod
                 t.Viewer.Script("if(document.pictureInPictureElement)document.exitPictureInPicture()");
             }
             t.Used = DateTime.UtcNow;
+            bool woke = t.Asleep;
             t.Asleep = false;
             tab = t;
+            if (woke) Retitle(t, t.Title);
+            if (was != t && t.Chip != null && !t.Chip.IsDisposed)
+            {
+                Panel popped = t.Chip;
+                Ease(popped, 320, delegate(float e) { t.Pop = 1 - e; popped.Invalidate(true); }, delegate { t.Pop = 0; popped.Invalidate(true); });
+            }
+            if (was != null && was != t && was.Chip != null && !was.Chip.IsDisposed) was.Chip.Invalidate(true);
             adding = false;
             asking = false;
-            foreach (Tab other in tabs) other.Viewer.Control.Visible = other == t;
-            if (was != null && was != t) t.Viewer.Script(SwitchFade);
+            bool sideBySide = Split && (t == splitA || t == splitB) && (was == splitA || was == splitB);
+            ShowPages(t);
+            if (was != null && was != t && !sideBySide) t.Viewer.Script(SwitchFade);
             address.Text = t.OnReader ? (t.Page == null ? (t.Address ?? "") : t.Page.Query) : (t.Address ?? "");
             loading.Visible = t.Busy && !full;
             if (TitleChanged != null) TitleChanged(t.Title);
@@ -5273,6 +5298,90 @@ public class CapriInternalBrowser : ICapriMod
             Recolor();
             Slide(true);
             ShowStar();
+        }
+
+        // Split screen: two tabs side by side. Picking either shows both; picking another tab shows just that one.
+        private Tab splitA, splitB;
+        private float splitAt = .5f, splitGrow = 1;
+        private Panel splitBar;
+        private bool Split { get { return splitA != null && splitB != null && tabs.Contains(splitA) && tabs.Contains(splitB) && !full; } }
+
+        private void ShowPages(Tab t)
+        {
+            bool two = Split && (t == splitA || t == splitB);
+            foreach (Tab other in tabs)
+            {
+                Control page = other.Viewer.Control;
+                bool half = two && (other == splitA || other == splitB);
+                if (!half && page.Dock != DockStyle.Fill) page.Dock = DockStyle.Fill;
+                if (half) page.Dock = DockStyle.None;
+                page.Visible = other == t || half;
+            }
+            if (splitBar != null) splitBar.Visible = two;
+            if (two) LaySplit();
+            foreach (Tab one in ChipTabs()) one.Chip.Invalidate();
+        }
+
+        private void LaySplit()
+        {
+            if (!Split || (tab != splitA && tab != splitB)) return;
+            int x0 = 0;
+            foreach (Control c in holder.Controls) if (c.Visible && c.Dock == DockStyle.Left) x0 = Math.Max(x0, c.Right);
+            int wide = holder.ClientSize.Width - x0, high = holder.ClientSize.Height;
+            float at = 1 - (1 - splitAt) * splitGrow;
+            int mid = x0 + Math.Max(120, Math.Min(wide - 120, (int)(wide * at)));
+            if (splitBar == null)
+            {
+                splitBar = new Panel { Width = 6, Cursor = Cursors.SizeWE, Tag = "grip" };
+                bool held = false, lit = false;
+                splitBar.Paint += delegate(object sender, PaintEventArgs e)
+                {
+                    e.Graphics.Clear(mod.look.Shade(0));
+                    using (SolidBrush handle = new SolidBrush(held || lit ? mod.look.Shade(5) : mod.look.Shade(6))) e.Graphics.FillRectangle(handle, 2, splitBar.Height / 2 - 20, 2, 40);
+                };
+                splitBar.MouseEnter += delegate { lit = true; splitBar.Invalidate(); };
+                splitBar.MouseLeave += delegate { lit = false; splitBar.Invalidate(); };
+                splitBar.MouseDown += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) { held = true; splitBar.Capture = true; } };
+                splitBar.MouseMove += delegate
+                {
+                    if (!held) return;
+                    int left = 0;
+                    foreach (Control c in holder.Controls) if (c.Visible && c.Dock == DockStyle.Left) left = Math.Max(left, c.Right);
+                    splitAt = Math.Max(.2f, Math.Min(.8f, (holder.PointToClient(Cursor.Position).X - left) / (float)Math.Max(1, holder.ClientSize.Width - left)));
+                    LaySplit();
+                };
+                splitBar.MouseUp += delegate { held = false; splitBar.Capture = false; splitBar.Invalidate(); };
+                splitBar.DoubleClick += delegate { splitAt = .5f; LaySplit(); };
+                new ToolTip().SetToolTip(splitBar, "Drag to resize. Double-click to make them even.");
+                holder.Controls.Add(splitBar);
+                holder.Resize += delegate { if (splitA != null) ShowPages(tab); };
+            }
+            splitA.Viewer.Control.Bounds = new Rectangle(x0, 0, mid - 3 - x0, high);
+            splitB.Viewer.Control.Bounds = new Rectangle(mid + 3, 0, Math.Max(0, x0 + wide - mid - 3), high);
+            splitBar.Bounds = new Rectangle(mid - 3, 0, 6, high);
+            splitBar.Visible = true;
+            splitBar.BringToFront();
+            foreach (Panel p in new[] { notes, marks, cleaner, pwPanel, sideSetup }) if (p.Visible && p.Dock != DockStyle.Left) p.BringToFront();
+        }
+
+        // This tab beside the one in front (or, from the one in front, beside the last one used, or a new tab).
+        internal void SplitWith(Tab t)
+        {
+            Tab other = t != tab ? tab : null;
+            if (other == null) foreach (Tab o in tabs) if (o != t && !o.Hidden && (other == null || o.Used > other.Used)) other = o;
+            if (other == null) { OpenTab(null, null, false); other = tabs[tabs.Count - 1]; }
+            splitA = tabs.IndexOf(other) < tabs.IndexOf(t) ? other : t;
+            splitB = splitA == t ? other : t;
+            splitAt = .5f;
+            if (tab != t) Select(t); else ShowPages(t);
+            // The right half slides in from the edge.
+            Ease(holder, 260, delegate(float e) { splitGrow = e; LaySplit(); }, delegate { splitGrow = 1; LaySplit(); });
+        }
+
+        internal void Unsplit()
+        {
+            splitA = splitB = null;
+            if (tab != null) ShowPages(tab);
         }
 
         private void Close(Tab t)
@@ -5348,6 +5457,7 @@ public class CapriInternalBrowser : ICapriMod
             int from = tabs.IndexOf(t);
             to = Math.Max(0, Math.Min(tabs.Count - 1, to));
             if (from < 0 || from == to) return;
+            GlideChips();
             tabs.RemoveAt(from);
             tabs.Insert(to, t);
             chips.SuspendLayout();
@@ -5356,6 +5466,49 @@ public class CapriInternalBrowser : ICapriMod
             chips.Controls.SetChildIndex(plus, chips.Controls.Count - 1);
             chips.ResumeLayout();
             Slide(true);
+        }
+
+        // The tabs that have a place in the strip (Capri's hidden Discord tab has none), in order.
+        private List<Tab> ChipTabs()
+        {
+            List<Tab> shown = new List<Tab>();
+            foreach (Tab one in tabs) if (one.Chip != null && !one.Chip.IsDisposed) shown.Add(one);
+            return shown;
+        }
+
+        // While tabs are moving, the strip's own layout waits and each tab glides to its place (the dragged one is the mouse's).
+        private Tab dragged;
+        private System.Windows.Forms.Timer glide;
+        private int glideBase, glideStep;
+        private void GlideChips()
+        {
+            List<Tab> shown = ChipTabs();
+            if (glide != null || shown.Count == 0) return;
+            glideBase = int.MaxValue;
+            foreach (Tab one in shown) glideBase = Math.Min(glideBase, one.Chip.Left);
+            glideStep = shown[0].Chip.Width + shown[0].Chip.Margin.Right;
+            chips.SuspendLayout();
+            glide = new System.Windows.Forms.Timer { Interval = 15 };
+            glide.Tick += delegate
+            {
+                bool moving = dragged != null;
+                int i = 0;
+                foreach (Tab one in ChipTabs())
+                {
+                    int goal = glideBase + i++ * glideStep, x = one.Chip.Left;
+                    if (one == dragged || x == goal) continue;
+                    one.Chip.Left = Math.Abs(goal - x) < 2 ? goal : x + (int)Math.Round((goal - x) * .3f);
+                    moving = true;
+                }
+                Slide(false);
+                if (moving) return;
+                glide.Stop();
+                glide.Dispose();
+                glide = null;
+                chips.ResumeLayout(true);
+                Slide(false);
+            };
+            glide.Start();
         }
 
         internal string MoveSaid(string where)
@@ -5376,7 +5529,7 @@ public class CapriInternalBrowser : ICapriMod
         private void Retitle(Tab t, string title)
         {
             t.Title = string.IsNullOrWhiteSpace(title) ? T(0) : Regex.Replace(title, @"\s+", " ").Trim();
-            if (t.Name != null) t.Name.Text = (t.Private ? "\u25D0 " : "") + (t.Muted ? "\u266A\u00D7 " : t.Playing ? "\u266A " : "") + (Masked(t) ? "Guess the Site" : t.Title);
+            if (t.Name != null) t.Name.Text = (t.Asleep ? "\u263E " : "") + (t.Private ? "\u25D0 " : "") + (t.Muted ? "\u266A\u00D7 " : t.Playing ? "\u266A " : "") + (Masked(t) ? "Guess the Site" : t.Title);
             if (t == tab && TitleChanged != null) TitleChanged(Masked(t) ? "Guess the Site" : t.Title);
         }
 
@@ -7704,7 +7857,7 @@ public class CapriInternalBrowser : ICapriMod
         private sealed class Race { public Tab Tab; public string Goal, From, Code, Level; public string[] Route; public DateTime Started, Ended; public int Clicks, Limit, Helps, HelpUntil; public bool Cheated, Thinking; public string[] HelpText; }
         private Race race;
 
-        // Tabs nobody has looked at for 20 minutes are suspended (not while they play sound, race or show her pages); a click wakes them.
+        // Snooze: tabs nobody has looked at for 20 minutes are suspended (not while they play sound, race or show her pages); a click wakes them.
         private void Doze()
         {
             if (!Flag("sleep", true)) return;
@@ -7712,7 +7865,7 @@ public class CapriInternalBrowser : ICapriMod
             foreach (Tab w in tabs) if (w != tab && !w.Asleep && !w.Playing && !w.OnReader && w.Special == null && (race == null || race.Tab != w) && !Watched(w) && (DateTime.UtcNow - w.Used).TotalMinutes > 20) sleepy.Add(w);
             if (sleepy.Count == 0) return;
             long before = WebMemory();
-            foreach (Tab w in sleepy) if (w.Viewer.Sleep()) w.Asleep = true;
+            foreach (Tab w in sleepy) if (w.Viewer.Sleep()) { w.Asleep = true; Retitle(w, w.Title); }
             System.Windows.Forms.Timer check = new System.Windows.Forms.Timer { Interval = 5000 };
             check.Tick += delegate
             {
@@ -12520,7 +12673,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             { "darkweb", "Dark mode for all sites", "0", "look" },
             { "timed", "3-minute limit on wiki races", "0", "capri" },
             { "boot", "Start-up animation", "1", "capri" },
-            { "sleep", "Put unused tabs to sleep", "1", "tabs" },
+            { "sleep", "Snooze tabs after 20 minutes unused", "1", "tabs" },
             { "autopip", "Pop videos out when switching tabs", "0", "video" },
             { "capmenu", "Capri-styled right-click menu", "1", "look" },
             { "lookask", "Ask before looking things up", "1", "research" },
@@ -12666,6 +12819,10 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             Item(i, t.Muted ? T(55) : T(54), "Ctrl+M", t.Viewer.Modern, delegate { Mute(t); });
             Item(i, "Add to bookmarks", "Ctrl+D", !t.OnReader && t.Address != null, delegate { AddToDial(t.Address); });
             Item(i, "Copy link address", null, !t.OnReader && t.Address != null, delegate { try { Clipboard.SetText(t.Address); } catch (Exception) { } });
+            i.Add(new ToolStripSeparator());
+            if (Split && (t == splitA || t == splitB)) Item(i, "Close split screen", null, true, Unsplit);
+            else Item(i, t == tab ? "Split screen" : "Split screen with this tab", null, !t.Hidden && !full, delegate { SplitWith(t); });
+            Item(i, "Snooze this tab", null, t != tab && !t.Asleep && !t.OnReader && t.Viewer.Modern, delegate { if (t.Viewer.Sleep()) { t.Asleep = true; Retitle(t, t.Title); } });
             i.Add(new ToolStripSeparator());
             Item(i, T(63), "Ctrl+W", true, delegate { Close(t); });
             Item(i, T(60), null, tabs.Count > 1, delegate { foreach (Tab other in tabs.ToArray()) if (other != t) Close(other); Select(t); });
@@ -13251,6 +13408,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
             v.Control.Dock = DockStyle.Fill;
             v.Control.Visible = t == tab;
             holder.Controls.Add(v.Control);
+            // In split screen, clicking into either half makes it the tab in front (address bar and all).
+            v.Control.GotFocus += delegate { if (Split && tab != t && (t == splitA || t == splitB)) Select(t); };
+            if (Split && (t == splitA || t == splitB)) Later(delegate { if (tab != null) ShowPages(tab); });
             return v;
         }
 
