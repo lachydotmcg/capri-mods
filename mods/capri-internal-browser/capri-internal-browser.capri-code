@@ -5007,7 +5007,9 @@ public class CapriInternalBrowser : ICapriMod
         if (b == null || b.IsDisposed) OpenBrowser(null, job.Link); else InBrowser(delegate(Browser now) { now.OpenTab(null, job.Link, true); return null; });
         Settle(true);
       }
-      string[] steps = job.Steps.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries);
+      List<string> pieces = new List<string>();
+      foreach (string line in job.Steps.Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)) pieces.AddRange(Pieces(line));
+      string[] steps = pieces.ToArray();
       List<string> missed = new List<string>();
       int i;
       for (i = from; i < steps.Length && !stopped && !Halted; i++)
@@ -5111,9 +5113,18 @@ public class CapriInternalBrowser : ICapriMod
     string meant = theirs ? Reword(step) : null;
     if (meant != null)
     {
-      capri.Log("job step \"" + step + "\" -> " + meant);
-      string did = Step(meant, false);
-      if (did == null || !did.StartsWith("skipped ", StringComparison.Ordinal)) return did;
+      capri.Log("job step \"" + step + "\" -> " + meant.Replace("\n", " | "));
+      string did = null;
+      bool any = false;
+      foreach (string one in meant.Split('\n'))
+      {
+        if (stopped || Halted) return null;
+        did = Step(one, false);
+        if (did != null && did.StartsWith("ASK:", StringComparison.Ordinal)) return did;
+        if (did == null || !did.StartsWith("skipped ", StringComparison.Ordinal)) any = true;
+        Thread.Sleep(700);
+      }
+      if (any) return null;
     }
     return "skipped \"" + step + "\" (not something she knows how to do)";
   }
@@ -5160,16 +5171,44 @@ public class CapriInternalBrowser : ICapriMod
     ManualResetEvent done = new ManualResetEvent(false);
     try
     {
-      capri.Brain.Ask("You're Capri. One step of the user's custom browser job is in their own words. Reply with only the one command they meant, worded exactly like one of these: "
+      capri.Brain.Ask("You're Capri. One step of the user's custom browser job is in their own words. Reply with only the command they meant (or a few, one a line, if it does a few things), each worded exactly like one of these: "
         + StepForms() + ". "
         + "Reply NONE if it isn't one of those, needs a password or card details, or isn't safe.", "Their step: \"" + Clip(step.Replace("\"", ""), 200) + "\"", delegate(string a) { answer = a; done.Set(); });
-      done.WaitOne(20000);
+      done.WaitOne(40000);
     }
     catch { }
-    meant = BrainLine(answer).Trim('"', '\'', '`', '.', ' ');
-    if (meant.Length == 0 || meant.Length > 120 || Regex.IsMatch(meant, @"^none\b", Plain) || meant.Equals(step, StringComparison.OrdinalIgnoreCase)) meant = null;
+    string name;
+    JobFromAnswer(answer, out name, out meant);
+    if (meant.Length == 0 || meant.Length > 600 || Regex.IsMatch(meant, @"^none\b", Plain) || meant.Equals(step, StringComparison.OrdinalIgnoreCase)) meant = null;
     lock (reworded) reworded[step] = meant;
     return meant;
+  }
+
+  // One line of a job as the steps in it: "youtube.com play something chill full screen" is open youtube.com, play something
+  // chill, full screen. Lines that say, type, search, ask or remind keep their commas.
+  private static List<string> Pieces(string line)
+  {
+    List<string> got = new List<string>();
+    string l = line.Trim().TrimEnd('.');
+    if (l.Length == 0) return got;
+    if (Regex.IsMatch(l, @"^(?:say|type|search|ask|remind)\b", Plain)) { got.Add(l); return got; }
+    // A site, then more: open the site first.
+    Match site = Regex.Match(l, @"^(?:(?:open|go\s+to|go|visit)\s+)?(?<site>(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?)(?:[\s,]+(?:and\s+|then\s+)*(?<rest>.+))?$", Plain);
+    if (site.Success && Regex.IsMatch(site.Groups["site"].Value, @"\.[a-z]{2,}(?:/|$)", Plain))
+    {
+      got.Add("open " + site.Groups["site"].Value);
+      if (site.Groups["rest"].Success) got.AddRange(Pieces(site.Groups["rest"].Value));
+      return got;
+    }
+    foreach (string part in Regex.Split(l, @"\s*(?:,\s*(?:and\s+)?(?:then\s+)?|;\s*|\s+(?:and\s+)?then\s+|\s+and\s+(?=(?:play|pause|open|go|click|search|scroll|say|wait|volume|speed|full|find|summari|read|add|put|take|mute|unmute|next|turn|make)\w*\b))", Plain))
+    {
+      string p = part.Trim();
+      // "... full screen" on the end is its own step.
+      Match full = Regex.Match(p, @"^(?<a>.+?)\s+(?:in\s+|and\s+(?:go\s+|make\s+it\s+)?)?full\s*screen(?:\s+it)?$", Plain);
+      if (full.Success && !Regex.IsMatch(full.Groups["a"].Value, @"^(?:go|make\s+it|put\s+it|turn)$", Plain)) { got.Add(full.Groups["a"].Value); got.Add("full screen"); }
+      else if (p.Length > 0) got.Add(p);
+    }
+    return got;
   }
 
   // ---- Custom jobs by voice ----
