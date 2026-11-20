@@ -4932,16 +4932,38 @@ public class CapriInternalBrowser : ICapriMod
           + "Split a step that does two things. Keep everything they meant, in the same order, and add nothing else. Keep a step you can't reword as they wrote it, spelled right. Never add passwords or card details. "
           + "Fix the job's name's spelling too, keeping any / between names. Reply exactly like this and nothing else:\nNAME: <name>\nSTEPS:\n<one step a line>",
           "Name: " + Clip(OneLine(trigger).Replace("<<<", ""), 100) + "\nSteps:\n" + Clip((steps ?? "").Replace("<<<", ""), 2000), delegate(string a) { answer = a; got.Set(); });
-        got.WaitOne(30000);
+        got.WaitOne(60000);
       }
       catch { }
-      Match m = Regex.Match((answer ?? "").Replace("\r", "").Replace("**", ""), @"NAME:\s*(?<n>[^\n]*)\n+\s*STEPS:\s*\n(?<s>[\s\S]*)$", Plain);
-      if (!m.Success) { Tell("I couldn't learn that one, choom. Try again in a sec."); done(null, null); return; }
-      List<string> lines = new List<string>();
-      foreach (string line in m.Groups["s"].Value.Split('\n')) { string l = Regex.Replace(line, @"^\s*(?:[-*\u2022]|\d+[.)])\s*", "").Trim().Trim('`'); if (l.Length > 0 && lines.Count < 20) lines.Add(l); }
-      string name = m.Groups["n"].Value.Trim().Trim('"', '\u201c', '\u201d');
-      done(name.Length > 1 ? name : OneLine(trigger).Trim('"'), string.Join("\n", lines.ToArray()));
+      if (string.IsNullOrEmpty(answer)) { Tell("My brain took too long to learn that one, choom. Try again in a sec."); done(null, null); return; }
+      string name, list;
+      List<string> lines = JobFromAnswer(answer, out name, out list);
+      if (lines.Count == 0) { Tell("My brain didn't give me any steps for that one, choom. Try again, or word a step or two yourself."); done(null, null); return; }
+      done(name.Length > 1 ? name : OneLine(trigger).Trim('"'), list);
     });
+  }
+
+  // The name and steps from her brain's answer, however it laid them out.
+  internal static List<string> JobFromAnswer(string answer, out string name, out string list)
+  {
+    string text = Regex.Replace((answer ?? "").Replace("\r", "").Replace("**", ""), "```\\w*", "");
+    Match n = Regex.Match(text, @"(?:^|\s)(?:job\s*)?name\s*:\s*(?<n>.+?)(?=\s+steps?\s*:|\n|$)", Plain);
+    Match st = Regex.Match(text, @"(?:^|\s)steps?\s*:[ \t]*(?<s>[\s\S]*)$", Plain);
+    string body = st.Success ? st.Groups["s"].Value : n.Success ? text.Remove(n.Index, n.Length) : text;
+    name = n.Success ? n.Groups["n"].Value.Trim().Trim('"', '\u201c', '\u201d', '`') : "";
+    List<string> lines = new List<string>();
+    foreach (string line in body.Split('\n'))
+    {
+      string l = Regex.Replace(line, @"^\s*(?:[-*\u2022>]|\d+[.):])\s*", "").Trim().Trim('`', '"', '\u201c', '\u201d').Trim();
+      // Skip "Here's your fixed job:" and the like.
+      if (l.Length == 0 || l.EndsWith(":") || Regex.IsMatch(l, @"^(?:name|steps?)\s*:", Plain) || lines.Count >= 20) continue;
+      lines.Add(l.Length > 120 ? l.Substring(0, 120) : l);
+    }
+    // All the steps on one line: "open youtube.com, then full screen".
+    if (lines.Count == 1) lines = new List<string>(Regex.Split(lines[0], @"\s*(?:,\s*(?:and\s+)?(?:then\s+)?|\s+then\s+|\s*\|\s*)", Plain));
+    lines.RemoveAll(delegate(string l) { return l.Trim().Length == 0; });
+    list = string.Join("\n", lines.ToArray());
+    return lines;
   }
 
   internal void DropJob(int at)
