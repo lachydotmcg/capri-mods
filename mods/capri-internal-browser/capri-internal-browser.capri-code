@@ -390,7 +390,6 @@ public class CapriInternalBrowser : ICapriMod
     if (WhatsNewAsk.IsMatch(said)) { newsAsked = true; return false; }
     if (ResearchHeard(said)) return true;
     if (RunJobFor(said) || JobVoice(said)) return true;
-    if (LearnAsk.IsMatch(said)) { capri.Say("Learning it, choom."); ThreadPool.QueueUserWorkItem(delegate { string did = Step("capri " + Regex.Replace(said, @"^capri\s+", "", Plain), false); if (did != null) capri.Say(did); }); return true; }
     if (JobsAsk.IsMatch(said)) { WithBrowser(delegate(Browser now) { now.ShowJobs(); return null; }); capri.Say("Here are your custom jobs, choom."); return true; }
     if (Straight(said)) return true;
     if (ShotAsked(said)) return true;
@@ -4033,9 +4032,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "dbdfbc240bcb5d6117801f3d3584de1239c5ffa1";
+  private const string AddonsCommit = "69e420cc79c131f74caf95cf354bb16bd3913910";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=26e45a5b959105a6b18e856d6d66bdf44bca40c2ab00774e55933771a7f59508;whats-new.txt=ca289acb5d3fd76785d659b5981f42b100110f75b0dd2c0e94bdf09a99d2d0d5";
+  private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=5a0179929598fb6d7a61c927b07bcebe10e5e528e351607c4aa84f2124bd83e4;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/breach.html=1f9b4d1fe02cf589195a9a24286599fd4fcce7bf27a76ce3a5038405db4a150c;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/mystery.html=99078fcf6574514f3cb99bb9b84e24783904893b407970e0388f3543d19b4695;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=b003eaaf0c2b8c046bdb755b06a886125cefaa54f62add0d220c0d311ab01354";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -4914,11 +4913,11 @@ public class CapriInternalBrowser : ICapriMod
     return null;
   }
 
-  // Capri Rewrite: the job with its spelling fixed and each step worded the way she knows works. Calls back with the new
+  // Capri learn (on a job): the job with its spelling fixed and each step worded the way she knows works. Calls back with the new
   // name and steps (or nulls when her brain's offline or didn't answer).
   internal void RewriteJob(string trigger, string steps, Action<string, string> done)
   {
-    if (capri == null || !capri.Brain.Ready) { Tell("My brain's offline right now, so I can't rewrite it, choom."); done(null, null); return; }
+    if (capri == null || !capri.Brain.Ready) { Tell("My brain's offline right now, so I can't learn it, choom."); done(null, null); return; }
     ThreadPool.QueueUserWorkItem(delegate
     {
       string answer = null;
@@ -4926,7 +4925,7 @@ public class CapriInternalBrowser : ICapriMod
       try
       {
         capri.Brain.Ask("You're Capri. Learn what the user's custom browser job is meant to do, then fix it so it works. Correct the spelling. Put each step on its own line as one command, worded like these: "
-          + string.Join(" | ", Browser.JobChips) + " | open <site> | click <words on the page> | type <words> in the <box> | search <words> | find me <thing> | play <song or video> | scroll up | go back | new tab | close this tab | translate this page | remind me in <time> to <thing> | Capri learn <part of the page> | ask <question>. "
+          + string.Join(" | ", Browser.JobChips) + " | open <site> | click <words on the page> | type <words> in the <box> | search <words> | find me <thing> | play <song or video> | scroll up | go back | new tab | close this tab | translate this page | remind me in <time> to <thing> | summarise <part of the page> | ask <question>. "
           + "Split a step that does two things. Keep everything they meant, in the same order, and add nothing else. Keep a step you can't reword as they wrote it, spelled right. Never add passwords or card details. "
           + "Fix the job's name's spelling too, keeping any / between names. Reply exactly like this and nothing else:\nNAME: <name>\nSTEPS:\n<one step a line>",
           "Name: " + Clip(OneLine(trigger).Replace("<<<", ""), 100) + "\nSteps:\n" + Clip((steps ?? "").Replace("<<<", ""), 2000), delegate(string a) { answer = a; got.Set(); });
@@ -4934,7 +4933,7 @@ public class CapriInternalBrowser : ICapriMod
       }
       catch { }
       Match m = Regex.Match((answer ?? "").Replace("\r", "").Replace("**", ""), @"NAME:\s*(?<n>[^\n]*)\n+\s*STEPS:\s*\n(?<s>[\s\S]*)$", Plain);
-      if (!m.Success) { Tell("I couldn't rewrite that one, choom. Try again in a sec."); done(null, null); return; }
+      if (!m.Success) { Tell("I couldn't learn that one, choom. Try again in a sec."); done(null, null); return; }
       List<string> lines = new List<string>();
       foreach (string line in m.Groups["s"].Value.Split('\n')) { string l = Regex.Replace(line, @"^\s*(?:[-*\u2022]|\d+[.)])\s*", "").Trim().Trim('`'); if (l.Length > 0 && lines.Count < 20) lines.Add(l); }
       string name = m.Groups["n"].Value.Trim().Trim('"', '\u201c', '\u201d');
@@ -5040,22 +5039,21 @@ public class CapriInternalBrowser : ICapriMod
     if ((m = Regex.Match(s, @"^(?:set\s+)?speed\s+(?:to\s+)?([\d.]+)x?$")).Success) return BrowserTool("speed " + m.Groups[1].Value);
     if (Regex.IsMatch(s, @"^(?:read\s+(?:it|this|the\s+page)\s+(?:out|aloud|out\s+loud)|read\s+aloud|read\s+it\s+to\s+me)$")) return BrowserTool("readaloud");
     Match sum = Regex.Match(s, @"^(?:summari[sz]e|sum\s+(?:it\s+)?up|tl;?dr|(?:give\s+me|get)\s+(?:a\s+|the\s+)?(?:summary|rundown|gist|tl;?dr)(?:\s+of)?)(?:\s+(?:it|this|the\s+page))?(?:\s+(?<what>.+))?$"
-      + @"|^(?<learn>(?:capri\s+)?learn)(?:\s+(?:it|this|the\s+page|about\s+(?:it|this|the\s+page)))?(?:\s+(?:about\s+)?(?<what>.+))?$"
       + @"|^(?<look>check(?!\s+(?:my|for|if|whether)\b)(?:\s+out)?|look\s+(?:at|through|over)|go\s+(?:through|over)|read\s+through|understand|explain|study|figure\s+out|break\s+down)\s+(?<what>.+?)(?:\s+(?:and|then)\s+(?:tell|explain\s+it\s+to|show)\s+me.*)?$");
     if (sum.Success)
     {
       // "summarise the comments": just the part they want.
       string want = sum.Groups["what"].Success ? Regex.Replace(sum.Groups["what"].Value, @"^(?:of|on|from)\s+", "") : null;
-      bool explain = sum.Groups["look"].Success, learn = sum.Groups["learn"].Success;
+      bool explain = sum.Groups["look"].Success;
       string why, title = null, url = null;
       string text = OnPage(Viewer.ReadScript, out why);
       if (text == null) return why;
-      if (learn) OnPage(Learning(look.Colors), out why);
+      OnPage(Reading(look.Colors), out why);
       InBrowser(delegate(Browser b) { title = b.FrontTitle; url = b.FrontAddress; return null; });
       ManualResetEvent done = new ManualResetEvent(false);
-      Summarise(title, url, text, delegate { done.Set(); }, learn ? "Learn " + (want == null ? "this page" : "this part of the page: " + want) + ", then teach them what you learned, in a few sentences, like a friend who just read it. Work out what they're after; if it isn't on the page, say so." : want == null ? null : (explain ? "Read this part of the page and tell them what it means for them, in a few sentences: " : "Sum up just this from the page, in a few sentences: ") + want + ". Work out what they're after from their words; if it isn't on the page, say so.");
+      Summarise(title, url, text, delegate { done.Set(); }, want == null ? null : (explain ? "Read this part of the page and tell them what it means for them, in a few sentences: " : "Sum up just this from the page, in a few sentences: ") + want + ". Work out what they're after from their words; if it isn't on the page, say so.");
       done.WaitOne(60000);
-      if (learn) OnPage("window.capriLearnDone&&capriLearnDone()", out why);
+      OnPage("window.capriReadDone&&capriReadDone()", out why);
       return null;
     }
     if ((m = Regex.Match(s, @"^(?:then\s+)?(?:add|put|save|write)\s+(?:it|that|this|the\s+page)?\s*(?:to|in|into)\s+(?:my\s+|the\s+)?(?<book>[\w' -]*?)\s*notes?(?:book)?$")).Success)
@@ -5095,18 +5093,18 @@ public class CapriInternalBrowser : ICapriMod
     return "skipped \"" + step + "\" (not something she knows how to do)";
   }
 
-  // Capri learning a page: a scan line in her colours, paragraphs lighting up as she reads, and a box counting the words.
-  // capriLearnDone() finishes it (LEARNED, then it fades); it never takes clicks and goes by itself after 90 seconds.
-  private static string Learning(string[] c)
+  // Capri reading a page for a job: a scan line in her colours, paragraphs lighting up as she reads, and a box counting the
+  // words. capriReadDone() finishes it (READ, then it fades); it never takes clicks and goes by itself after 90 seconds.
+  private static string Reading(string[] c)
   {
-    return "(function(a,b,bg,fg){if(window.capriLearnDone)capriLearnDone(true);var d=document,h=innerHeight,still=matchMedia('(prefers-reduced-motion: reduce)').matches;"
+    return "(function(a,b,bg,fg){if(window.capriReadDone)capriReadDone(true);var d=document,h=innerHeight,still=matchMedia('(prefers-reduced-motion: reduce)').matches;"
       + "function el(css,txt){var e=d.createElement('div');e.style.cssText=css;if(txt)e.textContent=txt;return e;}"
       + "var box=el('position:fixed;inset:0;pointer-events:none;z-index:2147483647;overflow:hidden');"
       + "var band=el('position:absolute;left:0;right:0;top:0;height:90px;background:linear-gradient('+a+'00,'+a+'22 70%,'+a+'55)');"
       + "var line=el('position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,'+b+'00,'+b+','+a+' 50%,'+b+','+b+'00);box-shadow:0 0 14px '+a+',0 0 32px '+b);"
       + "var hud=el('position:absolute;top:16px;right:16px;padding:11px 18px 11px 14px;background:'+bg+'e8;border-left:3px solid '+b+';color:'+fg+';font:600 12px Bahnschrift,Segoe UI,sans-serif;letter-spacing:3px;"
       + "clip-path:polygon(0 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%);box-shadow:inset 0 0 0 1px '+a+'66');"
-      + "var top=el('display:flex;align-items:center'),dot=el('width:7px;height:7px;margin-right:10px;background:'+a+';box-shadow:0 0 8px '+a),t=el('','CAPRI // LEARNING'),n=el('margin-top:6px;font-size:11px;letter-spacing:1px;color:'+a);"
+      + "var top=el('display:flex;align-items:center'),dot=el('width:7px;height:7px;margin-right:10px;background:'+a+';box-shadow:0 0 8px '+a),t=el('','CAPRI // READING'),n=el('margin-top:6px;font-size:11px;letter-spacing:1px;color:'+a);"
       + "top.appendChild(dot);top.appendChild(t);hud.appendChild(top);hud.appendChild(n);if(!still){box.appendChild(band);box.appendChild(line);}box.appendChild(hud);(d.body||d.documentElement).appendChild(box);"
       + "var go=[line.animate([{transform:'translateY(0)'},{transform:'translateY('+h+'px)'}],{duration:1600,iterations:Infinity,easing:'ease-in-out'}),"
       + "band.animate([{transform:'translateY(-90px)'},{transform:'translateY('+(h-88)+'px)'}],{duration:1600,iterations:Infinity,easing:'ease-in-out'}),"
@@ -5115,14 +5113,11 @@ public class CapriInternalBrowser : ICapriMod
       + "var words=((d.body&&d.body.innerText)||'').split(/\\s+/).length,k=0,tick=setInterval(function(){k=Math.min(words,k+Math.ceil(words/80));n.textContent=k.toLocaleString()+' / '+words.toLocaleString()+' words';},50);"
       + "var ps=[].slice.call(d.querySelectorAll('p,h1,h2,h3,li,td')).filter(function(e){var r=e.getBoundingClientRect();return r.bottom>0&&r.top<h&&r.width>40;}).slice(0,40),i=0;"
       + "var lit=still?0:setInterval(function(){var e=ps[i++%Math.max(1,ps.length)];if(e)e.animate([{boxShadow:'inset 3px 0 0 '+a,backgroundColor:a+'22'},{boxShadow:'inset 0 0 0 '+a+'00',backgroundColor:a+'00'}],{duration:900,easing:'ease-out'});},140);"
-      + "window.capriLearnDone=function(now){clearInterval(tick);clearInterval(lit);window.capriLearnDone=null;if(now){box.remove();return;}"
-      + "go.forEach(function(x){x.cancel();});line.remove();band.remove();dot.style.background=b;t.textContent='CAPRI // LEARNED \\u2713';n.textContent=words.toLocaleString()+' words';"
+      + "window.capriReadDone=function(now){clearInterval(tick);clearInterval(lit);window.capriReadDone=null;if(now){box.remove();return;}"
+      + "go.forEach(function(x){x.cancel();});line.remove();band.remove();dot.style.background=b;t.textContent='CAPRI // READ \\u2713';n.textContent=words.toLocaleString()+' words';"
       + "box.animate([{opacity:1},{opacity:1,offset:.7},{opacity:0}],{duration:2000}).onfinish=function(){box.remove();};};"
-      + "setTimeout(function(){if(window.capriLearnDone)capriLearnDone();},90000);return 'ok';})(" + Quote(c[4]) + "," + Quote(c[5]) + "," + Quote(c[0]) + "," + Quote(c[2]) + ")";
+      + "setTimeout(function(){if(window.capriReadDone)capriReadDone();},90000);return 'ok';})(" + Quote(c[4]) + "," + Quote(c[5]) + "," + Quote(c[0]) + "," + Quote(c[2]) + ")";
   }
-
-  // "Capri learn this page", "learn about the prices": by voice, not only in jobs.
-  private static readonly Regex LearnAsk = new Regex(@"^(?:capri\s+)?learn\s+(?:this|the\s+page|it|about\s+.+|this\s+page.*|what\s+.+)$", Plain);
 
   // A step in their own words, as one she knows (or null). Remembered till Capri closes, so each wording is asked once.
   private readonly Dictionary<string, string> reworded = new Dictionary<string, string>();
@@ -9558,7 +9553,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     private string jobNote;
-    // The job Capri Rewrite just wrote, shown in its open form till it's saved.
+    // The job Capri learn just rewrote, shown in its open form till it's saved.
     private int draftAt = -1;
     private Job draft;
     private string MissedNote(string trigger)
@@ -9569,7 +9564,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // Steps you can click to add on the Custom jobs page.
-    internal static readonly string[] JobChips = { "open youtube.com", "play", "pause", "full screen", "volume 40", "speed 1.5", "next video", "skip 2 minutes", "click Shuffle", "scroll down", "search lofi beats", "type hello in the search box", "press enter", "find me a lofi playlist", "new tab", "Capri learn", "check the comments", "read it out", "screenshot to notes", "remind me in 20 minutes to stretch", "wait 5", "wait for it to load", "ask Ready?", "say Let's go, choom" };
+    internal static readonly string[] JobChips = { "open youtube.com", "play", "pause", "full screen", "volume 40", "speed 1.5", "next video", "skip 2 minutes", "click Shuffle", "scroll down", "search lofi beats", "type hello in the search box", "press enter", "find me a lofi playlist", "new tab", "summarise", "check the comments", "read it out", "screenshot to notes", "remind me in 20 minutes to stretch", "wait 5", "wait for it to load", "ask Ready?", "say Let's go, choom" };
 
     // Custom jobs: a header, how to word one (folded away once you've got some), each of theirs as a card, and a new one.
     private string JobsPage()
@@ -9587,7 +9582,8 @@ public class CapriInternalBrowser : ICapriMod
         .Append("<li><b>Steps</b>, one a line, in plain words: <code>play</code>, <code>pause</code>, <code>full screen</code>, <code>volume 40</code>, <code>speed 1.5</code>, <code>skip 2 minutes</code>, <code>next video</code>, ")
         .Append("<code>click Shuffle</code>, <code>scroll down</code>, <code>search lofi beats</code>, <code>open bbc.co.uk/news</code>, <code>summarise</code>, <code>read it out</code>, ")
         .Append("<code>add it to School notes</code>, <code>screenshot to notes</code>, <code>wait 5</code>, <code>say Let's go, choom</code>.</li>")
-        .Append("<li><b>Use whatever words you like.</b> Any of her voice commands works as a step, like <code>find me a lofi playlist</code>, and if she doesn't know a step (<code>put on something chill</code>) she works out what you meant. <code>Capri learn</code>: she reads the page with her AI and teaches you what it says (<code>Capri learn the rules</code> for just that part). <code>check the comments</code> or <code>look at the prices</code> works too. The next step waits till she's done.</li>")
+        .Append("<li><b>Use whatever words you like.</b> Any of her voice commands works as a step, like <code>find me a lofi playlist</code>, and if she doesn't know a step (<code>put on something chill</code>) she works out what you meant. <code>summarise</code>, <code>check the comments</code> or <code>look at the prices</code>: she reads that part of the page and tells you what it means. The next step waits till she's done.</li>")
+        .Append("<li><b>\u2726 Capri learn</b> (on each job): her AI learns what your job is for, fixes the spelling and rewords each step so she can do it. Check it, then Save.</li>")
         .Append("<li><code>ask Ready?</code> pauses the job till you say yes. <code>wait 2 minutes</code> and <code>wait for it to load</code> work too. Click the chips under the steps to add one.</li>")
         .Append("<li>Give it a few names with <code>/</code>: <code>\"movie night / film time\"</code>. You can also say <code>do movie night</code> or <code>start movie night</code>, and Esc stops a job.</li>")
         .Append("<li>Or just tell her: <code>make a job called movie night: open youtube.com, full screen, volume 40</code>, <code>what jobs do I have?</code>, <code>delete my movie night job</code>.</li></ol>")
@@ -9614,14 +9610,14 @@ public class CapriInternalBrowser : ICapriMod
           html.Append("</ol>").Append(MissedNote(j.Trigger)).Append("<div class='row'><button class='bt m go' onclick=\"J(").Append(i).Append(",'run')\">\u25B6 Run it</button><button class='bt' onclick='E(").Append(i)
             .Append(")'>Edit</button><button class='bt' onclick=\"J(").Append(i).Append(",'del')\">Delete</button></div></div>");
         }
-        html.Append("<div class='jf'>").Append(drafted ? "<p class='ok'>\u2726 Capri rewrote it. Check it over, then Save.</p>" : "").Append("<label>When I say</label><input class='t q' maxlength='100' placeholder='\"movie night / film time\"' value='").Append(Esc(fresh && !drafted ? "" : "\"" + shown.Trigger + "\"")).Append("'>")
+        html.Append("<div class='jf'>").Append(drafted ? "<p class='ok'>\u2726 Capri learned your job and rewrote it so she can do it. Check it over, then Save.</p>" : "").Append("<label>When I say</label><input class='t q' maxlength='100' placeholder='\"movie night / film time\"' value='").Append(Esc(fresh && !drafted ? "" : "\"" + shown.Trigger + "\"")).Append("'>")
           .Append("<label>Open this link first (optional)</label><input class='l' maxlength='600' placeholder='https://www.youtube.com/playlist?list=...' value='").Append(Esc(shown.Link)).Append("'>")
           .Append("<label>Then do these steps, one a line, in your own words</label><textarea class='s' placeholder='open youtube.com&#10;put on something chill&#10;make it full screen and a bit quieter'>").Append(Esc(shown.Steps)).Append("</textarea><div class='pal'><i>Ideas to click, or write anything and she works out what you mean:</i>");
-        foreach (string chip in JobChips) html.Append(chip == "Capri learn" ? "<b class='cl' onclick='C(this)'>" : "<b onclick='C(this)'>").Append(Esc(chip)).Append("</b>");
-        html.Append("</div><div class='row'><button class='bt m' onclick=\"J(").Append(i).Append(",'save')\">Save</button><button class='bt rw' onclick=\"J(").Append(i).Append(",'fix')\">\u2726 Capri Rewrite</button>").Append(fresh ? "" : "<button class='bt' onclick='E(" + i + ")'>Cancel</button>").Append("</div></div></div>");
+        foreach (string chip in JobChips) html.Append("<b onclick='C(this)'>").Append(Esc(chip)).Append("</b>");
+        html.Append("</div><div class='row'><button class='bt m' onclick=\"J(").Append(i).Append(",'save')\">Save</button><button class='bt rw' onclick=\"J(").Append(i).Append(",'fix')\">\u2726 Capri learn</button>").Append(fresh ? "" : "<button class='bt' onclick='E(" + i + ")'>Cancel</button>").Append("</div></div></div>");
       }
       html.Append("</div></div></div><script>function J(i,a){var c=document.getElementById('j'+i),u='").Append(Own).Append("jobs?a='+a+'&i='+i;")
-        .Append("if(a=='del'&&!confirm('Delete this job?'))return;if(a=='save'||a=='fix'){u+='&t='+encodeURIComponent(c.querySelector('.t').value)+'&l='+encodeURIComponent(c.querySelector('.l').value)+'&s='+encodeURIComponent(c.querySelector('.s').value);c.querySelector(a=='fix'?'.rw':'.jf .bt.m').classList.add(a=='fix'?'busy':'sv');if(a=='fix')c.querySelector('.rw').textContent='Rewriting...';}")
+        .Append("if(a=='del'&&!confirm('Delete this job?'))return;if(a=='save'||a=='fix'){u+='&t='+encodeURIComponent(c.querySelector('.t').value)+'&l='+encodeURIComponent(c.querySelector('.l').value)+'&s='+encodeURIComponent(c.querySelector('.s').value);c.querySelector(a=='fix'?'.rw':'.jf .bt.m').classList.add(a=='fix'?'busy':'sv');if(a=='fix'){c.querySelector('.rw').textContent='Learning...';c.classList.add('run');}}")
         .Append("if(a=='run'){c.classList.add('run');setTimeout(function(){c.classList.remove('run')},4000);}location.href=u;}")
         .Append("function E(i){var c=document.getElementById('j'+i);c.classList.toggle('ed');if(c.classList.contains('ed'))c.querySelector('.t').focus();}")
         .Append("function N(){var c=document.querySelector('.nw');c.scrollIntoView({behavior:'smooth',block:'center'});c.classList.remove('fl');void c.offsetWidth;c.classList.add('fl');setTimeout(function(){c.querySelector('.t').focus({preventScroll:true})},450);}")

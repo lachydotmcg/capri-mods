@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 970 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 969 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -50,7 +50,6 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 | Your own job's words, like "movie night" | Runs your Custom job |
 | "make a job called movie night: open youtube.com, full screen" | Makes a Custom job (she checks it with you first) |
 | "what jobs do I have?", "delete my movie night job" | Lists or deletes your jobs (deleting asks first) |
-| "Capri learn ___", like "Capri learn the comments" or "Capri learn this page" | She reads the page with her AI, learns it and teaches you what it says, while a scan line in her colours sweeps the page |
 | "pop the video out" | Puts the video in a small floating window |
 | "summarise this page" | Tells you what the page is about in a few lines |
 | "read this to me" | Reads the page out loud |
@@ -84,11 +83,11 @@ Most of these also work in Capri Browser's 22 other languages (Spanish, French, 
 
 Make your own commands from the sidebar's Custom jobs button (or say "open custom jobs", or "make a job called movie night: open youtube.com, full screen"): **what you say** in quotes (a few ways with /, like "movie night / film time"), an optional **link** to open first, and **steps**, one a line, in whatever words you like. Any of her voice commands works as a step, and a step she doesn't know goes to her AI, which works out what you meant. A few to try:
 
-- **Capri learn ___**: she reads the page (or just the part you say, like "Capri learn the comments") with her AI and teaches you what it says. "check the comments" or "look at the prices" work too.
+- **summarise**, **check the comments**, **look at the prices**: she reads the page (or just that part) and tells you what it means, while a scan line in her colours sweeps the page.
 - **ask Ready?**: the job waits for your yes ("no" stops it). **wait 2 minutes** or **wait for it to load** pause it, and Esc stops it any time.
-- **Capri Rewrite** (a button on each job): her AI learns what the job is for, fixes the spelling and rewords each step the way she knows works, then you check it and Save.
+- **✦ Capri learn** (a button on each job): her AI learns your job, fixes the spelling and rewords each step so she can do it, then you check it and Save.
 
-If she still can't do a step she tells you which, and the job's card says so. Steps are only Capri Browser's own actions: a job can't run code, she never types passwords, and clicks or typing on messaging and social sites still wait for your yes. Rewrite and steps she doesn't know send only the job's words to her brain, and Capri learn sends the page text, like "summarise" does.
+If she still can't do a step she tells you which, and the job's card says so. Steps are only Capri Browser's own actions: a job can't run code, she never types passwords, and clicks or typing on messaging and social sites still wait for your yes. Capri learn and steps she doesn't know send only the job's words to her brain, and reading steps send the page text, like "summarise" always has (never from private tabs).
 
 ## Also in it
 
