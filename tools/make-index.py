@@ -4,7 +4,7 @@ here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 root = os.path.join(here, 'mods')
 repo = 'lachydotmcg/capri-mods'
 fallback = os.path.join(here, 'tools', 'default-preview.png')
-kinds = {'.capri-mod': 'settings', '.capri-code': 'code', '.capri-skin': 'skin', '.capri-skill': 'skill'}
+kinds = {'.capri-mod': 'settings', '.capri-code': 'code', '.capri-skin': 'skin', '.capri-skill': 'skill', '.capri-companion': 'companion'}
 about_mod = {'format', 'id', 'name', 'version', 'author', 'description'}
 
 def kind(path, file):

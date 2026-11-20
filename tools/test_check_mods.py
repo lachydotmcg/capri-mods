@@ -86,6 +86,15 @@ class CheckTest(unittest.TestCase):
         result = self.run_mod('a.capri-skin', buffer.getvalue())
         self.assertIn('a key is written into the mod', self.rules(result))
 
+    def test_secret_inside_companion_pack(self):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('companion.json', json.dumps({'format': 1, 'id': 'demo', 'name': 'Demo'}))
+            zf.writestr('personality.md', 'My key is ' + FAKE_KEY)
+        result = self.run_mod('a.capri-companion', buffer.getvalue())
+        self.assertIn('a key is written into the mod', self.rules(result))
+        self.assertNotIn(FAKE_KEY, repr(result.fails))
+
     def test_settings_mod_passes(self):
         self.assertPasses(self.run_mod('a.capri-mod', json.dumps({'format': 1, 'name': 'x'})))
 

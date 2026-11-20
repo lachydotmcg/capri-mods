@@ -11,7 +11,7 @@ import io, json, os, posixpath, re, subprocess, sys, zipfile
 
 here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 root = os.path.join(here, 'mods')
-kinds = ('.capri-mod', '.capri-code', '.capri-skin', '.capri-skill', '.capri-plugin')
+kinds = ('.capri-mod', '.capri-code', '.capri-skin', '.capri-skill', '.capri-plugin', '.capri-companion')
 mb = 1024 * 1024
 
 packs = re.compile(r"FromBase64String|Aes\.|AesManaged|Rijndael|TripleDES|DESCryptoServiceProvider|GZipStream|DeflateStream|BrotliStream")
@@ -294,7 +294,7 @@ def check_folder(folder, source=None):
             check_code(result, file, data)
         elif file.endswith('.capri-plugin'):
             check_plugin(result, file, data)
-        elif file.endswith(('.capri-skin', '.capri-skill')) and zipfile.is_zipfile(io.BytesIO(data)):
+        elif file.endswith(('.capri-skin', '.capri-skill', '.capri-companion')) and zipfile.is_zipfile(io.BytesIO(data)):
             try:
                 with zipfile.ZipFile(io.BytesIO(data)) as zf:
                     for info in zf.infolist():

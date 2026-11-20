@@ -40,6 +40,7 @@ body:
         - Code mod (.capri-code)
         - Skin (.capri-skin)
         - Skill (.capri-skill)
+        - Companion pack (.capri-companion)
     validations:
       required: true
   - type: textarea

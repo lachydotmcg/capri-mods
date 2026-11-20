@@ -9,6 +9,7 @@ Every mod is checked for malware before it goes up here.
 - **Code mods** (`.capri-code`): C# that Capri compiles and runs. Code mods can do anything on your PC, so Capri asks before running one.
 - **Skins** (`.capri-skin`): a zip of pictures that replace her art.
 - **Skills** (`.capri-skill`): know-how for a game, like what to build and when. Capri follows it whenever she plays that game. Skills need Capri 0.8.4 or newer.
+- **Companion packs** (`.capri-companion`): a companion of your own, with its own name, personality, voice and art, on instead of Capri until you turn it off. They hold no code, and her safety lines always apply. Companion packs need the Capri release after 0.9.4.
 
 ## Using a mod
 In Capri 0.8.3 or newer, open Capri Mainframe and press Mods in the CAPRI band. Browse mods lists everything here with previews, downloads and ratings, and Install puts a mod in and turns it on. You can also download a mod file from here and use Import mod.
