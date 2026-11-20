@@ -1,6 +1,6 @@
 {
   "format": 1,
-  "commit": "efb307be04cdb1a164867a1cb5c6d1fafe4ebd21",
+  "commit": "8f320ba953bfe2f0ed94fc0fb1cacb4f0c99dc4d",
   "tree": [
     {"path": "mods/MK001-dice-roller/MK001-dice-roller.capri-code", "type": "blob", "sha": "d2fc7cd88cfa7b85789e78741371f7191735bc9f", "size": 249409},
     {"path": "mods/MK001-dice-roller/README.md", "type": "blob", "sha": "aefd508a141369224a2388269f57346f63222ca9", "size": 1996},
@@ -45,7 +45,7 @@
     {"path": "mods/capri-night-city/capri-night-city.capri-code", "type": "blob", "sha": "200e731fda0b5d5465f7c0f89f032ff335bb7db7", "size": 44595},
     {"path": "mods/capri-night-city/preview.png", "type": "blob", "sha": "0df1c663e8bc9740216b13425a8634f4da4d8b57", "size": 68946},
     {"path": "mods/capri-pad/README.md", "type": "blob", "sha": "29494cd015271d198d3f09775a8f671789b47826", "size": 956},
-    {"path": "mods/capri-pad/capri-pad.capri-code", "type": "blob", "sha": "ac7d58db61fd884aaeb8e60de3ec0e87f0b50c9d", "size": 43233},
+    {"path": "mods/capri-pad/capri-pad.capri-code", "type": "blob", "sha": "65895b450edc66995149b0c5e281ce32b22ebdd1", "size": 50115},
     {"path": "mods/capri-pad/preview.png", "type": "blob", "sha": "0f577695cdcefed50394ee07e620b75369408ab1", "size": 334611},
     {"path": "mods/capriplus-lyrics/README.md", "type": "blob", "sha": "35e1742668eb4481d8008c77bd46ace205d362cd", "size": 4963},
     {"path": "mods/capriplus-lyrics/capriplus-lyrics.capri-code", "type": "blob", "sha": "d00e91770928a9b6c0aa832a592fccf7ca23db67", "size": 183749},
