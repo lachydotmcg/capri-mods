@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 943 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 952 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -93,7 +93,7 @@ Make your own commands from the sidebar's Custom jobs button (or say "open custo
 - Press Esc any time to stop Capri taking control
 - Offer to skip (off until you turn it on): when Skip ad, Skip intro or Skip recap shows up, she asks, and presses it on your yes
 - Watch-along (off until you turn it on): she reacts now and then during videos
-- Catch-up: coming back to a tab that changed, she tells you what's new
+- Catch-up: coming back to a tab that changed, she tells you what's new, never what she already told you. Her memory keeps only fingerprints, never the words; it deletes itself after a day, and 30 days for pages on your Speed Dial or that she's watching. Ask her to find the same thing again today and you get a new one. Capri Cleaner can clear her day memory or her important memories.
 - History by topic and a weekly wrap-up
 - Games: Wiki Race (with co-op codes), Guess the Site, Typing Race and Survival, Quiz, and more from Browser addons
 - Achievements and browsing stats

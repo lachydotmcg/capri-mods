@@ -56,16 +56,29 @@ public class CapriInternalBrowser : ICapriMod
   private static readonly Regex Opinion = new Regex(@"^(?:who|what|which)(?:'s|\s+\w+)?\s+(?:the\s+)?(?:best|worst|greatest|goat|coolest|cutest|funniest|better|worse)(?:\s+(?:one|ever|of all time))?$", Plain);
   private static readonly Regex Weather = new Regex(@"\b(weather|forecast|temperature|raining|rain|snow|snowing|sunny|hot out|cold out)\b", Plain);
   // A whole answer to her offer, like "yeah sure please" or "nah I'm good", not a new ask that starts with "show me".
-  private static readonly Regex Yes = new Regex(@"^(?:(?:yes|yeah|yep|yup|ya|yea|ye|yah|yass?|sure|ok|okay|k|kk|alright|all\s+right|of\s+course|definitely|absolutely|certainly|totally|for\s+sure|sure\s+thing|why\s+not|"
-    + @"go\s+on|go\s+for\s+it|do\s+it|please\s+do|go\s+ahead|please|bring\s+it\s+up|show\s+me|show\s+it|open\s+it|pull\s+it\s+up|let'?s\s+see|let'?s\s+do\s+it|let'?s\s+go|"
+  private static readonly Regex Yes = new Regex(@"^(?:(?:yes+|yeah|yep|yup|ya+|yea|ye|yah|yh|yuh|yass?|bet|aight|ight|ofc|deffo|def|okie|okey|cool|perfect|sure|ok|okay|k|kk|alright|all\s+right|of\s+course|definitely|absolutely|certainly|totally|for\s+sure|sure\s+thing|why\s+not|"
+    + @"go\s+on(?:\s+then)?|go\s+for\s+it|do\s+it|please\s+do|go\s+ahead|please|bring\s+it\s+up|show\s+me|show\s+it|open\s+it|pull\s+it\s+up|let'?s\s+see|let'?s\s+do\s+it|let'?s\s+go|"
     + @"uh\s+huh|mhm+|mm+\s+hmm+|i\s+do|i\s+would|i\s+will|i\s+guess|i'?d\s+(?:like|love)\s+(?:that|it|to)|i\s+want\s+(?:to|it|that)|that'?d\s+be\s+(?:great|good|nice|cool)|sounds\s+good|read\s+it|reply|yes\s+please|"
     + @"sí|si|claro|vale|dale|oui|ouais|bien\s+sûr|d'accord|ja|jawohl|klar|genau|sim|certo|sì|jazeker|tak|да|конечно|evet|hai|はい|ええ|うん|네|예|응|是|是的|好|好的|对|對|نعم|हाँ|हां|iya|oo|có|vâng|ναι|igen|ano)[\s,!.。、]*)+"
     + @"(?:(?:please|pls|plz|choom|capri|thanks|thank\s+you|thx|ty|it|that|now|for\s+me|to|you\s+to|want\s+(?:to|it|you\s+to)|read\s+it(?:\s+out)?|reply|out\s+loud|go\s+ahead|do\s+it|"
     + @"por\s+favor|bitte|s'il\s+(?:te|vous)\s+plaît|per\s+favore|gracias|danke|merci|grazie|obrigad[oa]|お願い(?:します)?|请|請|부탁해요?)[\s,!.。、]*)*$", Plain);
-  private static readonly Regex No = new Regex(@"^(?:(?:no|nah|nope|naw|no\s+thanks|no\s+thank\s+you|nevermind|never\s+mind|i'?m\s+(?:good|okay|ok|fine|alright)|im\s+(?:good|okay|ok|fine)|all\s+good|it'?s\s+(?:fine|okay|ok)|"
+  private static readonly Regex No = new Regex(@"^(?:(?:no+|nah+|nope|naw|na|nuh\s+uh|nvm|no\s+ty|i'?ll\s+pass|pass|not\s+interested|forget\s+it|cancel|no\s+thanks|no\s+thank\s+you|nevermind|never\s+mind|i'?m\s+(?:good|okay|ok|fine|alright)|im\s+(?:good|okay|ok|fine)|all\s+good|it'?s\s+(?:fine|okay|ok)|"
     + @"don'?t|i\s+don'?t|i\s+won'?t|i\s+wouldn'?t|not\s+now|not\s+really|not\s+yet|no\s+need|maybe\s+later|later|skip(?:\s+it)?|leave\s+it|don'?t\s+bother|no\s+way|"
     + @"non|nein|nee|nie|não|nao|нет|не\s+надо|hayır|いいえ|いや|いらない|아니요?|아뇨|不|不要|不用|没有|沒有|لا|नहीं|tidak|enggak|không|όχι|nem|ne)[\s,!.。、]*)+"
     + @"(?:(?:thanks|thank\s+you|thx|choom|capri|i'?m\s+good|i\s+don'?t|not\s+now|maybe\s+later|it'?s\s+fine|gracias|danke|merci|grazie|obrigad[oa]|谢谢|謝謝|ありがとう|고마워요?)[\s,!.。、]*)*$", Plain);
+  // "no, the anime one", "not that, the game", "nah I meant cats", "I meant the blue one": the part after the no, or null.
+  private static readonly Regex Correcting = new Regex(@"^(?:not\s+(?:that|this|it)(?:\s+one)?|no+|nah+|nope|naw|not|wrong(?:\s+one)?|i\s+mean[t]?|actually|rather)\b[\s,!.:-]*(?:(?:no|not\s+that(?:\s+one)?)[\s,!.:-]+)?(?:i\s+(?:meant|mean|want(?:ed)?|said)\s+)?(?<rest>.*?)[\s.!]*$", Plain);
+  private static string Correction(string said)
+  {
+    if (said == null || No.IsMatch(said)) return null;
+    Match m = Correcting.Match(said);
+    string rest = m.Success ? m.Groups["rest"].Value.Trim() : "";
+    // "not the first one, the Amazon one": what they want comes after the comma.
+    if (Regex.IsMatch(said, @"^not\b", Plain) && rest.Contains(",")) rest = rest.Substring(rest.IndexOf(',') + 1).Trim();
+    return rest.Length < 2 || No.IsMatch(rest) ? null : rest;
+  }
+  // After she picks something: they want a different one.
+  private static readonly Regex OtherOne = new Regex(@"^(?:no+|nah+|nope|naw|not\s+(?:that|this|it)(?:\s+one)?|wrong(?:\s+one)?|(?:a\s+)?different\s+one|another(?:\s+one)?|something\s+else|the\s+other\s+one|pick\s+(?:another|again|a\s+different\s+one)|try\s+again|i\s+don'?t\s+(?:like|want)\s+(?:that|this|it))\b", Plain);
   private static readonly Regex OpenAsk = new Regex(@"^(?:open|show|bring\s+up|pull\s+up)\s+(?:me\s+)?(?:the\s+|your\s+)?capri\s+browser$|^capri\s+browser$|^(?:open|launch|start|load)\s+(?:up\s+)?(?:my\s+|the\s+|a\s+|your\s+)?(?:web\s+|internet\s+)?(?:browser|chrome|google\s+chrome|edge|microsoft\s+edge|firefox|brave|opera|internet|new\s+tab)$", Plain);
   private static readonly Regex BrowserTask = new Regex(@"^(?:open|go\s+to|visit|load|pull\s+up|bring\s+up|get\s+on|hop\s+on)\s+(?<site>.+?)\s+(?:on|in|using|with|through)\s+(?:the\s+|your\s+|my\s+|a\s+)?(?:capri\s+|web\s+|internet\s+)?(?:browser|chrome|google\s+chrome|edge|microsoft\s+edge|firefox|brave|opera)\s*(?:,|and|then|to|&)\s+(?<rest>.{3,})$", Plain);
   // "Watch lofi on Capri browser", "open youtube in capri browser", "go to bbc.co.uk on capri browser".
@@ -446,8 +459,17 @@ public class CapriInternalBrowser : ICapriMod
     lock (gate) { asked0 = findAsked != null && Now() <= findAskUntil ? findAsked : null; kind0 = findKind; findAsked = null; }
     if (asked0 != null)
     {
-      if (No.IsMatch(said) && said.Split(' ').Length <= 3) { capri.Say("Okay, choom."); return true; }
-      PickVideo("", "", kind0 ?? "", asked0 + " (then, when you asked what they meant: " + said + ")");
+      if (No.IsMatch(said)) { capri.Say("Okay, choom."); return true; }
+      PickVideo("", "", kind0 ?? "", asked0 + " (then, when you asked what they meant: " + (Correction(said) ?? said) + ")");
+      return true;
+    }
+    string before, beforeTitle, beforeKind;
+    lock (gate) { before = lastFind != null && Now() <= lastFindUntil ? lastFind : null; beforeTitle = lastFindTitle; beforeKind = lastFindKind; }
+    if (before != null && OtherOne.IsMatch(said))
+    {
+      lock (gate) lastFind = null;
+      string more = Correction(said);
+      PickVideo("", "", beforeKind ?? "", before + " (not " + beforeTitle + ", which you picked before" + (more != null && !OtherOne.IsMatch(more) ? "; they said: " + more : "") + ")");
       return true;
     }
     string site = SiteFor(said);
@@ -2070,6 +2092,9 @@ public class CapriInternalBrowser : ICapriMod
   // Her question about what to find, and when an answer still counts.
   private string findAsked, findKind;
   private DateTime findAskUntil;
+  // What she last picked, so "not that one" picks another.
+  private string lastFind, lastFindTitle, lastFindKind;
+  private DateTime lastFindUntil;
   internal static string[] Lazy = { "Find it yourself choom.." };
   private static readonly Random dice = new Random();
   // name, host, home, search, what a link to a video looks like there
@@ -3092,7 +3117,7 @@ public class CapriInternalBrowser : ICapriMod
     lock (gate) picking = watchPicking != null && Now() <= watchPickUntil ? watchPicking : null;
     if (picking != null)
     {
-      List<string[]> chosen = WatchesNamed(said, picking);
+      List<string[]> chosen = WatchesNamed(Correction(said) ?? said, picking);
       lock (gate) watchPicking = null;
       if (chosen != null) { WatchNow(chosen); return true; }
       if (No.IsMatch(said)) { capri.Say("Okay, choom."); return true; }
@@ -3390,7 +3415,7 @@ public class CapriInternalBrowser : ICapriMod
     if (what.Length == 0 && Regex.IsMatch(kind, "^(anime|movies?|films?|shows?)$", Plain) && at[1] != "crunchyroll.com") what = kind;
     int roll;
     lock (dice) roll = dice.Next(100);
-    if (roll < 15 && Flag("lazy", true) && !said.Contains("(then, when you asked")) { capri.Say(Lazy[roll % Lazy.Length]); return; }
+    if (roll < 15 && Flag("lazy", true) && !said.Contains(" you asked what they meant") && !said.Contains("which you picked before")) { capri.Say(Lazy[roll % Lazy.Length]); return; }
     capri.Say(Finding[roll % Finding.Length]);
     ThreadPool.QueueUserWorkItem(delegate { EscJob(delegate
     {
@@ -3468,8 +3493,19 @@ public class CapriInternalBrowser : ICapriMod
         string list = OnPage("(function(p,w){var seen={},o=[],n=0;function id(h){var m=/[?&]v=([\\w-]{11})|\\/(?:video|shorts)\\/([\\w-]+)/.exec(h);return m?(m[1]||m[2]):h;}document.querySelectorAll('[data-capri-v]').forEach(function(e){e.removeAttribute('data-capri-v')});[].slice.call(document.querySelectorAll('a[href]')).forEach(function(a){if(n>=12||seen[a.href]||!p.test(a.href)||w.indexOf(id(a.href))>=0)return;var r=a.getBoundingClientRect();if(r.width<20||r.height<10||r.bottom<-innerHeight*3||r.top>innerHeight*1.5||a.closest('ytd-reel-shelf-renderer,ytm-shorts-lockup-view-model,ytd-reel-item-renderer,[is-shorts]'))return;var img=a.querySelector('img');var t=(a.title||a.getAttribute('aria-label')||a.innerText||(img&&img.alt)||'').replace(/\\s+/g,' ').trim();if(!t)return;var c=a.closest('[class*=renderer],[class*=card],[class*=item],li,article');if(c&&c.querySelector('ytd-thumbnail-overlay-resume-playback-renderer,#progress,[class*=resume-playback],[class*=WatchedProgress]'))return;seen[a.href]=1;n++;a.setAttribute('data-capri-v',n);o.push(n+'. '+t.slice(0,100)+' | '+(c?(c.innerText||'').replace(/\\s+/g,' ').slice(0,180):''))});return o.join('\\n');})(new RegExp(" + Quote(at[4]) + ")," + WatchedIds() + ")", out why);
         Controlling();
         if (string.IsNullOrEmpty(list)) { capri.Say("Couldn't see anything to pick there, choom. You might need to sign in first."); return; }
-        int count = list.Split('\n').Length, choice;
-        lock (dice) choice = dice.Next(Math.Min(4, count)) + 1;
+        // Finding things: leave out what she already found them for the same ask today (unless that's all there is).
+        string findKey = "found|" + kind + "|" + Regex.Replace((what.Length > 0 ? what : said).ToLowerInvariant(), @"\s*\(.*$|[^\w ]", "").Trim();
+        if (thingOnly)
+        {
+          HashSet<string> gave = Recall(findKey);
+          List<string> left = new List<string>();
+          foreach (string line in list.Split('\n')) if (!gave.Contains(TitleKey(Regex.Replace(line, @"^\d+\. | \|.*$", "")))) left.Add(line);
+          if (left.Count > 0) list = string.Join("\n", left.ToArray());
+        }
+        string[] rows = list.Split('\n');
+        int count = 0, choice;
+        foreach (string row in rows) { int n; if (int.TryParse(row.Split('.')[0], out n)) count = Math.Max(count, n); }
+        lock (dice) choice = int.Parse(rows[dice.Next(Math.Min(4, rows.Length))].Split('.')[0]);
         ManualResetEvent picked = new ManualResetEvent(false);
         try
         {
@@ -3488,6 +3524,8 @@ public class CapriInternalBrowser : ICapriMod
         string[] parts = (spot ?? "").Split(new[] { ',' }, 4);
         if (parts.Length < 4) return;
         capri.Say((newest ? "Here's the newest: " : thingOnly ? "Found one: " : "This one looks best: ") + parts[3] + ".");
+        if (thingOnly) Remember(findKey, new[] { TitleKey(parts[3]) }, false);
+        lock (gate) { lastFind = Regex.Replace(said, @"\s*\(not .+, which you picked before.*\)$", ""); lastFindTitle = parts[3]; lastFindKind = kind; lastFindUntil = Now().AddMinutes(3); }
         Thread.Sleep(500);
         InBrowser(delegate(Browser b) { b.Do("show", ""); return null; });
         Point screen = Point.Empty;
@@ -4254,14 +4292,110 @@ public class CapriInternalBrowser : ICapriMod
   private static readonly Regex VideoSites = new Regex(@"^https?://(?:[\w-]+\.)*(?:youtube\.com|youtu\.be|tiktok\.com|twitch\.tv|netflix\.com|crunchyroll\.com|primevideo\.com|disneyplus\.com|kick\.com)/", Plain);
 
   // Coming back to a tab that changed: she asks before reading anything out.
+  // Capri's memory: short fingerprints of what she's already told them or done, in groups (one page, say), so she never repeats
+  // herself. Never the words or addresses, and never private tabs. Most of it deletes itself after a day; important things
+  // (pages on Speed Dial or that she's watching) stay 30 days. Capri Cleaner can clear it.
+  private readonly object toldLock = new object();
+  private static string Print(string text)
+  {
+    using (SHA256 hash = SHA256.Create()) return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(text)), 0, 8).Replace("-", "");
+  }
+  // A line's fingerprint; numbers don't count ("5 minutes ago" and "12 minutes ago" are the same line).
+  private static string TitleKey(string title) { return LineKey(title.Length > 60 ? title.Substring(0, 60) : title); }
+  private static string LineKey(string line) { return Print(Regex.Replace(line.Trim().ToLowerInvariant(), @"[\d.,:]+", "#")); }
+
+  // Group fingerprint -> { until (ticks), its fingerprints }, without the ones that have run out.
+  private Dictionary<string, KeyValuePair<long, HashSet<string>>> Memories()
+  {
+    Dictionary<string, KeyValuePair<long, HashSet<string>>> groups = new Dictionary<string, KeyValuePair<long, HashSet<string>>>();
+    foreach (string row in (capri.Store.Get("memory", "") ?? "").Split('\n'))
+    {
+      string[] p = row.Split('\t');
+      long until;
+      if (p.Length == 3 && long.TryParse(p[1], out until) && until > DateTime.UtcNow.Ticks) groups[p[0]] = new KeyValuePair<long, HashSet<string>>(until, new HashSet<string>(p[2].Split(',')));
+    }
+    return groups;
+  }
+
+  private HashSet<string> Recall(string group)
+  {
+    KeyValuePair<long, HashSet<string>> had;
+    lock (toldLock) return Memories().TryGetValue(Print(group), out had) ? had.Value : new HashSet<string>();
+  }
+
+  private void Remember(string group, IEnumerable<string> prints, bool important)
+  {
+    string key = Print(group);
+    long until = DateTime.UtcNow.Ticks + TimeSpan.TicksPerDay * (important ? 30 : 1);
+    lock (toldLock)
+    {
+      Dictionary<string, KeyValuePair<long, HashSet<string>>> groups = Memories();
+      KeyValuePair<long, HashSet<string>> had;
+      HashSet<string> all = groups.TryGetValue(key, out had) ? had.Value : new HashSet<string>();
+      all.UnionWith(prints);
+      groups[key] = new KeyValuePair<long, HashSet<string>>(Math.Max(until, had.Key), all);
+      // The 80 groups that last longest, up to 600 fingerprints each.
+      List<KeyValuePair<string, KeyValuePair<long, HashSet<string>>>> keep = new List<KeyValuePair<string, KeyValuePair<long, HashSet<string>>>>(groups);
+      keep.Sort(delegate(KeyValuePair<string, KeyValuePair<long, HashSet<string>>> a, KeyValuePair<string, KeyValuePair<long, HashSet<string>>> b) { return b.Value.Key.CompareTo(a.Value.Key); });
+      List<string> rows = new List<string>();
+      foreach (KeyValuePair<string, KeyValuePair<long, HashSet<string>>> one in keep)
+      {
+        if (rows.Count == 80) break;
+        List<string> list = new List<string>(one.Value.Value);
+        if (list.Count > 600) list.RemoveRange(0, list.Count - 600);
+        rows.Add(one.Key + "\t" + one.Value.Key + "\t" + string.Join(",", list.ToArray()));
+      }
+      capri.Store.Set("memory", string.Join("\n", rows.ToArray()));
+    }
+  }
+
+  // Capri Cleaner: forget it all now.
+  // Important ones are those that last more than a day from now.
+  internal void ForgetMemories(bool important)
+  {
+    lock (toldLock)
+    {
+      List<string> rows = new List<string>();
+      foreach (string row in (capri.Store.Get("memory", "") ?? "").Split('\n'))
+      {
+        string[] p = row.Split('\t');
+        long until;
+        if (p.Length == 3 && long.TryParse(p[1], out until) && (until - DateTime.UtcNow.Ticks > TimeSpan.TicksPerDay) != important) rows.Add(row);
+      }
+      capri.Store.Set("memory", string.Join("\n", rows.ToArray()));
+    }
+  }
+
+  // Catch-up: the lines on a page she's seen or already told them about.
+  private static string PageOf(string where) { return "catchup|" + Regex.Replace(where ?? "", "#.*$", ""); }
+  private HashSet<string> AlreadySeen(string before, string where)
+  {
+    HashSet<string> known = new HashSet<string>();
+    foreach (string l in (before ?? "").Split('\n')) known.Add(LineKey(l));
+    if (where != null) known.UnionWith(Recall(PageOf(where)));
+    return known;
+  }
+
+  // An important page: on their Speed Dial, or one she's watching for them.
+  private bool Important(string where)
+  {
+    string page = Regex.Replace(where ?? "", "[#?].*$", "").TrimEnd('/');
+    if (page.Length == 0) return false;
+    foreach (string d in (capri.Store.Get("dial", "") ?? "").Split('\n')) if (Regex.Replace(d.Trim(), "[#?].*$", "").TrimEnd('/') == page) return true;
+    lock (gate) foreach (string[] w in Watches()) if (Regex.Replace(w[0], "[#?].*$", "").TrimEnd('/') == page) return true;
+    return false;
+  }
+
+  private void Told(string where, IEnumerable<string> keys) { if (where != null) Remember(PageOf(where), keys, Important(where)); }
+
   internal void OfferCatchUp(string before, string where)
   {
     if (capri == null || stopped || where == null || VideoSites.IsMatch(where) || Touchy.IsMatch("at " + where + " ") || (Now() - catchOffered).TotalMinutes < 10) return;
     string why, now = OnPage(Viewer.ReadScript, out why);
     if (now == null || string.IsNullOrEmpty(before)) return;
-    HashSet<string> old = new HashSet<string>(before.Split('\n'));
+    HashSet<string> old = AlreadySeen(before, where);
     int fresh = 0;
-    foreach (string line in now.Split('\n')) { string l = line.Trim(); if (l.Length > 20 && !old.Contains(l)) fresh += l.Length; }
+    foreach (string line in now.Split('\n')) { string l = line.Trim(); if (l.Length > 20 && !old.Contains(LineKey(l))) fresh += l.Length; }
     if (fresh < 300) return;
     catchOffered = Now();
     capri.Say(Line("catchask", "That tab changed while you were away, choom. Want me to catch you up?"));
@@ -4280,10 +4414,13 @@ public class CapriInternalBrowser : ICapriMod
       if (asked) Summarise(null, null, now, delegate { });
       return;
     }
-    // Only the lines that weren't there before.
-    HashSet<string> old = new HashSet<string>(before.Split('\n'));
+    // Only the lines that weren't there before, and that she hasn't told them about already.
+    string where = InBrowser(delegate(Browser b) { return b.FrontAddress; });
+    HashSet<string> old = AlreadySeen(before, where);
+    List<string> news = new List<string>();
     StringBuilder fresh = new StringBuilder();
-    foreach (string line in now.Split('\n')) { string l = line.Trim(); if (l.Length > 2 && !old.Contains(l) && fresh.Length < 5000) fresh.Append(l).Append('\n'); }
+    foreach (string line in now.Split('\n')) { string l = line.Trim(); if (l.Length > 2 && !old.Contains(LineKey(l)) && fresh.Length < 5000) { fresh.Append(l).Append('\n'); news.Add(LineKey(l)); } }
+    if (fresh.Length >= 30) Told(where, news);
     if (fresh.Length < 30) { if (asked) capri.Say("Nothing new on this one, choom. You didn't miss a thing."); return; }
     if (!capri.Brain.Ready) { capri.Say("Stuff changed on this page while you were gone, choom."); return; }
     string clean = fresh.ToString().Replace("<<<", "").Replace(">>>", "");
@@ -6389,9 +6526,11 @@ public class CapriInternalBrowser : ICapriMod
       { "cookies", "Cookies", "Signs you out of websites. Saved passwords, bookmarks and Speed Dial stay." },
       { "tabs", "Tabs", "Closes every tab except the one you're on. Reopen closed tab brings them back." },
       { "history", "Browsing history", "The pages you've visited, from History and Edge's own list." },
-      { "downloads", "Downloads", "Clears the downloads list. Files it downloaded over 2 weeks ago go to the Recycle Bin, if you say yes." }
+      { "downloads", "Downloads", "Clears the downloads list. Files it downloaded over 2 weeks ago go to the Recycle Bin, if you say yes." },
+      { "catchup", "Capri's day memory", "So she doesn't repeat herself: what changed on pages she's already told you about, and things she's already found you (ask again and you get a new one). Only fingerprints, never the words. Deletes itself after a day anyway." },
+      { "memories", "Capri's important memories", "The same, for pages on your Speed Dial or that she's watching for you, kept 30 days so she only tells you what's really new there. Clear it and she'll tell you everything on them again." }
     };
-    private static readonly string[][] CleanPresets = { new[] { "cache" }, new[] { "cache", "tabs", "history" }, new[] { "cache", "cookies", "tabs", "history", "downloads" } };
+    private static readonly string[][] CleanPresets = { new[] { "cache" }, new[] { "cache", "tabs", "history" }, new[] { "cache", "cookies", "tabs", "history", "downloads", "catchup", "memories" } };
 
     private HashSet<string> CleanPicked()
     {
@@ -6528,6 +6667,8 @@ public class CapriInternalBrowser : ICapriMod
       if (picked.Contains("cache")) kinds.Append("DiskCache,CacheStorage,");
       if (picked.Contains("cookies")) kinds.Append("Cookies,");
       if (picked.Contains("history")) { kinds.Append("BrowsingHistory,"); mod.ClearHistory(); }
+      if (picked.Contains("catchup")) mod.ForgetMemories(false);
+      if (picked.Contains("memories")) mod.ForgetMemories(true);
       if (picked.Contains("downloads"))
       {
         kinds.Append("DownloadHistory,");
