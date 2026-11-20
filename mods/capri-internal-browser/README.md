@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 969 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 981 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -86,6 +86,8 @@ Make your own commands from the sidebar's Custom jobs button (or say "open custo
 - **summarise**, **check the comments**, **look at the prices**: she reads the page (or just that part) and tells you what it means, while a scan line in her colours sweeps the page.
 - **ask Ready?**: the job waits for your yes ("no" stops it). **wait 2 minutes** or **wait for it to load** pause it, and Esc stops it any time.
 - **✦ Capri learn** (a button on each job): her AI learns your job, fixes the spelling and rewords each step so she can do it, then you check it and Save.
+- **Thinking card**: while she runs a job or finds something, a CAPRI // THINKING card over the page shows what she's on and how far through the job she is.
+- A job with a site's link (or an `open <site>` step) finds things on that site: "find me a movie" on a movie site searches there, not YouTube.
 
 If she still can't do a step she tells you which, and the job's card says so. Steps are only Capri Browser's own actions: a job can't run code, she never types passwords, and clicks or typing on messaging and social sites still wait for your yes. Capri learn and steps she doesn't know send only the job's words to her brain, and reading steps send the page text, like "summarise" always has (never from private tabs).
 
@@ -96,6 +98,7 @@ If she still can't do a step she tells you which, and the job's card says so. St
 - **Extensions**: the puzzle next to Summarise. Add Chrome-style extensions you downloaded yourself (a folder, .zip or .crx), turn them on or off, open their popup or options, or remove them. Capri Browser never downloads extensions for you.
 - **Screenshots**: the camera next to the puzzle. Pick an area (Ctrl+Shift+X), what's on screen, or the whole page. Each one is saved in Pictures\Capri Browser, copied, and can go into Noted.
 - Smoother: side panels slide, tabs grow in and shrink away, glide into place when moved and pop when picked, a red line glides to the tab you pick, menus fade in
+- **Game mode** (bottom of the left sidebar): other tabs snooze, every page uses Edge's low memory level and the engine runs at idle priority, so your game gets the PC. Click it again for normal.
 - Split screen: right-click a tab for two tabs side by side, with a bar to drag between them
 - Tabs you have not used for 20 minutes snooze to save memory (a setting, on by default), with a moon on them; a click wakes one
 - Press Esc any time to stop Capri taking control
