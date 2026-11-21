@@ -4105,9 +4105,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "d1967dba6f3ff424246f58f08e6e2cdda22e5dc2";
+  private const string AddonsCommit = "a7813e9648e5010eb5587ba707039d4b0e87fd12";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=619fa52790fb7dee582ca379088dbb4550d45f374529692d9b5c49e0984a5461;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=22fe09c86facfb815deee254e24944995295b98ed1c25e01b6e28cfe7ecda05b";
+  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=619fa52790fb7dee582ca379088dbb4550d45f374529692d9b5c49e0984a5461;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=8516479cbf358345ba0cb3601c230ca539d6a2934d2ea16c5a8f21812a517bbe";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -5454,7 +5454,12 @@ public class CapriInternalBrowser : ICapriMod
 
   // The full lists come from data/adblock.txt on Browser addons: EasyList's and Peter Lowe's ad servers, EasyPrivacy's trackers
   // and EasyList's page parts to hide. Until it's downloaded, the short list above and a few page parts below are used.
-  internal static HashSet<string> AdSet = new HashSet<string>(AdHosts), TrackSet = new HashSet<string>();
+  private static readonly string[] TrackHosts = ("google-analytics.com googletagmanager.com hotjar.com clarity.ms segment.io segment.com mixpanel.com mxpnl.com "
+    + "amplitude.com heapanalytics.com fullstory.com scorecardresearch.com quantserve.com hs-analytics.net crazyegg.com mouseflow.com nr-data.net bat.bing.com analytics.tiktok.com").Split(' ');
+  internal static HashSet<string> AdSet = new HashSet<string>(AdHosts), TrackSet = new HashSet<string>(TrackHosts);
+  // Trackers on sites that are also used for other things: the site, then the starts of paths ("*" and a part: anywhere in it).
+  internal static Dictionary<string, List<string>> TrackPaths = new Dictionary<string, List<string>>();
+  private static readonly Regex PathRule = new Regex(@"^\*?/[A-Za-z0-9_/.?=-]{1,120}$");
   private static readonly string[] HideBuiltIn = { "ins.adsbygoogle", "[id^=\"google_ads_\"]", "[id^=\"div-gpt-ad\"]", "[data-ad-slot]", "[data-google-query-id]", "iframe[src*=\"doubleclick.net\"]", "[aria-label=\"Advertisement\"]" };
   internal static List<string> HideAll = new List<string>(HideBuiltIn);
   internal static List<string[]> HideSome = new List<string[]>();
@@ -5474,7 +5479,21 @@ public class CapriInternalBrowser : ICapriMod
   }
 
   internal static bool IsAd(string uri) { return InSet(AdSet, uri); }
-  internal static bool IsTracker(string uri) { return InSet(TrackSet, uri); }
+  internal static bool IsTracker(string uri)
+  {
+    if (InSet(TrackSet, uri)) return true;
+    Uri at;
+    if (TrackPaths.Count == 0 || !Uri.TryCreate(uri, UriKind.Absolute, out at)) return false;
+    string host = at.Host.ToLowerInvariant(), path = at.PathAndQuery;
+    List<string> rules;
+    while (host.IndexOf('.') > 0)
+    {
+      if (TrackPaths.TryGetValue(host, out rules))
+        foreach (string r in rules) if (r[0] == '*' ? path.IndexOf(r.Substring(1), StringComparison.Ordinal) >= 0 : path.StartsWith(r, StringComparison.Ordinal)) return true;
+      host = host.Substring(host.IndexOf('.') + 1);
+    }
+    return false;
+  }
 
   // A page part to hide is only a CSS selector: no braces, no at-rules, no escapes, no tags.
   private static readonly Regex HideSafe = new Regex(@"^[\w\s#.\-\[\]=""'^$*~:()>+,|]{2,200}$");
@@ -5482,7 +5501,8 @@ public class CapriInternalBrowser : ICapriMod
 
   internal static void UseAdblock(string text)
   {
-    HashSet<string> ads = new HashSet<string>(AdHosts), track = new HashSet<string>();
+    HashSet<string> ads = new HashSet<string>(AdHosts), track = new HashSet<string>(TrackHosts);
+    Dictionary<string, List<string>> paths = new Dictionary<string, List<string>>();
     List<string> all = new List<string>(HideBuiltIn);
     List<string[]> some = new List<string[]>();
     foreach (string line in (text ?? "").Split('\n'))
@@ -5491,6 +5511,11 @@ public class CapriInternalBrowser : ICapriMod
       if (p.Length < 2) continue;
       if (p[0] == "ad" && HostName.IsMatch(p[1])) ads.Add(p[1]);
       else if (p[0] == "track" && HostName.IsMatch(p[1])) track.Add(p[1]);
+      else if (p[0] == "trackpath" && p.Length == 3 && HostName.IsMatch(p[1]) && PathRule.IsMatch(p[2]))
+      {
+        if (!paths.ContainsKey(p[1])) paths[p[1]] = new List<string>();
+        paths[p[1]].Add(p[2]);
+      }
       else if (p[0] == "hide" && HideSafe.IsMatch(p[1]) && p[1].IndexOfAny(new[] { '{', '}', '<', '@', '\\' }) < 0)
       {
         if (p.Length == 2) all.Add(p[1]);
@@ -5499,6 +5524,7 @@ public class CapriInternalBrowser : ICapriMod
     }
     AdSet = ads;
     TrackSet = track;
+    TrackPaths = paths;
     HideAll = all;
     HideSome = some;
     hideCss = null;
@@ -5769,6 +5795,7 @@ public class CapriInternalBrowser : ICapriMod
         if (Kept("css-settings").Length < 100 || Kept("page-welcome").Length < 100 || Kept("lists").Length < 100) GetLook();
         // A newer Capri Browser pins newer add-ons: fetch them quietly (only if they downloaded add-ons before).
         else if (AddonsBehind()) Later(delegate { UpdateAll(true, null); });
+        if (!AddonsBehind() && (Kept("adblock-pin") != AddonsCommit || AdblockFile == null || !File.Exists(AdblockFile))) GetAdblock();
       };
     }
 
@@ -8990,6 +9017,7 @@ public class CapriInternalBrowser : ICapriMod
             if (p.Value == null) continue;
             kept++;
             if (p.Key == "lang") { UseLanguages(p.Value); Host.Store.Set("langpack", p.Value); } else Keep(p.Key, p.Value);
+            if (p.Key == "adblock") Keep("adblock-pin", AddonsCommit);
           }
           if (kept == 0) { dlNote = "Couldn't reach Browser addons right now. The browser still works, try again later."; if (!silent) mod.Tell("Couldn't reach Browser addons right now. Try again later."); }
           else
@@ -13537,6 +13565,20 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       });
     }
 
+    // The ad blocker and tracker lists, in the background. Until they're here, the short built-in lists are used.
+    private bool adblockAsked;
+    private void GetAdblock()
+    {
+      if (adblockAsked) return;
+      adblockAsked = true;
+      ThreadPool.QueueUserWorkItem(delegate
+      {
+        string got = null;
+        try { using (WebClient web = new WebClient()) got = Pinned(web, "data/adblock.txt"); } catch (Exception) { }
+        if (got != null) Post(delegate { Keep("adblock", got); Keep("adblock-pin", AddonsCommit); });
+      });
+    }
+
     private void GetLook()
     {
       if (lookAsked) return;
@@ -15446,8 +15488,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
               Set(asked, "Response", Call(Get(core, "Environment"), "CreateWebResourceResponse", null, 403, "Blocked by Capri Browser", ""));
               return;
             }
-            bool ad = guard.Ads && !guard.AllowsAds(pageHost) && IsAd(wants);
-            bool tracker = !ad && guard.Track >= 2 && !guard.AllowsTrackers(pageHost) && IsTracker(wants);
+            bool tracker = guard.Track >= 2 && !guard.AllowsTrackers(pageHost) && IsTracker(wants);
+            bool ad = !tracker && guard.Ads && !guard.AllowsAds(pageHost) && IsAd(wants);
             if (!ad && !tracker) return;
             Uri from;
             if (Uri.TryCreate(wants, UriKind.Absolute, out from) && SiteOf(from.Host) == SiteOf(pageHost)) return;
