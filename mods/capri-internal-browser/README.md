@@ -5,7 +5,7 @@ A full web browser built into Capri. Capri can see the page you're on and use it
 - Kind: code mod
 - Version: 2.0.0
 - Made by: tob7as
-- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 981 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
+- Needs: **Capri 0.9.4 or newer** on **Windows 10 or 11** (about 997 KB of readable code, under the 1 MiB code mod limit). It uses Microsoft Edge's WebView2 engine, which comes with both
 - Windows only
 
 ## Say this
@@ -95,6 +95,7 @@ If she still can't do a step she tells you which, and the job's card says so. St
 
 ## Also in it
 
+- **New in 2.0.1:** every game shows on the Games page straight away, and **Daily Word Search** gives everyone the same new puzzle each day (keep your streak, copy your time to share). Under the Speed Dial: how many ads, trackers and pop-ups the ad blocker has stopped, and the most popular free games right now. Sketchy downloads (a program from a site she doesn't know, or a file pretending to be a picture or document) wait for your yes. Game mode can switch on by itself when a full-screen game starts. Capri's notifications can all be turned off with one switch, or one by one. You choose which numbers go on the leaderboards, and a new best tells you where it would place. Code Breach and Mystery Choom are retired.
 - **Noted**: notes as a chat with yourself. Leave a note in the box at the bottom (Enter sends), paste or attach pictures and files, add the page's link, and make your own Noted chats (Capri only uses yours and asks "Should I add it to Shopping notes?"). Right-click a card to edit, copy, move or delete it.
 - **Bookmarks**: the star on the sidebar (Ctrl+Shift+B), with folders, search, drag and drop, and Import from Opera GX, Opera, Chrome, Edge, Brave or Vivaldi (read from their file on your PC only when you press it). The star in the address box bookmarks the page (Ctrl+Shift+D).
 - **Extensions**: the puzzle next to Summarise. Add Chrome-style extensions you downloaded yourself (a folder, .zip or .crx), turn them on or off, open their popup or options, or remove them. On a Chrome Web Store page, **Add to Capri Browser** downloads that extension from Google (clients2.google.com) and installs it.
@@ -134,7 +135,7 @@ The mod itself (not the pages you visit) contacts:
 | api.nuget.org | Microsoft's WebView2 package, downloaded once only if you set up video playback |
 | clients2.google.com | The extension you press **Add to Capri Browser** on, from its Chrome Web Store page. It isn't pinned, since you pick it |
 
-Some games you open from the Games page fetch from graphql.anilist.co, en.wikipedia.org and www.gamerpower.com.
+Some games you open from the Games page fetch from graphql.anilist.co, en.wikipedia.org and www.gamerpower.com. The free games under the Speed Dial come from www.gamerpower.com too, every 6 hours (turn it off in Settings > Appearance). Nothing about you is sent.
 
 ### Browser addons are pinned
 
