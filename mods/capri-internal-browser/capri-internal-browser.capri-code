@@ -1115,6 +1115,7 @@ public class CapriInternalBrowser : ICapriMod
     for (int i = 1; i < lines.Length; i++) { raw += lines[i] + "\n"; parts.Add(lines[i] == "[media]" ? "(sent a picture, video or voice note)" : lines[i] == "[other]" ? "(sent something I can't read out)" : Clip(Regex.Replace(Regex.Replace(lines[i], @"https?://\S+|www\.\S+", "(a link)"), @"\s+", " ").Trim(), 300)); }
     if (LoginCode.IsMatch(raw)) { Card(chat, "That one looks like a login code, so I won't read it out.", "Click here to see it in the chat."); return "That one looks like a login code, choom, so I won't read it out. Click the box if you want to see it."; }
     string text = Clip(string.Join(" ... ", parts.ToArray()), 1200);
+    Bump("readout", 1);
     Card(chat, from + " says: " + text, "Want to reply? Say yes or no.");
     string ask = Ask(from + " says: " + text + " ... Want to reply?", delegate { return StartReply(chat); });
     lock (gate) { pendNoFor = pend; pendNo = delegate { Tell(ThenNext("Okay, no reply, choom.")); }; }
@@ -1475,7 +1476,7 @@ public class CapriInternalBrowser : ICapriMod
 
   // The leaderboards' round: a new one every Monday at 00:00 UTC, or when the boards are reset (board.txt says which).
   // The six board numbers are also counted per round, so they start from 0 each round. The all-time ones never reset.
-  internal static readonly string[] RoundStats = { "watchall", "videos", "pages", "survival", "guessbest", "typingbest", "yt" };
+  internal static readonly string[] RoundStats = { "watchall", "videos", "pages", "survival", "guessbest", "typingbest", "yt", "daily" };
   internal static int RoundNow()
   {
     int known;
@@ -1520,6 +1521,18 @@ public class CapriInternalBrowser : ICapriMod
       if (Badges[i, 0] == key && was < need && now >= need && Notice("achieve")) Host.Say("Achievement unlocked: " + Badges[i, 2] + "! " + Badges[i, 3] + ", choom.");
     }
   }
+  internal static void Fastest(string key, int secs)
+  {
+    if (Host == null || secs <= 0) return;
+    lock (statGate)
+      foreach (string k in new[] { key, RoundKey(key) })
+      {
+        int was = Stat(k);
+        if (was == 0 || secs < was) Host.Store.Set("stat-" + k, secs.ToString());
+      }
+  }
+  internal static string Clock(int secs) { return secs <= 0 ? "-" : secs / 60 + ":" + (secs % 60).ToString("00"); }
+
   // One of her extras, on unless they turned it off in settings (dark mode for sites starts off).
   // One of her notifications: on unless they turned it off, or all of them (Settings > Capri features > Notifications).
   // A new best in a game that has a board (survival, Guess the Site, typing): Capri Browser may invite them to the boards.
@@ -2311,7 +2324,9 @@ public class CapriInternalBrowser : ICapriMod
     if (!Aim(SkipSpot, true)) return "The skip button's gone already, choom.";
     Thread.Sleep(700);
     string after = OnPage(SkipPress, out why);
-    return after == "gone" || after == "pressed" ? "Skipped it, choom." : "That skip button didn't want to be pressed, choom.";
+    if (after != "gone" && after != "pressed") return "That skip button didn't want to be pressed, choom.";
+    Bump("skips", 1);
+    return "Skipped it, choom.";
   }
 
 
@@ -2910,6 +2925,7 @@ public class CapriInternalBrowser : ICapriMod
     if (before != null) f.Title = before.Title;
     LastFinding = f;
     lock (gate) { found = f; offered = null; offerUntil = Now().AddMinutes(5); }
+    Bump("researched", 1);
     capri.Say(Clip(f.Say, 498 - Offer.Length) + " " + Offer);
   }
 
@@ -4089,9 +4105,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "84f5eb6786fbb65f37989d5185b25525404379fd";
+  private const string AddonsCommit = "32192a6a0046f926bfe1fe3e349001c0f9334764";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=790df66408788a2bec5273cc9494249efc1c6eb91a97b02556663d1de475b967;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=09f921acf0c8f2307f343d3b346cadb17ee8f41a37c9acd4ed6cd26aca0a1d9e;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=9862a3d0caeae40862b48a044c206d3b56cafbdbbc0cc4455be6484fa699f202";
+  private const string AddonHashes = "data/adblock.txt=076283a272d935a6eedd8a12b59fe10a692635faa4d73a19ff19d114a23863f9;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=619fa52790fb7dee582ca379088dbb4550d45f374529692d9b5c49e0984a5461;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=787d7bdf11822fc18a924399c1a3a6d5c161d1ebb363eca5aa30b22ed9bebd68";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -5062,7 +5078,7 @@ public class CapriInternalBrowser : ICapriMod
   {
     try
     {
-      if (from == 0) jobSite = job.Link;
+      if (from == 0) { jobSite = job.Link; Bump("jobs", 1); }
       if (from == 0 && job.Link.Length > 0)
       {
         Controlling();
@@ -5563,19 +5579,6 @@ public class CapriInternalBrowser : ICapriMod
     return host.StartsWith("www.", StringComparison.Ordinal) ? host.Substring(4) : host;
   }
 
-  // Under the Speed Dial (each can be turned off in Settings > Appearance): what the ad blocker has stopped, and the free games.
-  internal static volatile string FreeDeals = "";
-  private static string DialExtras()
-  {
-    StringBuilder b = new StringBuilder();
-    int ads = Stat("ads"), tracks = Stat("trackers"), pops = Stat("shielded");
-    if (Flag("shielddial", true) && ads + tracks + pops > 0)
-      b.Append("<div class=\"label xl\">SHIELD <span>&gt;</span></div><div class=\"shield\"><span><b>").Append(ads.ToString("N0", CultureInfo.InvariantCulture)).Append("</b> ads blocked</span><span><b>")
-        .Append(tracks.ToString("N0", CultureInfo.InvariantCulture)).Append("</b> trackers stopped</span><span><b>").Append(pops.ToString("N0", CultureInfo.InvariantCulture)).Append("</b> pop-ups stopped</span></div>");
-    if (Flag("freedial", true) && FreeDeals.Length > 0) b.Append("<div class=\"label xl\">FREE GAMES RIGHT NOW <span>&gt;</span></div><div class=\"free\">").Append(FreeDeals).Append("</div>");
-    return b.ToString();
-  }
-
   // The new tab page in her own style, like her settings: dark panels, cyan and red corner brackets, spaced-out
   // capitals. A search box on top, then the Speed Dial of sites they added (each with its own picture if they gave it
   // one), over their wallpaper if they picked one. `picture` gives a tile's picture as a data address, or null.
@@ -5617,7 +5620,6 @@ public class CapriInternalBrowser : ICapriMod
     }
     html.Append("<div class=\"t\">").Append(look.Names ? "<span class=\"above\">&nbsp;</span>" : "").Append("<a class=\"add\" href=\"").Append(Own).Append("add\" title=\"+\">+</a></div></div>");
     if (dial.Count == 0) html.Append("<p class=\"empty\">").Append(enc(T(5))).Append("</p>");
-    html.Append(DialExtras());
     if (recent != null && recent.Count > 0)
     {
       html.Append("<div class=\"recent\"><div class=\"label\">").Append(enc(T(6).ToUpperInvariant())).Append(" <span>&gt;</span></div>");
@@ -8383,42 +8385,6 @@ public class CapriInternalBrowser : ICapriMod
         delegate { Post(delegate { ShowGames(); }); return "Here you go, choom. Have fun."; }, delegate { Keep("gamehint-no", "1"); });
     }
 
-    // The three most popular free games right now, from GamerPower (as the Free Games page), every 6 hours. Nothing is sent.
-    private volatile bool dealsBusy;
-    private void Deals()
-    {
-      long at;
-      if (FreeDeals.Length == 0 && Kept("deals").Length > 0) FreeDeals = Kept("deals");
-      if (dealsBusy || !Flag("freedial", true) || (long.TryParse(Kept("deals-at"), out at) && DateTime.UtcNow.Ticks - at < TimeSpan.FromHours(6).Ticks)) return;
-      dealsBusy = true;
-      Keep("deals-at", DateTime.UtcNow.Ticks.ToString());
-      ThreadPool.QueueUserWorkItem(delegate
-      {
-        string got = null;
-        try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; got = web.DownloadString("https://www.gamerpower.com/api/giveaways?type=game&sort-by=popularity"); } } catch { }
-        StringBuilder html = new StringBuilder();
-        int n = 0;
-        foreach (string one in (got != null && got.Length < 3000000 ? got : "").Split(new[] { "{\"id\":" }, StringSplitOptions.None))
-        {
-          string title = Field(one, "title"), worth = Field(one, "worth"), where = Field(one, "platforms"), link = Field(one, "open_giveaway_url");
-          if (n >= 3 || title.Length == 0 || !link.StartsWith("https://", StringComparison.Ordinal)) continue;
-          html.Append("<a class=\"deal\" href=\"").Append(Esc(link)).Append("\"><b>").Append(Esc(Clip(Regex.Replace(title, @"\s*\(.*?\)\s*Giveaway$|\s+Giveaway$", ""), 60))).Append("</b><span>")
-            .Append(Esc(Clip(where, 40))).Append(worth.Length > 0 && worth != "N/A" ? " &middot; <s>" + Esc(worth) + "</s>" : "").Append(" &middot; FREE</span></a>");
-          n++;
-        }
-        Post(delegate { dealsBusy = false; if (n > 0) { FreeDeals = html.ToString(); Keep("deals", FreeDeals); } });
-      });
-    }
-
-    // A text field from GamerPower's JSON, unescaped.
-    private static string Field(string json, string key)
-    {
-      Match m = Regex.Match(json, "\"" + key + "\":\"((?:[^\"\\\\]|\\\\.){0,400})\"");
-      if (!m.Success) return "";
-      string v = Regex.Replace(m.Groups[1].Value, @"\\u([0-9a-fA-F]{4})", delegate(Match u) { return ((char)Convert.ToInt32(u.Groups[1].Value, 16)).ToString(); });
-      return v.Replace("\\/", "/").Replace("\\\"", "\"").Replace("\\\\", "\\").Trim();
-    }
-
     // Game mode by itself (Settings, off at first): on while a full-screen window that isn't a browser, a video player or
     // Capri is in front, off again a little after it's gone.
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -8538,7 +8504,6 @@ public class CapriInternalBrowser : ICapriMod
     {
       Suggest();
       AutoGame();
-      Deals();
       // The ad blocker's counts, saved every few seconds rather than on every block.
       if (adsNew > 0) { Bump("ads", adsNew); adsNew = 0; }
       if (tracksNew > 0) { Bump("trackers", tracksNew); tracksNew = 0; }
@@ -8900,8 +8865,12 @@ public class CapriInternalBrowser : ICapriMod
         { Stat("typingbest") + " WPM", "best typing speed" }, { Stat("survival").ToString(), "best survival run" }, { Stat("guessbest").ToString(), "best Guess the Site run" },
         { Stat("guess").ToString(), "sites guessed right" }, { Stat("wiki").ToString(), "Wiki Races finished" }, { Stat("coop").ToString(), "co-op races" },
         { Stat("roulette").ToString(), "roulette spins" }, { Stat("maxtabs").ToString(), "most tabs at once" }, { Stat("shielded").ToString(), "pop-ups and redirects blocked" }, { Stat("ads").ToString(), "ads blocked" }, { Stat("trackers").ToString(), "trackers stopped" },
-        { Stat("shots").ToString(), "screenshots" }, { Stat("notes").ToString(), "notes saved" }, { Stat("extensions").ToString(), "extensions added" } };
+        { Stat("shots").ToString(), "screenshots" }, { Stat("notes").ToString(), "notes saved" }, { Stat("extensions").ToString(), "extensions added" },
+        { Stat("daily").ToString(), "word searches done" }, { Stat("dailyhard").ToString(), "hard ones done" }, { Stat("dailystreak").ToString(), "longest daily streak" }, { Clock(Stat("dailyfast")), "fastest word search" } };
       for (int i = 0; i < stats.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(stats[i, 0]).Append("</div><div class=\"s\">").Append(stats[i, 1]).Append("</div></div>");
+      string[,] helped = { { Stat("researched").ToString(), "things researched" }, { Stat("jobs").ToString(), "jobs done" }, { Stat("readout").ToString(), "messages read out" }, { Stat("skips").ToString(), "ads and intros skipped" } };
+      html.Append("</div><h1>CAPRI HELPED YOU <span>&gt;</span></h1><div class=\"row\">");
+      for (int i = 0; i < helped.GetLength(0); i++) html.Append("<div class=\"b\"><div class=\"n\">").Append(helped[i, 0]).Append("</div><div class=\"s\">").Append(helped[i, 1]).Append("</div></div>");
       html.Append("</div><div class=\"cr\"><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbgames\">Back to Games</a><a class=\"bt\" href=\"").Append(Own).Append("play?g=lbopen\">Open leaderboards</a></div>");
       return html.Append("</div></body></html>").ToString();
     }
@@ -8911,7 +8880,7 @@ public class CapriInternalBrowser : ICapriMod
     {
       return new string[,] { { Took(Stat(RoundKey("watchall"))), "watching videos" }, { Took(Stat(RoundKey("yt"))), "of it on YouTube" }, { Stat(RoundKey("videos")).ToString(), "videos finished" },
         { Stat(RoundKey("pages")).ToString(), "pages visited" }, { Stat(RoundKey("typingbest")) + " WPM", "best typing speed" }, { Stat(RoundKey("survival")).ToString(), "best survival run" },
-        { Stat(RoundKey("guessbest")).ToString(), "best Guess the Site run" } };
+        { Stat(RoundKey("guessbest")).ToString(), "best Guess the Site run" }, { Stat(RoundKey("daily")).ToString(), "word searches done" }, { Clock(Stat(RoundKey("dailyfast"))), "fastest word search" } };
     }
 
     // Puts the newest THIS WEEK numbers on an open Games page without reloading it.
@@ -9056,6 +9025,8 @@ public class CapriInternalBrowser : ICapriMod
         Keep("daily-streak", streak.ToString());
         Bump("daily", 1);
         Bump("dailystreak", streak, true);
+        Fastest("dailyfast", secs);
+        if (day % 3 == 0) Bump("dailyhard", 1);
       }
       string took = secs / 60 + ":" + (secs % 60).ToString("00");
       try { Clipboard.SetText("Capri Daily Word Search #" + day + "\n\u23F1 " + took + "   \uD83D\uDD25 " + streak + (streak == 1 ? " day" : " days") + "\nPlay it in Capri Browser"); } catch { }
@@ -13587,7 +13558,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     {
       switch (key)
       {
-        case "freedial": return "The three most popular free games you can claim right now, from GamerPower (the same list as the Free Games page). It's checked every 6 hours, and nothing about you is sent.";
         case "gameauto": return "When a game fills your screen, Capri Browser goes super low by itself, and back to normal a little after the game's gone. Browsers and video players don't count.";
         case "gamehint": return "Only if you've never opened Games, after 30 minutes of browsing. Say no once and she never asks again.";
         case "lbinvite": return "After a new best score, if you haven't got a leaderboard name: where it would place this week. Once a week at most.";
@@ -13628,8 +13598,6 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       { "shieldtalk", "Comment on blocked pop-ups and redirects", "1", "notify" },
       { "downloads", "Ask before sketchy downloads", "1", "privacy" },
       { "darkweb", "Dark mode for all sites", "0", "look" },
-      { "shielddial", "Ad blocker stats under the Speed Dial", "1", "look" },
-      { "freedial", "Free games under the Speed Dial", "1", "look" },
       { "gameauto", "Game mode when a full-screen game starts", "0", "capri" },
       { "timed", "3-minute limit on wiki races", "0", "capri" },
       { "boot", "Start-up animation", "1", "capri" },
