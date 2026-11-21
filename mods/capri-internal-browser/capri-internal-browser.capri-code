@@ -2134,7 +2134,9 @@ public class CapriInternalBrowser : ICapriMod
   // Every "say" line from data/lists.txt, by what it's for.
   internal static Dictionary<string, List<string>> Said = new Dictionary<string, List<string>>();
   // Setting tips by key or name, from the "tip" lines.
-  internal static Dictionary<string, string> Tips = new Dictionary<string, string>();
+  internal static Dictionary<string, string> Tips = new Dictionary<string, string>(), Abouts = new Dictionary<string, string>();
+  // The line under a setting saying what it does (from lists.txt), or none.
+  internal static string About(string key) { string a; return Abouts.TryGetValue(key, out a) ? a : null; }
 
   // One of her lines for this moment: from data/lists.txt if it has some, else one of the built-in ones.
   internal static string Line(string key, params string[] fallback)
@@ -2188,7 +2190,7 @@ public class CapriInternalBrowser : ICapriMod
     List<string> known = new List<string>();
     List<string[]> badge = new List<string[]>();
     Dictionary<string, List<string>> said = new Dictionary<string, List<string>>();
-    Dictionary<string, string> tips = new Dictionary<string, string>();
+    Dictionary<string, string> tips = new Dictionary<string, string>(), about = new Dictionary<string, string>();
     List<string[]> zones = new List<string[]>(), themes = new List<string[]>();
     foreach (string line in (text ?? "").Replace("\r", "").Split('\n'))
     {
@@ -2198,6 +2200,7 @@ public class CapriInternalBrowser : ICapriMod
       else if (p[0] == "say" && p.Length == 3 && p[2].Length > 0) { if (!said.ContainsKey(p[1])) said[p[1]] = new List<string>(); said[p[1]].Add(p[2]); }
       else if (p[0] == "filler" && p.Length == 2) Filler = p[1].Split(' ');
       else if (p[0] == "tip" && p.Length == 3 && p[1].Length > 0 && p[2].Length > 0 && p[2].Length <= 400) tips[p[1]] = p[2];
+      else if (p[0] == "about" && p.Length == 3 && p[1].Length > 0 && p[2].Length > 0 && p[2].Length <= 400) about[p[1]] = p[2];
       else if (p[0] == "zone" && p.Length == 3 && Regex.IsMatch(p[1], @"^[a-z ]+(\|[a-z ]+)*$") && Regex.IsMatch(p[2], @"^[A-Za-z .()+-]{3,60}$")) zones.Add(new[] { p[1], p[2] });
       else if (p[0] == "known" && p.Length == 2 && p[1].Contains(".")) known.Add(p[1]);
       else if (p[0] == "theme" && p.Length == 11) { string[] one = new string[10]; Array.Copy(p, 1, one, 0, 10); themes.Add(one); }
@@ -2209,6 +2212,7 @@ public class CapriInternalBrowser : ICapriMod
     if (known.Count > 0) Known = known.ToArray();
     Said = said;
     if (tips.Count > 0) Tips = tips;
+    if (about.Count > 0) Abouts = about;
     if (zones.Count > 0) { string[,] z = new string[zones.Count, 2]; for (int i = 0; i < zones.Count; i++) { z[i, 0] = zones[i][0]; z[i, 1] = zones[i][1]; } Zones = z; }
     if (said.ContainsKey("finding")) Finding = said["finding"].ToArray();
     if (said.ContainsKey("lazy")) Lazy = said["lazy"].ToArray();
@@ -4105,9 +4109,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "a7813e9648e5010eb5587ba707039d4b0e87fd12";
+  private const string AddonsCommit = "838187f1df81f117bde32051e1e3fc7a5dcaab56";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=619fa52790fb7dee582ca379088dbb4550d45f374529692d9b5c49e0984a5461;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=8516479cbf358345ba0cb3601c230ca539d6a2934d2ea16c5a8f21812a517bbe";
+  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=737526f38c4f54a5c2cd80838aa91787083c64c342f197fad23a7fdeb9ea2114;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=c23f35666a08504e658938da9de20ac34582f1478974d1315524081abb5c7a2a;settings.css=d30ddd36062c0b322568161b765ba87eeff3b14260ec81c241d7c0313b0ea67c;whats-new.txt=8516479cbf358345ba0cb3601c230ca539d6a2934d2ea16c5a8f21812a517bbe";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -5792,9 +5796,9 @@ public class CapriInternalBrowser : ICapriMod
       HandleCreated += delegate
       {
         Cue();
-        if (Kept("css-settings").Length < 100 || Kept("page-welcome").Length < 100 || Kept("lists").Length < 100) GetLook();
-        // A newer Capri Browser pins newer add-ons: fetch them quietly (only if they downloaded add-ons before).
-        else if (AddonsBehind()) Later(delegate { UpdateAll(true, null); });
+        // A newer Capri Browser pins newer add-ons: everything if they downloaded add-ons before, else the settings text and lists.
+        if (AddonsBehind()) Later(delegate { UpdateAll(true, null); });
+        else if (Kept("css-settings").Length < 100 || Kept("page-welcome").Length < 100 || Kept("lists").Length < 100 || Kept("look-pin") != AddonsCommit) GetLook();
         if (!AddonsBehind() && (Kept("adblock-pin") != AddonsCommit || AdblockFile == null || !File.Exists(AdblockFile))) GetAdblock();
       };
     }
@@ -6787,7 +6791,7 @@ public class CapriInternalBrowser : ICapriMod
       bool all = h == "*";
       html.Append(SettingsExtraCss(look)).Append("<div class='st'>").Append(SettingsNav(ids, titles, icons, 4)).Append("<div class='main'>");
       html.Append("<div class='card'><h2><a class='bk' href='#' title='Back' onclick=\"S('site','#privacy');return false\"></a>").Append(Esc(all ? "ALL SITES" : h.ToUpperInvariant())).Append("</h2>");
-      if (all) html.Append(Row("Default permissions", "What every site may use and do, unless you change it for that site.", ""));
+      if (all) html.Append(Row("Default permissions", About("defaultpermissions"), ""));
       else
       {
         string info;
@@ -9018,6 +9022,7 @@ public class CapriInternalBrowser : ICapriMod
             kept++;
             if (p.Key == "lang") { UseLanguages(p.Value); Host.Store.Set("langpack", p.Value); } else Keep(p.Key, p.Value);
             if (p.Key == "adblock") Keep("adblock-pin", AddonsCommit);
+            if (p.Key == "lists") Keep("look-pin", AddonsCommit);
           }
           if (kept == 0) { dlNote = "Couldn't reach Browser addons right now. The browser still works, try again later."; if (!silent) mod.Tell("Couldn't reach Browser addons right now. Try again later."); }
           else
@@ -10087,7 +10092,7 @@ public class CapriInternalBrowser : ICapriMod
       {
         StringBuilder rows = new StringBuilder();
         for (int i = 0; i < ExtraList.GetLength(0); i++)
-          if (ExtraList[i, 3] == group) rows.Append(Row(ExtraList[i, 1], ExtraAbout(ExtraList[i, 0]), Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
+          if (ExtraList[i, 3] == group) rows.Append(Row(ExtraList[i, 1], About(ExtraList[i, 0]), Switch("x-" + ExtraList[i, 0], Flag(ExtraList[i, 0], ExtraList[i, 2] == "1"))));
         return rows.ToString();
       };
 
@@ -10108,24 +10113,24 @@ public class CapriInternalBrowser : ICapriMod
       html.Append(Row(T(33), null, Switch("sites", look.Sites))).Append(extras("look"));
       html.Append(Row("Wallpaper", wallText.Text, Btn("wallpaper", T(19), false) + Btn("nowall", T(20), false)));
       html.Append(Row(T(21), null, Switch("names", look.Names)))
-        .Append(Row("Sidebar", "Choose its icons and add sites like ChatGPT or Twitch. You can also right-click the sidebar.", Btn("sidesetup", "Set up", false))).Append("</div>");
+        .Append(Row("Sidebar", About("sidebar"), Btn("sidesetup", "Set up", false))).Append("</div>");
 
       html.Append(open(1)).Append(extras("capri"))
-        .Append("<h3 class='sub'>NOTIFICATIONS</h3>").Append(Row("Capri notifications", "Everything she tells you without being asked. Turn this off for none of them, or just the ones you don't want.", Switch("x-notify", Flag("notify", true)))).Append(extras("notify"))
+        .Append("<h3 class='sub'>NOTIFICATIONS</h3>").Append(Row("Capri notifications", About("caprinotifications"), Switch("x-notify", Flag("notify", true)))).Append(extras("notify"))
         .Append(Row("Capri's hologram when she talks", HolocallThere ? "Her Holocall screen shows in a corner of the browser while she talks (Holocall by Issei)." : "Needs Holocall by Issei, from the Capri app's mod browser.",
           HolocallThere ? Switch("x-holo", Flag("holo", false)) : "<span class='v'>Needs Holocall</span>"))
         .Append(HolocallThere ? Row("Hologram position", null, Pick("holospot", HoloSpots, new[] { "Top left", "Top middle", "Top right", "Middle left", "Middle right", "Bottom left", "Bottom middle", "Bottom right" }, Array.IndexOf(HoloSpots, Kept("holospot")) >= 0 ? Kept("holospot") : "br", false)) : "")
-        .Append(Row("Put Capri's brain first", "Gives Capri's thinking the PC before the browser's pages. Turning it off can slow her down.", Switch("x-brainfirst", Flag("brainfirst", true))))
+        .Append(Row("Put Capri's brain first", About("putcaprisbrainfirst"), Switch("x-brainfirst", Flag("brainfirst", true))))
         .Append("</div>");
-      html.Append(open(2)).Append(Row("How hard she looks", "Deep reads up to 5 sites, Quick reads 2 and is faster. Off turns research off.", Pick("research", new[] { "deep", "quick", "off" }, new[] { "Deep", "Quick", "Off" }, ResearchMode, false)))
-        .Append(Row("How much she writes", "Short is the key facts, Mid is a page, Long goes into detail with examples.", Pick("researchlen", new[] { "short", "mid", "long" }, new[] { "Short", "Mid", "Long" }, ResearchLength, false)))
+      html.Append(open(2)).Append(Row("How hard she looks", About("howhardshelooks"), Pick("research", new[] { "deep", "quick", "off" }, new[] { "Deep", "Quick", "Off" }, ResearchMode, false)))
+        .Append(Row("How much she writes", About("howmuchshewrites"), Pick("researchlen", new[] { "short", "mid", "long" }, new[] { "Short", "Mid", "Long" }, ResearchLength, false)))
         .Append("<p class='hint'>Big brains will be better: a bigger AI model in Capri Mainframe writes better research, most of all on Long.</p>")
         .Append(extras("research")).Append("<p class='hint'>Say “research …”, “what's the best …”, “best website for …”, “fact check …”, “compare my tabs”, “what have I got open?”, “work out my last note” (or “… my open notes”, or right-click a note for Work on this), "
         + "“watch this page” or “fill in this form with …”, or highlight words and right-click for Let Capri research this. She works in the background, then asks if you want it brought up, put in your notes, or both, and if she should keep researching. Say “keep researching” any time to go deeper.</p></div>");
       html.Append(open(3)).Append(Row(edgeBroken ? "Not available" : "Ready", videoText.Text, edgeBroken ? Btn("video", "Try Edge's engine again", true) : ""))
-        .Append(Row("Anime site", "Where Capri looks when you ask for anime without naming a site.", Pick("animesite", AnimeHosts, AnimeNames, Kept("animesite").Length > 0 ? Kept("animesite") : AnimeHosts[0], false)))
+        .Append(Row("Anime site", About("animesite"), Pick("animesite", AnimeHosts, AnimeNames, Kept("animesite").Length > 0 ? Kept("animesite") : AnimeHosts[0], false)))
         .Append(LinkRow("anime", "Custom anime site"))
-        .Append(Row("Video site", "Where Capri looks when you ask for a video, show or movie without naming a site.", Pick("videosite", VideoHosts, VideoNames, Kept("videosite").Length > 0 ? Kept("videosite") : VideoHosts[0], false)))
+        .Append(Row("Video site", About("videosite"), Pick("videosite", VideoHosts, VideoNames, Kept("videosite").Length > 0 ? Kept("videosite") : VideoHosts[0], false)))
         .Append(LinkRow("video", "Custom video site"))
         .Append(extras("video")).Append("</div>");
 
@@ -10133,9 +10138,9 @@ public class CapriInternalBrowser : ICapriMod
       List<string> levels = new List<string>(), levelNames = new List<string>();
       for (int i = 0; i < 4; i++) { levels.Add(i.ToString()); levelNames.Add(T(37 + i)); }
       html.Append(open(4)).Append(Row(T(36), "Strict may break some sites.", Pick("track", levels, levelNames, look.Track.ToString(), false)));
-      html.Append(Row(T(41), "Blocks major ad networks. Ads served by the site itself, such as on YouTube, are not affected.", Switch("ads", look.Ads))).Append(extras("privacy"));
-      html.Append(Row(T(42), "Signs you out of websites. History, Speed Dial and saved passwords are kept.", Btn("wipe", T(42), false)));
-      html.Append("<h3 class='sub'>SITE SETTINGS</h3>").Append(Row("All sites", "What sites may use and do: location, camera, microphone, pop-ups, JavaScript and more.", "<button class='bt' onclick=\"S('site','*')\">Open</button>"));
+      html.Append(Row(T(41), About("t41"), Switch("ads", look.Ads))).Append(extras("privacy"));
+      html.Append(Row(T(42), About("t42"), Btn("wipe", T(42), false)));
+      html.Append("<h3 class='sub'>SITE SETTINGS</h3>").Append(Row("All sites", About("allsites"), "<button class='bt' onclick=\"S('site','*')\">Open</button>"));
       SortedDictionary<string, int> changed = PermSites();
       foreach (KeyValuePair<string, int> one in changed)
         html.Append("<a class='site' href='#' onclick=\"S('site','").Append(Esc(one.Key)).Append("');return false\"><i class='ic'></i>").Append(Esc(one.Key)).Append("<span>")
@@ -10151,18 +10156,18 @@ public class CapriInternalBrowser : ICapriMod
 
       List<string> langIds = new List<string>(), langNames = new List<string>();
       for (int i = 0; i < Languages.GetLength(0); i++) { langIds.Add(Languages[i, 0]); langNames.Add(Languages[i, 1]); }
-      html.Append(open(8)).Append(langIds.Count > 1 ? Row(T(22), null, Pick("lang", langIds, langNames, look.Lang, false)) : Row("English", "22 more languages can be downloaded. They're kept outside the mod, so they don't use its space.", Btn("getlangs", "Download languages", true))).Append("</div>");
+      html.Append(open(8)).Append(langIds.Count > 1 ? Row(T(22), null, Pick("lang", langIds, langNames, look.Lang, false)) : Row("English", About("english"), Btn("getlangs", "Download languages", true))).Append("</div>");
 
       bool personal = Kept("discordmode") == "personal";
-      html.Append(open(9)).Append(Row("Discord button", "You can also switch this by right-clicking the Discord button.", Pick("discord", new[] { "capri", "personal" }, new[] { "Capri Discord server", "Your Discord" }, personal ? "personal" : "capri", false))).Append(extras("discord")).Append("</div>");
+      html.Append(open(9)).Append(Row("Discord button", About("discordbutton"), Pick("discord", new[] { "capri", "personal" }, new[] { "Capri Discord server", "Your Discord" }, personal ? "personal" : "capri", false))).Append(extras("discord")).Append("</div>");
       html.Append(open(10)).Append("<div class='pre'>").Append(Esc(KeysText)).Append("</div></div>");
       html.Append(open(11)).Append("<div class='pre'>").Append(Esc(CanText)).Append("</div></div>");
       string last = Kept("updated");
       html.Append(open(12)).Append(Row("Update all", "Downloads every game and language from Browser addons on GitHub, including anything new. " + (last.Length > 0 ? "Last updated " + last + "." : "Not updated yet."), Btn("update", "Update all", true))).Append(News()).Append("</div>");
       int volume;
       if (!int.TryParse(Kept("soundvol"), out volume)) volume = 60;
-      html.Append(open(13)).Append(Row("Browser sounds", "Soft sounds for opening, closing and switching tabs, menus, panels, buttons and finished downloads.", Switch("x-sounds", Flag("sounds", false))))
-        .Append(Row("Typing sounds", "A soft key sound as you type in the address bar and on pages.", Switch("x-typesounds", Flag("typesounds", false))))
+      html.Append(open(13)).Append(Row("Browser sounds", About("browsersounds"), Switch("x-sounds", Flag("sounds", false))))
+        .Append(Row("Typing sounds", About("typingsounds"), Switch("x-typesounds", Flag("typesounds", false))))
         .Append(Row("Sound volume", null, "<input type='range' min='5' max='100' step='5' value='" + volume + "' oninput=\"this.nextSibling.textContent=this.value+'%'\" onchange=\"S('soundvol',this.value)\"><span class='v'>" + volume + "%</span>"))
         .Append("</div>");
       string jump = settingsJump ?? "";
@@ -13588,30 +13593,13 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         string css = null, help = null, welcome = null, news = null, lists = null, home = null, pages = null;
         try { using (WebClient web = new WebClient()) { web.Encoding = Encoding.UTF8; css = Pinned(web, "settings.css"); help = Pinned(web, "help.txt"); welcome = Pinned(web, "pages/welcome.html"); news = Pinned(web, "whats-new.txt"); lists = Pinned(web, "data/lists.txt"); home = Pinned(web, "pages/home.css"); pages = Pinned(web, "pages/pages.css"); } }
         catch (Exception) { lookAsked = false; return; }
-        Post(delegate { Keep("css-settings", css); Keep("help", help); Keep("page-welcome", welcome); Keep("whats-new", news); Keep("lists", lists); Keep("css-home", home); Keep("css-pages", pages); foreach (Tab open in tabs) if (open.Special == "settings" || open.Special == "welcome") ShowReader(open); });
+        Post(delegate { Keep("css-settings", css); Keep("help", help); Keep("page-welcome", welcome); Keep("whats-new", news); Keep("lists", lists); Keep("css-home", home); Keep("css-pages", pages); Keep("look-pin", AddonsCommit); foreach (Tab open in tabs) if (open.Special == "settings" || open.Special == "welcome") ShowReader(open); });
       });
     }
 
     // Settings open as a page of their own.
     internal bool SettingsShown { get { return false; } set { if (value) WebSettings(); } }
 
-    // The line under a setting saying what it does, for the ones that need one.
-    private static string ExtraAbout(string key)
-    {
-      switch (key)
-      {
-        case "gameauto": return "When a game fills your screen, Capri Browser goes super low by itself, and back to normal a little after the game's gone. Browsers and video players don't count.";
-        case "gamehint": return "Only if you've never opened Games, after 30 minutes of browsing. Say no once and she never asks again.";
-        case "lbinvite": return "After a new best score, if you haven't got a leaderboard name: where it would place this week. Once a week at most.";
-        case "news": return "After Capri Browser updates, a tab shows what's new. Only after an update, never on its own.";
-        case "downloads": return "When a download looks sketchy (a program from a site you might not trust, or a file pretending to be a picture or document), she asks if you're sure before it saves.";
-        case "readdiscord": return "Tells you when someone messages you directly (not servers or groups) and reads it out on your yes. Ask “any new Discord messages?” any time. She keeps Discord open out of sight for it, so she's quick. You must be logged in to Discord in Capri Browser for this to work.";
-        case "browserreact": return "She says something now and then when you open a new site, and when you ask what she thinks (“what do you think of this?”, “is this any good?”) she looks at the page and gives you her take. Private tabs, chats, mail and banking are left alone.";
-        case "quietmsg": return "Messages are found and typed out of sight in her own hidden Discord, with no tab at the top, instead of Discord coming to the front. She still shows you the message and asks before sending.";
-        case "discordmsg": return "Say “message Alex on Discord saying ...”. She types it and asks before sending. You must be logged in to Discord in Capri Browser for this to work.";
-        default: return null;
-      }
-    }
 
     // Key, words, on by default, and the part of Settings it shows in.
     private static readonly string[,] ExtraList =
