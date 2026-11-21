@@ -9089,7 +9089,7 @@ public class CapriInternalBrowser : ICapriMod
         Fetch("games/" + id + (g[3] == "page" ? ".html" : ".txt"), delegate(string got) { Keep("game-" + id, got); Game(go); });
         return;
       }
-      mod.Tell("I don't have a game called " + name + " yet, choom. Try Update all on the Games page.");
+      mod.Tell("I don't have a game called " + name + " yet, choom. Try Update all in Settings, under Updates.");
     }
 
     internal void Game(string which)
@@ -9098,7 +9098,6 @@ public class CapriInternalBrowser : ICapriMod
       if (which.IndexOf('&') >= 0) which = which.Substring(0, which.IndexOf('&'));
       string need = which == "coop" || which == "join" || which == "go" ? "wiki" : which;
       if (Regex.IsMatch(need, "^(wiki|roulette|guess|quiz|typing|minecraft)$") && Kept("game-" + need).Length == 0) { mod.Tell("Download " + (need == "wiki" ? "Wiki Race" : "that game") + " on the Games page first, choom."); return; }
-      if (which == "update") { UpdateAll(); return; }
       if (which == "start") { PlayGame(Regex.Match(all, "[&]id=([a-z0-9-]+)$").Groups[1].Value); return; }
       if (which == "daily") { int secs, day; int.TryParse(Regex.Match(all, "[&]s=([0-9]{1,5})").Groups[1].Value, out secs); int.TryParse(Regex.Match(all, "[&]d=([0-9]{1,6})").Groups[1].Value, out day); mod.Tell(Daily(secs, day)); return; }
       if (which == "studynote") { int n; if (int.TryParse(Regex.Match(all, "n=([0-9]+)").Groups[1].Value, out n) && n < shownFindings.Count) mod.KeepFinding(shownFindings[n]); return; }
@@ -9911,19 +9910,12 @@ public class CapriInternalBrowser : ICapriMod
         html.Append("<div class=\"b ").Append(have >= need ? "on" : "off").Append("\"><b>").Append(have >= need ? "&#9733; " : "&#9734; ").Append(Badges[i, 2]).Append("</b><div class=\"s\">").Append(Badges[i, 3])
           .Append(have >= need || need == 1 ? "" : " (" + Math.Min(have, need) + "/" + need + ")").Append("</div></div>");
       }
-      html.Append("</div>").Append(UpdatesBox(Own + "play?g=update\"", "bt go"));
+      html.Append("</div>");
       return html.Append("</div></body></html>").ToString();
     }
 
-    // The Updates section: what Update all does, when it last ran, and the button.
+    // What's new, under Update all in Settings.
     private string News() { string n = Kept("whats-new").Trim(); return n.Length == 0 ? "" : "<div class=\"s pre\" style=\"white-space:pre-wrap;margin-top:12px\"><b>WHAT'S NEW</b>\n" + Esc(n.Length > 3000 ? n.Substring(0, 3000) : n) + "</div>"; }
-
-    private string UpdatesBox(string link, string style)
-    {
-      string last = Kept("updated");
-      return "<h1>UPDATES <span>&gt;</span></h1><div class=\"row\"><div class=\"b\" style=\"flex-basis:100%\"><div class=\"s\">Update all downloads every game and language from Browser addons on GitHub, including anything new, and updates what you already have. "
-        + (last.Length > 0 ? "Last updated " + Esc(last) + "." : "Not updated yet.") + "</div><div class=\"cr\"><a class=\"" + style + "\" href=\"" + link + ">Update all</a></div>" + News() + "</div></div>";
-    }
 
     // ---- the settings page: one clean web page in a tab of its own (the old panel is only for PCs without Edge's engine) ----
 
