@@ -13197,17 +13197,18 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
         Controls.Add(c);
         c.BringToFront();
         // Typed out a couple of letters at a time, then the block blinks.
-        chatType = new WinTimer { Interval = 22 };
-        chatType.Tick += delegate
+        WinTimer typing = new WinTimer { Interval = 22 };
+        chatType = typing;
+        typing.Tick += delegate
         {
-          if (c.IsDisposed || chatCard != c) { chatType.Dispose(); return; }
+          if (c.IsDisposed || chatCard != c) { typing.Dispose(); return; }
           if (chatShown < chatFull.Length) { chatShown = Math.Min(chatFull.Length, chatShown + 2); chatTypedAt = DateTime.UtcNow; }
-          else chatType.Interval = 480;
+          else typing.Interval = 480;
           bool blink = chatShown < chatFull.Length || DateTime.Now.Millisecond < 500;
           chatBody.Text = "       " + chatFull.Substring(0, chatShown) + (blink ? "\u2588" : " ");
           if (chatShown >= chatFull.Length && (DateTime.UtcNow - chatTypedAt).TotalSeconds > 7 && !c.ClientRectangle.Contains(c.PointToClient(Cursor.Position))) CloseChatCard();
         };
-        chatType.Start();
+        typing.Start();
         if (!chatMoves) { chatMoves = true; Resize += delegate { if (chatCard != null && !chatCard.IsDisposed) PlaceChatCard(false); }; }
         PlaceChatCard(true);
       }
