@@ -672,7 +672,7 @@ public class CapriInternalBrowser : ICapriMod
     Browser b = open;
     if (b == null || b.IsDisposed || !b.IsHandleCreated) return "Capri Browser isn't open. Use open <site> first.";
     string said = null;
-    try { if (b.InvokeRequired) b.Invoke(new Action(delegate { said = work(b); })); else said = work(b); }
+    try { if (b.InvokeRequired) b.Invoke(new Action(delegate { b.Acting = true; try { said = work(b); } finally { b.Acting = false; } })); else said = work(b); }
     catch (Exception error) { said = "That didn't work: " + Inner(error).Message; }
     return said;
   }
@@ -1787,16 +1787,23 @@ public class CapriInternalBrowser : ICapriMod
   {
     if (jobSite == null) ShowThinking("Finding it for you");
     Interlocked.Increment(ref jobs);
-    Thread esc = new Thread(delegate() { while (Thread.VolatileRead(ref jobs) > 0) { if (EscDown() && !Halted) Halt(); Thread.Sleep(50); } });
+    InBrowser(delegate(Browser b) { b.StartWork(); return null; });
+    mouseSeen = Cursor.Position;
+    Thread esc = new Thread(delegate() { while (Thread.VolatileRead(ref jobs) > 0) { if (EscDown() && !Halted) Halt(); WatchMouse(); Thread.Sleep(50); } });
     esc.IsBackground = true;
     esc.Start();
     try { work(); }
     catch (OperationCanceledException) { }
-    finally { Interlocked.Decrement(ref jobs); if (jobSite == null) ShowThinking(null); }
+    finally
+    {
+      if (Interlocked.Decrement(ref jobs) == 0) { workAway = false; InBrowser(delegate(Browser b) { b.WorkTab = null; return null; }); }
+      if (jobSite == null) ShowThinking(null);
+    }
   }
 
   // Between her steps: stops the job if they pressed Esc.
   private void Check() { if (Halted) throw new OperationCanceledException(); }
+  internal bool Working { get { return Thread.VolatileRead(ref jobs) > 0; } }
   private bool Halted { get { return DateTime.UtcNow < haltedUntil; } }
   internal void Halt()
   {
@@ -2259,25 +2266,42 @@ public class CapriInternalBrowser : ICapriMod
   [DllImport("user32.dll")] private static extern void mouse_event(int flags, int x, int y, int data, IntPtr extra);
 
   // Slides the real mouse over, like a person would, and clicks.
-  private static void Glide(Point to) { Glide(to, true); }
+  // Where she last put the mouse, where it was last seen, and when they last moved it themselves.
+  private static Point mousePut = new Point(-99999, -99999), mousePutBefore = mousePut, mouseSeen;
+  private static DateTime userMouseAt = DateTime.MinValue;
+  // They're on another tab while she works in hers.
+  internal static volatile bool workAway;
+  private static bool UserOnMouse() { return (DateTime.UtcNow - userMouseAt).TotalSeconds < 2; }
+  private static void WatchMouse()
+  {
+    Point p = Cursor.Position;
+    if (p != mouseSeen && p != mousePut && p != mousePutBefore) userMouseAt = DateTime.UtcNow;
+    mouseSeen = p;
+  }
 
-  private static void Glide(Point to, bool click)
+  private static bool Glide(Point to) { return Glide(to, true); }
+
+  // False when the mouse is theirs right now, so nothing was moved or clicked.
+  private static bool Glide(Point to, bool click)
   {
     Point from = Cursor.Position;
     for (int i = 1; i <= 36; i++)
     {
       double k = i / 36.0;
       k = k * k * (3 - 2 * k);
-      if (glideStop || EscDown()) return;
-      Cursor.Position = new Point((int)(from.X + (to.X - from.X) * k), (int)(from.Y + (to.Y - from.Y) * k + Math.Sin(k * Math.PI) * -30));
+      if (glideStop || EscDown() || UserOnMouse() || workAway) return false;
+      mousePutBefore = mousePut;
+      mousePut = new Point((int)(from.X + (to.X - from.X) * k), (int)(from.Y + (to.Y - from.Y) * k + Math.Sin(k * Math.PI) * -30));
+      Cursor.Position = mousePut;
       Thread.Sleep(15);
     }
-    if (!click) return;
+    if (!click) return true;
     Thread.Sleep(300);
-    if (glideStop || EscDown()) return;
+    if (glideStop || EscDown() || UserOnMouse() || workAway) return false;
     mouse_event(2, 0, 0, 0, IntPtr.Zero);
     Thread.Sleep(40);
     mouse_event(4, 0, 0, 0, IntPtr.Zero);
+    return true;
   }
 
   // Moves the real mouse to what a spot script finds ("x,y" in the page's pixels) with the takeover look, and clicks if asked.
@@ -2296,7 +2320,8 @@ public class CapriInternalBrowser : ICapriMod
     if (click) ShowBrowser();
     Point screen = Point.Empty;
     if (InBrowser(delegate(Browser b) { screen = b.OnScreen(x, y); return null; }) != null) return false;
-    Glide(screen, click);
+    // The mouse is theirs right now: she presses it on the page itself.
+    if (!Glide(screen, click) && click) OnPage("(function(x,y){var d=devicePixelRatio,e=document.elementFromPoint(x/d,y/d);if(!e)return '';e.click();return 'ok';})(" + x + "," + y + ")", out why);
     return true;
   }
 
@@ -3424,7 +3449,7 @@ public class CapriInternalBrowser : ICapriMod
     ShowBrowser();
     Point screen = Point.Empty;
     if (InBrowser(delegate(Browser b) { screen = b.OnScreen(int.Parse(p[0]), int.Parse(p[1])); return null; }) != null) return "Couldn't reach the video.";
-    Glide(screen);
+    if (!Glide(screen)) return "You're using the mouse, so I left it alone, choom. Press F on the video for full screen.";
     if (p[2] == "v") { Thread.Sleep(90); mouse_event(2, 0, 0, 0, IntPtr.Zero); Thread.Sleep(40); mouse_event(4, 0, 0, 0, IntPtr.Zero); }
     Thread.Sleep(1200);
     return OnPage("(function(){return document.fullscreenElement?'yes':'no';})()", out why) == "yes" ? "The video's full screen." : "Tried the player's full screen button, but the site didn't go full screen.";
@@ -3468,8 +3493,11 @@ public class CapriInternalBrowser : ICapriMod
     if (pick != "custom" || !Uri.TryCreate(link.Replace("%s", "x"), UriKind.Absolute, out u) || (u.Scheme != "https" && u.Scheme != "http")) return SiteOn(pick == "custom" ? "" : pick, fallback);
     string host = u.Host.ToLowerInvariant();
     if (host.StartsWith("www.", StringComparison.Ordinal)) host = host.Substring(4);
-    string home = u.Scheme + "://" + u.Host + "/";
-    string search = link.Contains("%s") ? link : link.EndsWith("=", StringComparison.Ordinal) ? link + "%s" : u.AbsolutePath.Length > 1 || u.Query.Length > 0 ? link : home + "search?q=%s";
+    string root = u.Scheme + "://" + u.Host + "/";
+    bool searchLink = link.Contains("%s") || link.EndsWith("=", StringComparison.Ordinal);
+    string home = searchLink ? root : link;
+    // Without %s: the site's own search page (most use one of these words for it).
+    string search = link.Contains("%s") ? link : searchLink ? link + "%s" : root + "search?keyword=%s&q=%s";
     return new[] { "custom", host, home, search, @"^https?://(?:[\w-]+\.)*" + Regex.Escape(host) + @"/(?!(?:search|login|signin|signup|register|account|user|settings|genre|category|tags?)\b)[^?#]*[\w-]{3,}" };
   }
 
@@ -3512,7 +3540,7 @@ public class CapriInternalBrowser : ICapriMod
         try
         {
           capri.Brain.Ask("Work out what they want to watch or find. Reply with only: site | search words. site is youtube, tiktok, crunchyroll, netflix, twitch, prime or custom (their own site) for videos (" + videoName + " if they didn't say), roblox for Roblox games, steam for PC games, itch for indie or free browser games, or web for anything else (products, recipes, places, sites, other games). If they want one you'd pick, choose what you, Capri, would enjoy. The search words go in that site's search box. If it's for them or someone else (a video I'd like, one Sam would like), choose words from what you know about who it's for; if you know nothing, pick something popular and fun. Never shorts. If they asked for an episode or season, keep it in the search words (one piece episode 1). For anime with no site named, use " + animeName + "; for a show or movie with no site named, use " + videoName + ". " +
-            "If they ask for a genre, theme or mood instead of a title (an action anime, a scary movie, a funny show, a chill video), think of one real, well-known title that fits it well (vary your picks) and search for that title, not the genre words: find me an action anime -> " + animeName + " | Jujutsu Kaisen. For videos, pick a specific creator, series or video idea that fits. When you picked a title like that, add | picked at the end. First be sure you know what they're looking for, where to look for it and what kind of thing it is. If you can't tell (it could mean very different things, or you don't know what they mean), reply with only ASK: and one short, friendly question for them instead. If they want the newest or latest, the search words are only who or what it's from (the channel or show), or home if they didn't say. If they didn't name a topic or kind of video (just a good video, something to watch), the search words are: home. Never leave them empty.",
+            "If they ask for a genre, theme or mood instead of a title (an action anime, a scary movie, a funny show, a chill video), think of one real, well-known title that fits it well (vary your picks) and search for that title, not the genre words: find me an action anime -> " + animeName + " | Jujutsu Kaisen. For videos, pick a specific creator, series or video idea that fits. When you picked a title like that, end with | PICKED (that one word, nothing after it). First be sure you know what they're looking for, where to look for it and what kind of thing it is. If you can't tell (it could mean very different things, or you don't know what they mean), reply with only ASK: and one short, friendly question for them instead. If they want the newest or latest, the search words are only who or what it's from (the channel or show), or home if they didn't say. If they didn't name a topic or kind of video (just a good video, something to watch), the search words are: home. Never leave them empty.",
             "They said: \"" + said + "\"", delegate(string answer)
             {
               Match ask = Regex.Match(answer ?? "", @"^\W*ASK\s*:\s*(.+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
@@ -3520,9 +3548,14 @@ public class CapriInternalBrowser : ICapriMod
               Match m = Regex.Match(answer ?? "", @"^\W*(\w+(?: video)?)\s*\|\s*(.+?)(?:\s*\|?\s*[(\[]?(picked)[)\]]?\.?)?\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
               if (m.Success)
               {
-                if (!jobs0) foreach (string[] s in Sites) if (Regex.IsMatch(m.Groups[1].Value.ToLowerInvariant(), "^(" + s[0] + ")$")) at = s;
-                what = Clip(m.Groups[2].Value.Trim('"', '\'', '.'), 120);
-                if (m.Groups[3].Success && what.Length > 0 && !Regex.IsMatch(what, "^home", Plain)) chosenTitle = what;
+                if (!jobs0) foreach (string[] s in Sites)
+                  if (Regex.IsMatch(m.Groups[1].Value.ToLowerInvariant(), "^(" + s[0] + ")$") && (named || kind == "thing" || Regex.IsMatch(said ?? "", @"\b(" + s[0] + @")\b", Plain))) at = s;
+                // However she wrote that she picked it ("| picked", "(picked at random)"...), it's not part of the search.
+                string words = m.Groups[2].Value;
+                Match note = Regex.Match(words, @"\s*(?:\||[(\[,;:\u2014-])?\s*\bpicked\b.*$", RegexOptions.IgnoreCase);
+                if (note.Success) words = words.Substring(0, note.Index);
+                what = Clip(words.Trim().Trim('"', '\'', '.', '|', ' '), 120);
+                if ((m.Groups[3].Success || note.Success) && what.Length > 0 && !Regex.IsMatch(what, "^home", Plain)) chosenTitle = what;
                 if (Regex.IsMatch(what, "^home( ?page| ?feed)?$", Plain)) what = "";
               }
               understood.Set();
@@ -4152,9 +4185,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "3312548c8d88b46eddcb5df29695118d6d2cb56a";
+  private const string AddonsCommit = "27ce384feadf5de8b54101bb6c805cd1a175338d";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=737526f38c4f54a5c2cd80838aa91787083c64c342f197fad23a7fdeb9ea2114;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=a2b6d38e3343c420c6ff17ed6d1ec00eadf505d7bcbc7cfc3fba6a58d0416a99;settings.css=89933711df272a07ce95f9b0e50a495c9508311fb70fafdc4da2eabaaa537ab0;whats-new.txt=0e5474556678c2a44b87c9eceadc5e44fa7d44c6b3a1e7d291a591a950a87a8b";
+  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=737526f38c4f54a5c2cd80838aa91787083c64c342f197fad23a7fdeb9ea2114;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=a2b6d38e3343c420c6ff17ed6d1ec00eadf505d7bcbc7cfc3fba6a58d0416a99;settings.css=56c265dd539590144cbee7003f2eb0a4b94cf5bc8d128f4a5f5aac3c2a90020b;whats-new.txt=7e915c15c17f433f85bf717c5b6c978bc89363e195a7810f2b146948687a9005";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -6062,9 +6095,17 @@ public class CapriInternalBrowser : ICapriMod
     private const string AutoPop = "(async function(){if(document.pictureInPictureElement)return;var v=[].slice.call(document.querySelectorAll('video')).filter(function(e){return!e.paused})[0];if(v)try{await v.requestPictureInPicture();}catch(e){}})()";
 
     private const string SwitchFade = "(function(){var d=document.documentElement;if(d&&d.animate&&!matchMedia('(prefers-reduced-motion: reduce)').matches)d.animate([{opacity:.45},{opacity:1}],{duration:200,easing:'cubic-bezier(.22,1,.36,1)'});return 1})()";
+    // The tab she's working in during a job (set when she picks or opens one), so their switching tabs doesn't move her.
+    internal Tab WorkTab;
+    internal bool Acting;
+    private Tab Work { get { return mod.Working && WorkTab != null && tabs.Contains(WorkTab) ? WorkTab : tab; } }
+    internal void StartWork() { if (WorkTab == null || !tabs.Contains(WorkTab)) WorkTab = tab; }
+
     private void Select(Tab t)
     {
       if (t == null) return;
+      if (Acting) WorkTab = t;
+      CapriInternalBrowser.workAway = mod.Working && WorkTab != null && tabs.Contains(WorkTab) && WorkTab != t;
       if (pwCard != null && pwCardTab != t) ClosePwCard();
       Tab was = tab;
       if (was != null && was != t && tabs.Contains(was)) Blip("switch");
@@ -8759,8 +8800,8 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // The tab in front, for her: its address and name (nothing for private tabs or her own pages), and whether it's playing.
-    internal string FrontAddress { get { Tab t = tab; return t == null || t.Private || t.OnReader ? null : t.Address; } }
-    internal string FrontTitle { get { Tab t = tab; return t == null || t.Private || t.OnReader ? null : t.Title; } }
+    internal string FrontAddress { get { Tab t = Work; return t == null || t.Private || t.OnReader ? null : t.Address; } }
+    internal string FrontTitle { get { Tab t = Work; return t == null || t.Private || t.OnReader ? null : t.Title; } }
     internal bool FrontPlaying { get { Tab t = tab; return t != null && !t.Private && !t.OnReader && t.Playing && !t.Muted; } }
     internal string Snapshot() { Tab t = tab; return t == null ? null : t.Seen; }
 
@@ -10459,7 +10500,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
     internal string Here()
     {
-      Tab t = tab;
+      Tab t = Work;
       if (t == null) return "no tab";
       if (t.Private) return "nothing you can see";
       return "tab " + (tabs.IndexOf(t) + 1) + " of " + tabs.Count + ", \"" + Clip(t.Title ?? "", 90) + "\""
@@ -10507,7 +10548,7 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
     internal Task<string> Script(string script, out string why)
     {
       why = null;
-      Tab t = tab;
+      Tab t = Work;
       if (t == null) why = "There's no tab open.";
       else if (t.Private) why = "That's a private tab, so that one's theirs alone.";
       else if (t.OnReader || t.Address == null) why = "The tab in front is Capri Browser's own page, not a website. Use go <site> first.";
@@ -10549,13 +10590,14 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
     internal string Do(string verb, string rest)
     {
-      Tab t = tab;
+      Tab t = Work;
       Form form = FindForm();
       switch (verb)
       {
         case "tabs": return TabList();
         case "go":
           if (rest.Length == 0) return "Say where to go.";
+          if (t != null && t != tab) { t.Viewer.Go(Where(rest)); return "Going to " + rest + "."; }
           address.Text = rest;
           Visit();
           return "Going to " + rest + ".";
@@ -10751,6 +10793,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
 
     internal void UseSite(string host, string url)
     {
+      // They've gone to another tab: she carries on in hers.
+      if (CapriInternalBrowser.workAway && WorkTab != null && tabs.Contains(WorkTab)) { WorkTab.Viewer.Go(url); return; }
       Uri u;
       foreach (Tab t in tabs)
         if (!t.Private && !t.OnReader && t.Address != null && Uri.TryCreate(t.Address, UriKind.Absolute, out u) && (u.Host == host || u.Host.EndsWith("." + host)))
@@ -10759,9 +10803,9 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       Do("show", "");
     }
 
-    internal Point OnScreen(int x, int y) { return tab.Viewer.Control.PointToScreen(new Point(x, y)); }
+    internal Point OnScreen(int x, int y) { return Work.Viewer.Control.PointToScreen(new Point(x, y)); }
 
-    internal string Showing { get { return tab == null || tab.Private || tab.OnReader ? null : tab.Address; } }
+    internal string Showing { get { Tab t = Work; return t == null || t.Private || t.OnReader ? null : t.Address; } }
 
     // ---- the left sidebar: Capri's website, Discord (hers, or their own), GitHub, and Capri notes ----
 
