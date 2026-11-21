@@ -4185,9 +4185,9 @@ public class CapriInternalBrowser : ICapriMod
   };
 
   // Browser addons, pinned to one commit. Every file must match its SHA-256 here, or it isn't used.
-  private const string AddonsCommit = "27ce384feadf5de8b54101bb6c805cd1a175338d";
+  private const string AddonsCommit = "53789d13d1b6058287bcdffb04a3abc8c2fe34d5";
   private const string Addons = "https://raw.githubusercontent.com/tob7as/Browser-addons/" + AddonsCommit + "/";
-  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=737526f38c4f54a5c2cd80838aa91787083c64c342f197fad23a7fdeb9ea2114;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=a2b6d38e3343c420c6ff17ed6d1ec00eadf505d7bcbc7cfc3fba6a58d0416a99;settings.css=56c265dd539590144cbee7003f2eb0a4b94cf5bc8d128f4a5f5aac3c2a90020b;whats-new.txt=7e915c15c17f433f85bf717c5b6c978bc89363e195a7810f2b146948687a9005";
+  private const string AddonHashes = "data/adblock.txt=f38d348c8396b5680bf97d38678abd9e2d200a8438deb5edf3c7e2c86fc96346;data/commands.txt=e1d3e5bcbed9ef9ca4bef7f0fff6b63f4399f3eeb0e91692a19f240f79c8db4b;data/lists.txt=737526f38c4f54a5c2cd80838aa91787083c64c342f197fad23a7fdeb9ea2114;games.txt=72379fea00637a9efe61cb52b285a136368b7f2556da57fe7e086734450ae891;games/anime.html=454cdb79b13b338449f0a9bc21bb630d2757273565721798ecfd2422828d31ce;games/celebs.html=ea4604ec23d2970969637b0e0bcc583c365329418149f980b7be74f3c5e8b2bf;games/daily.html=8fe939bee76b10c73f6f1ee687302bf69332aa2043e4c1a8f98aab304c3d1ec2;games/freegames.html=dd34dc788b27df8e0b68d42573e12d8a623b20d53f648be28b1a9a15bb33641d;games/guess.txt=1bca3689c63ed41b0dca427081b6358889cd576e7174240e9da781ba681054a0;games/memory.html=45d48eb7f452a205f86c1d32458036cd7995e931cf62d9b8163ee7750f5436bb;games/reaction.html=4194adf2ee79863a8c2f59aac8db72ee97689c037146c9dd8fdf8bcf077dff2f;games/roulette.txt=8fe6d057f1fc387ae0e6992f33b9766baaa903fb5cb278069daae254fc487eee;games/snake.html=0df0872c916664c5cc452eb5e70153d6b25fda9efb02d0e44ea50023e36123fd;games/typing.html=f89ec2cfbbfcbca6a7e913a1e8b30b5075745d043c620c5e273c85a11d6eab49;games/wiki.txt=a237f5f75227a6d1a5a70e70ca732fa7a032f06a18184207c8b9483aa6406cdf;help.txt=bfec9a54dd949dda1ec10ca05c16bc56cce49081136eae8bab98c1eb71c526cc;help/ar.txt=4914623d662f0b222cb781d653289df6a57392716aa7e0f3e5a180c81df80d66;help/bn.txt=a7cd0067a3652c6a5327880550e3e3c3545c41c1ee939b948d292137e6a4cdb6;help/de.txt=a32c62ee9133c377f13dae70e3eae4a8dce03071c05db834494d67a4132bc0a3;help/es.txt=77cdb74690f8ba05723a83001d5628a635bc1ce4771e67aabd0662b134a59e16;help/fil.txt=1cfd0c226cb0dc31a8cb284ede440148879533cf1766897dd3b5fbfbfb411185;help/fr.txt=fcca0c1e9e51c3e14c1aefbf73d6404378c743c403466d06a49572a8926057e9;help/hi.txt=d91a3b3d409c5ff567393fa882e3bc9e7da6b74712f3a807deda55f76a365d1b;help/id.txt=4fdc0b2f0760369abe3118872acfbafe0487122db3854a013aef2496e788e67a;help/it.txt=49a20f2139ad74a8546ced32151efdd4be1288b0b80942e742f67df0c6b20d29;help/ja.txt=b6a36ae1d3acb9b7eee608d2319167272f961867cba51bf58e8bbe18d796d68e;help/ko.txt=c4a8e6be7b747bb49c7ac4bc23f816bc776198b6eeef70af4c3fe794ee639f71;help/nl.txt=30792ec2e67a5545ab22c06c2bd602d8eefcdbac956c9baabc5fd32ded258374;help/pl.txt=06023f5466c93b841ab156fe4785cb3f20ff343b118bf63e9e0becfede232618;help/pt.txt=fc9c2c07380ac0b2ea1989653fd6bde06c02497f376399fb37fa255af61ff595;help/ru.txt=889ac1260ca4168396efc2a8b195a468fbe033ed94edfbe89789cf66d428fa18;help/sv.txt=241071f376140f19cbcfba0343214d747fb4bab085503a7bc3b0a00dc5155e0a;help/th.txt=574bb8a137d4ce5b2c3bb76f8b4dd7b7cb4fa47f8d1abad35510a8f6c504693c;help/tr.txt=e6f42478904e93321a9c6bdda0cddfac2f83e8bba91556db77a9622ab2df6100;help/uk.txt=575b67faecabc31568a1bec9bacd791c9de226629bd3ca8e1289b3e2cfcca63e;help/vi.txt=c4e07bcff348ad94db67e7d1d4e40b22488f28aa3040c2928eac7da95da90bac;help/zh-hans.txt=3832be4515798185f48c4be76724de6518a4bcdf5d14ed18d46911b4b38d7050;help/zh-hant.txt=3feb901a0fe9eb9088b453c5eda0dacc623a6c053ccbaea62ebe7203b6aa4bc5;languages.txt=e7a6d0a8e6477ca3ec0fac8bbee7715340b1b7c213b4b1fcb1b44156d97eca6b;pages/home.css=c86f0bd138d3f9e7317872eb44522f35c7bc51b76bd796e4c254c5e1305da645;pages/pages.css=f30510042634eb27310b1baa40575f0dff6696d24acb24795fabf4c84436681e;pages/welcome.html=a2b6d38e3343c420c6ff17ed6d1ec00eadf505d7bcbc7cfc3fba6a58d0416a99;settings.css=56c265dd539590144cbee7003f2eb0a4b94cf5bc8d128f4a5f5aac3c2a90020b;whats-new.txt=5cab06fa305d1179b52e7ae9dcb72d0617058a387543a54774802eaa40fdb111";
 
   // A Browser addons file, only if it's one of ours and matches its fingerprint; throws otherwise.
   internal static string Pinned(WebClient web, string file)
@@ -5087,7 +5087,7 @@ public class CapriInternalBrowser : ICapriMod
       {
         capri.Brain.Ask("You're Capri. Learn what the user's custom browser job is meant to do, then fix it so it works. Correct the spelling. Put each step on its own line as one command, worded like these: "
           + StepForms() + ". "
-          + "Split a step that does two things. Keep everything they meant, in the same order, and add nothing else. Keep a step you can't reword as they wrote it, spelled right. Never add passwords or card details. "
+          + "Each line they wrote is at least one step: never join lines. Split a step that does two things. The <...> parts are blanks: fill them from their words, never write < or >. If they didn't name a site, write open any website; for the page they're already on, write nothing for it. Keep everything they meant, in the same order, and add nothing else. Keep a step you can't reword as they wrote it, spelled right. Never add passwords or card details. "
           + "Fix the job's name's spelling too, keeping any / between names. Reply exactly like this and nothing else:\nNAME: <name>\nSTEPS:\n<one step a line>",
           "Name: " + Clip(OneLine(trigger).Replace("<<<", ""), 100) + "\nSteps:\n" + Clip((steps ?? "").Replace("<<<", ""), 2000), delegate(string a) { answer = a; got.Set(); });
         got.WaitOne(60000);
@@ -5097,6 +5097,10 @@ public class CapriInternalBrowser : ICapriMod
       string name, list;
       List<string> lines = JobFromAnswer(answer, out name, out list);
       if (lines.Count == 0) { Tell("My brain didn't give me any steps for that one, choom. Try again, or word a step or two yourself."); done(null, null); return; }
+      // Fewer steps than they wrote: she joined some, so their own lines stay.
+      List<string> own = new List<string>();
+      foreach (string line in (steps ?? "").Split('\n')) if (line.Trim().Length > 0) own.AddRange(Pieces(Blanks(line)));
+      if (lines.Count < own.Count) list = string.Join("\n", own.ToArray());
       done(name.Length > 1 ? name : OneLine(trigger).Trim('"'), list);
     });
   }
@@ -5117,9 +5121,13 @@ public class CapriInternalBrowser : ICapriMod
       if (l.Length == 0 || l.EndsWith(":") || Regex.IsMatch(l, @"^(?:name|steps?)\s*:", Plain) || lines.Count >= 20) continue;
       lines.Add(l.Length > 120 ? l.Substring(0, 120) : l);
     }
-    // All the steps on one line: "open youtube.com, then full screen".
+    // All the steps on one line: "open youtube.com, then full screen", "open <site> scroll down summarise".
     if (lines.Count == 1) lines = new List<string>(Regex.Split(lines[0], @"\s*(?:,\s*(?:and\s+)?(?:then\s+)?|\s+then\s+|\s*\|\s*)", Plain));
+    List<string> split = new List<string>();
+    foreach (string l in lines) split.AddRange(Pieces(Blanks(l)));
+    lines = split;
     lines.RemoveAll(delegate(string l) { return l.Trim().Length == 0; });
+    if (lines.Count > 20) lines.RemoveRange(20, lines.Count - 20);
     list = string.Join("\n", lines.ToArray());
     return lines;
   }
@@ -5254,6 +5262,16 @@ public class CapriInternalBrowser : ICapriMod
     }
     if (Regex.IsMatch(s, @"^(?:take\s+a\s+)?screen\s*shot(?:\s+(?:it|this))?(?:\s+(?:to|into|in)\s+(?:my\s+)?notes?)?$")) return BrowserTool("snapnote");
     if (Regex.IsMatch(s, @"^(?:shuffle|turn\s+on\s+shuffle)$")) return Touchy1(BrowserTool("click Shuffle"));
+    // No site named: one from their Speed Dial or a random article. "This site" is the one they're on.
+    if ((m = Regex.Match(Blanks(s), @"^(?:open|go\s+(?:to|on)|visit|pull\s+up)\s+(?:(?<here>this|the\s+current|my\s+current|the\s+same)|any|a|an|some|a\s+random|random|whatever)\s+(?:web\s*)?(?:site|page|website|link)s?$", Plain)).Success)
+    {
+      if (m.Groups["here"].Success) return null;
+      List<string> any = Dial().FindAll(delegate(string d) { return d.StartsWith("https://", StringComparison.Ordinal); });
+      any.Add("https://" + WikiHost + "/wiki/Special:Random");
+      string pick = any[new Random().Next(any.Count)];
+      jobSite = pick;
+      return BrowserTool("open " + pick);
+    }
     if (Straight(step)) return null;
     // Anything else that starts with one of her browser words: play, pause, click, scroll, search, open, next...
     Match verb = Regex.Match(s, @"^(play(?!\s+(?:me|something|some)\b)|pause|mute|unmute|click|press|scroll|search|open|go\s+to|go|find(?!\s+me\b)|next|loop|captions|subtitles|louder|quieter|pop\s*out|zoom|translate|back|forward|reload|autoscroll)\b\s*(.*)$");
@@ -5295,7 +5313,7 @@ public class CapriInternalBrowser : ICapriMod
 
   // Capri reading a page for a job: a scan line in her colours, paragraphs lighting up as she reads, and a box counting the
   // words. capriReadDone() finishes it (READ, then it fades); it never takes clicks and goes by itself after 90 seconds.
-  private static string Reading(string[] c)
+  internal static string Reading(string[] c)
   {
     return "(function(a,b,bg,fg){if(window.capriReadDone)capriReadDone(true);var d=document,h=innerHeight,still=matchMedia('(prefers-reduced-motion: reduce)').matches;"
       + "function el(css,txt){var e=d.createElement('div');e.style.cssText=css;if(txt)e.textContent=txt;return e;}"
@@ -5322,7 +5340,7 @@ public class CapriInternalBrowser : ICapriMod
   // The steps her AI can turn a job's words into: the step chips, and these.
   private static string StepForms()
   {
-    return string.Join(" | ", Browser.JobChips) + " | open <site> | click <words on the page> | type <words> in the <box> | search <words> | find me <thing> | play <song or video> | scroll up | go back | new tab | close this tab | translate this page | remind me in <time> to <thing> | summarise <part of the page> | ask <question>";
+    return string.Join(" | ", Browser.JobChips) + " | open <site> | open any website (no site named) | click <words on the page> | type <words> in the <box> | search <words> | find me <thing> | play <song or video> | scroll up | go back | new tab | close this tab | translate this page | remind me in <time> to <thing> | summarise <part of the page> | ask <question>";
   }
 
   // A step in their own words, as one she knows (or null). Remembered till Capri closes, so each wording is asked once.
@@ -5348,14 +5366,22 @@ public class CapriInternalBrowser : ICapriMod
     return meant;
   }
 
+  // "open <site>" and other blanks left in a step: a site they didn't name is any website.
+  private static string Blanks(string line)
+  {
+    return Regex.Replace(Regex.Replace(line ?? "", @"^((?:open|go\s+to|visit)\s+)<\s*(?:site|website|link|url|page)\s*>", "$1any website", Plain), @"\s*<\s*[\w ]{1,20}\s*>\s*", " ").Trim();
+  }
+
   // One line of a job as the steps in it: "youtube.com play something chill full screen" is open youtube.com, play something
-  // chill, full screen. Lines that say, type, search, ask or remind keep their commas.
+  // chill, full screen; "open any website scroll down summarise" is three. Lines that say, type, search, ask or remind keep their commas.
   private static List<string> Pieces(string line)
   {
     List<string> got = new List<string>();
     string l = line.Trim().TrimEnd('.');
     if (l.Length == 0) return got;
     if (Regex.IsMatch(l, @"^(?:say|type|search|ask|remind)\b", Plain)) { got.Add(l); return got; }
+    l = Blanks(l);
+    if (l.Length == 0) return got;
     // A site, then more: open the site first.
     Match site = Regex.Match(l, @"^(?:(?:open|go\s+to|go|visit)\s+)?(?<site>(?:https?://)?[\w-]+(?:\.[\w-]+)+(?:/\S*)?)(?:[\s,]+(?:and\s+|then\s+)*(?<rest>.+))?$", Plain);
     if (site.Success && Regex.IsMatch(site.Groups["site"].Value, @"\.[a-z]{2,}(?:/|$)", Plain))
@@ -5364,12 +5390,14 @@ public class CapriInternalBrowser : ICapriMod
       if (site.Groups["rest"].Success) got.AddRange(Pieces(site.Groups["rest"].Value));
       return got;
     }
+    // Commands run together with no "then": a new one starts at these words (not "click full screen" or "go full screen").
+    l = Regex.Replace(l, @"(?<!\b(?:click|press|tap|hit|go|make\s+it|put\s+it|turn\s+on|in)(?:\s+on)?(?:\s+the)?)\s+(?:and\s+)?(?=(?:scroll\s+(?:up|down|to)|summari[sz]e|sum\s+it\s+up|full\s*screen|go\s+back|new\s+tab|close\s+this\s+tab|press\s+enter|next\s+video|wait\s+(?:\d|for\s+it)|read\s+it\s+out|check\s+the\s+comments|screen\s*shot|translate\s+this)\b)", ", ", Plain);
     foreach (string part in Regex.Split(l, @"\s*(?:,\s*(?:and\s+)?(?:then\s+)?|;\s*|\s+(?:and\s+)?then\s+|\s+and\s+(?=(?:play|pause|open|go|click|search|scroll|say|wait|volume|speed|full|find|summari|read|add|put|take|mute|unmute|next|turn|make)\w*\b))", Plain))
     {
       string p = part.Trim();
       // "... full screen" on the end is its own step.
       Match full = Regex.Match(p, @"^(?<a>.+?)\s+(?:in\s+|and\s+(?:go\s+|make\s+it\s+)?)?full\s*screen(?:\s+it)?$", Plain);
-      if (full.Success && !Regex.IsMatch(full.Groups["a"].Value, @"^(?:go|make\s+it|put\s+it|turn)$", Plain)) { got.Add(full.Groups["a"].Value); got.Add("full screen"); }
+      if (full.Success && !Regex.IsMatch(full.Groups["a"].Value, @"^(?:go|make\s+it|put\s+it|turn|click|press|tap|hit)$", Plain)) { got.Add(full.Groups["a"].Value); got.Add("full screen"); }
       else if (p.Length > 0) got.Add(p);
     }
     return got;
@@ -10108,7 +10136,7 @@ public class CapriInternalBrowser : ICapriMod
     }
 
     // Steps you can click to add on the Custom jobs page.
-    internal static readonly string[] JobChips = { "open youtube.com", "play", "pause", "full screen", "volume 40", "speed 1.5", "next video", "skip 2 minutes", "click Shuffle", "scroll down", "search lofi beats", "type hello in the search box", "press enter", "find me a lofi playlist", "new tab", "summarise", "check the comments", "read it out", "screenshot to notes", "remind me in 20 minutes to stretch", "wait 5", "wait for it to load", "ask Ready?", "say Let's go, choom" };
+    internal static readonly string[] JobChips = { "open youtube.com", "open any website", "play", "pause", "full screen", "volume 40", "speed 1.5", "next video", "skip 2 minutes", "click Shuffle", "scroll down", "search lofi beats", "type hello in the search box", "press enter", "find me a lofi playlist", "new tab", "summarise", "check the comments", "read it out", "screenshot to notes", "remind me in 20 minutes to stretch", "wait 5", "wait for it to load", "ask Ready?", "say Let's go, choom" };
 
     // Custom jobs: a header, how to word one (folded away once you've got some), each of theirs as a card, and a new one.
     private string JobsPage()
@@ -10474,7 +10502,8 @@ m.firstChild.addEventListener('click',function(){var a=on;shut();if(!a)return;lo
       summary.Working = true;
       giveUp.Stop();
       giveUp.Start();
-      Action done = delegate { Post(delegate { giveUp.Stop(); summary.Working = false; }); };
+      bool scan = !t.OnReader && t.Address != null && t.Viewer.Script(CapriInternalBrowser.Reading(mod.look.Colors)) != null;
+      Action done = delegate { Post(delegate { giveUp.Stop(); summary.Working = false; if (scan) t.Viewer.Script("window.capriReadDone&&capriReadDone()"); }); };
       if (t.OnReader) { mod.Summarise("Her search results for: " + t.Page.Query, null, t.Page.Text(6000), done, question); return; }
       string title = t.Title, at = t.Address;
       t.Viewer.Text(delegate(string text) { mod.Summarise(title, at, text, done, question); });
