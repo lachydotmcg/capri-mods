@@ -50,6 +50,22 @@
       "about": "On a laptop, Capri gets more dramatic the lower your battery goes, and cheers when you plug in."
     },
     {
+      "folder": "better-chat-capri",
+      "file": "better-chat-capri.capri-code",
+      "name": "Better Chat // Capri",
+      "kind": "code",
+      "author": "CyberPhantxm",
+      "about": "Toggle Capri's chat bubble, press Esc to cancel her response, and give yourself 2.5 seconds between phrases before sending a voice message."
+    },
+    {
+      "folder": "better-toolbar-capri",
+      "file": "better-toolbar-capri.capri-code",
+      "name": "Better Toolbar // Capri",
+      "kind": "code",
+      "author": "CyberPhantxm",
+      "about": "Keep Capri's toolbar clear of her sprite and screen edges, hide it when you click away, and toggle Hologram mode from the toolbar."
+    },
+    {
       "folder": "btd6-strategy",
       "file": "btd6-strategy.capri-skill",
       "name": "BTD6 strategy",
