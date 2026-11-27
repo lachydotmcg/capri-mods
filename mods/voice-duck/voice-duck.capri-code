@@ -1,0 +1,285 @@
+// capri-mod: 1
+// id: voice-duck
+// name: Voice Duck
+// version: 1.0.0
+// author: Quaisar_THM
+// description: Turns her voice down while your game or music is loud, and back up when it's quiet. How loud counts and how far she ducks are in Options.
+// requires: api 3
+// permissions: music, voice
+
+using System;
+using System.Reflection;
+using CapriDesktop;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+
+public class VoiceDuck : ICapriMod
+{
+    const BindingFlags Any = BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+
+    ICapriHost capri;
+    Opts opts;
+    FieldInfo volume;               // Voice.Loudness: her voice volume, 0 to 100
+    System.Threading.Timer tick;
+    int normal = -1;                // her volume when nothing is loud
+    int lastSet = -1;               // what this mod last set, to spot anyone else's change
+    double ambient;                 // smoothed loudness of everything else
+    bool ducked;
+    DateTime talkedAt = DateTime.MinValue;
+    volatile float threshold = 0.25f;
+    volatile int duckTo = 40;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (opts == null)
+        {
+            opts = new Opts(host, "Voice Duck");
+            opts.Section("When she ducks");
+            opts.Number("Counts as loud (0 = silence, 1 = full blast)", "loud", 0.25, 0.05, 0.9, 0.05, 2, delegate(double v) { threshold = (float)v; });
+            opts.Number("Her voice while it's loud (% of her normal volume)", "to", 40, 0, 100, 5, 0, delegate(double v) { duckTo = (int)v; });
+            opts.Note("It listens to your speakers while she isn't talking, so her own voice never ducks her. Her volume setting and the Mute Button mod still work: whatever you set becomes her new normal.");
+        }
+        threshold = (float)opts.Num("loud", 0.25, 0.05, 0.9);
+        duckTo = (int)opts.Num("to", 40, 0, 100);
+        try
+        {
+            Type voice = typeof(ICapriHost).Assembly.GetType("CapriDesktop.Voice", true);
+            volume = voice.GetField("Loudness", Any);
+            if (volume == null || volume.FieldType != typeof(int)) throw new MissingFieldException("Voice", "Loudness");
+            normal = lastSet = (int)volume.GetValue(null);
+            tick = new System.Threading.Timer(delegate { Tick(); }, null, 500, 200);
+            capri.Log("Voice Duck: she turns her voice down while your game or music is loud.");
+        }
+        catch (Exception e) { capri.Log("Voice Duck could not start: " + e.Message); }
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        try
+        {
+            if (tick != null) { tick.Dispose(); tick = null; }
+            // Back to her normal volume, unless someone else has changed it since.
+            if (volume != null && normal >= 0 && (int)volume.GetValue(null) == lastSet) volume.SetValue(null, normal);
+        }
+        catch (Exception e) { if (capri != null) capri.Log("Voice Duck could not restore her volume: " + e.Message); }
+    }
+
+    void Tick()
+    {
+        try
+        {
+            int now = (int)volume.GetValue(null);
+            if (now != lastSet)
+            {
+                // Her volume setting or the Mute Button changed it: that's her new normal.
+                if (now == 0) { lastSet = 0; return; }        // muted: leave it alone
+                normal = now;
+                lastSet = now;
+                ducked = false;
+            }
+            if (now == 0) return;
+            // Her own voice reaches the speakers too, so only listen while she's quiet,
+            // and a moment after, while the last word fades.
+            if (capri.Voice.Talking) { talkedAt = DateTime.UtcNow; return; }
+            if ((DateTime.UtcNow - talkedAt).TotalMilliseconds < 600) return;
+            ambient = ambient * 0.8 + capri.Music.Loudness * 0.2;
+            // A gap between "loud" and "quiet" so she doesn't flicker at the edge.
+            if (!ducked && ambient > threshold) ducked = true;
+            else if (ducked && ambient < threshold * 0.7) ducked = false;
+            int wanted = ducked ? (int)Math.Round(normal * duckTo / 100.0) : normal;
+            if (wanted != now)
+            {
+                volume.SetValue(null, wanted);
+                lastSet = wanted;
+            }
+        }
+        catch (Exception) { }
+    }
+}
+
+// ---- Options page (Quaisar_THM's shared toolkit) -------------------------------
+// An Options page under Mainframe > Mods, in her colours. Every value lives in
+// this mod's own Store, so it survives restarts and updates. Toggles and
+// numbers apply as you change them; text applies on Enter or when you click away.
+sealed class Opts
+{
+    static readonly Color Back = Color.FromArgb(16, 15, 8), Ink = Color.FromArgb(236, 236, 241),
+        Dim = Color.FromArgb(150, 146, 120), Yellow = Color.FromArgb(252, 239, 3),
+        Cyan = Color.FromArgb(5, 202, 237), Field = Color.FromArgb(30, 29, 14), Edge = Color.FromArgb(90, 86, 10);
+    const int Wide = 690, Right = 470;
+
+    delegate int Row(Control page, int y);
+    readonly ICapriHost host;
+    readonly List<Row> rows = new List<Row>();
+
+    public Opts(ICapriHost host, string title)
+    {
+        this.host = host;
+        host.Ui.SetOptions(title, Build);
+    }
+
+    // Reading values, with sane fallbacks for anything missing or out of range.
+    public bool Flag(string key, bool def) { try { return host.Store.Flag(key, def); } catch (Exception) { return def; } }
+    public double Num(string key, double def, double min, double max)
+    {
+        double v;
+        try { v = host.Store.Number(key, def); } catch (Exception) { v = def; }
+        return double.IsNaN(v) ? def : Math.Max(min, Math.Min(max, v));
+    }
+    public string Str(string key, string def)
+    {
+        try { string v = host.Store.Get(key, def); return v ?? def; } catch (Exception) { return def; }
+    }
+
+    public void Section(string title)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            System.Windows.Forms.Label l = Text(title.ToUpperInvariant(), 18, y + (y > 14 ? 10 : 0), Wide);
+            l.ForeColor = Cyan;
+            l.Font = new Font("Segoe UI Semibold", 9.5f);
+            p.Controls.Add(l);
+            return l.Bottom + 8;
+        });
+    }
+
+    public void Note(string text)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            System.Windows.Forms.Label l = Text(text, 18, y, Wide);
+            l.ForeColor = Dim;
+            l.Font = new Font("Segoe UI", 8.5f);
+            l.Height = TextRenderer.MeasureText(text, l.Font, new Size(Wide, 0), TextFormatFlags.WordBreak).Height + 4;
+            p.Controls.Add(l);
+            return l.Bottom + 8;
+        });
+    }
+
+    public void Toggle(string label, string key, bool def, Action<bool> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y + 7, Right - 30));
+            Button off = Pill("OFF", Right + 50, y), on = Pill("ON", Right + 140, y);
+            MethodInvoker paint = delegate
+            {
+                bool v = Flag(key, def);
+                Lit(on, v);
+                Lit(off, !v);
+            };
+            off.Click += delegate { Save(key, false); paint(); Tell(changed, false); };
+            on.Click += delegate { Save(key, true); paint(); Tell(changed, true); };
+            paint();
+            p.Controls.Add(off);
+            p.Controls.Add(on);
+            return y + 42;
+        });
+    }
+
+    public void Number(string label, string key, double def, double min, double max, double step, int decimals, Action<double> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y + 7, Right - 30));
+            NumericUpDown box = new NumericUpDown
+            {
+                Left = Right + 50, Top = y + 2, Width = 170, DecimalPlaces = decimals,
+                Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step,
+                BackColor = Field, ForeColor = Ink, BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 10f), TextAlign = HorizontalAlignment.Center,
+            };
+            box.Value = (decimal)Num(key, def, min, max);
+            box.ValueChanged += delegate
+            {
+                double v = (double)box.Value;
+                try { host.Store.Set(key, v); } catch (Exception) { }
+                Tell(changed, v);
+            };
+            p.Controls.Add(box);
+            return y + 42;
+        });
+    }
+
+    public void Text(string label, string key, string def, Action<string> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y, Wide));
+            TextBox box = new TextBox
+            {
+                Left = 18, Top = y + 24, Width = Wide, Text = Str(key, def),
+                BackColor = Field, ForeColor = Ink, BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 10f),
+            };
+            string applied = box.Text;
+            MethodInvoker apply = delegate
+            {
+                if (box.Text == applied) return;
+                applied = box.Text;
+                try { host.Store.Set(key, applied); } catch (Exception) { }
+                Tell(changed, applied);
+            };
+            box.Leave += delegate { apply(); };
+            box.KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                apply();
+            };
+            p.Controls.Add(box);
+            return box.Bottom + 12;
+        });
+    }
+
+    Control Build()
+    {
+        Panel page = new Panel { Width = Wide + 36, BackColor = Back, ForeColor = Ink, Font = new Font("Segoe UI", 9.5f) };
+        int y = 14;
+        foreach (Row r in rows) y = r(page, y);
+        page.Height = y + 10;
+        return page;
+    }
+
+    void Save(string key, bool v) { try { host.Store.Set(key, v); } catch (Exception) { } }
+
+    // A setting that fails to apply is logged, never thrown into her window.
+    void Tell<T>(Action<T> changed, T value)
+    {
+        if (changed == null) return;
+        try { changed(value); }
+        catch (Exception e) { try { host.Log("Options: " + e.Message); } catch (Exception) { } }
+    }
+
+    static System.Windows.Forms.Label Text(string text, int x, int y, int width)
+    {
+        return new System.Windows.Forms.Label { Text = text, Left = x, Top = y, Width = width, AutoSize = false, Height = 22, ForeColor = Ink, BackColor = Color.Transparent };
+    }
+
+    static Button Pill(string text, int x, int y)
+    {
+        Button b = new Button { Text = text, Left = x, Top = y, Width = 84, Height = 30, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Default, Font = new Font("Segoe UI Semibold", 9f) };
+        b.FlatAppearance.BorderColor = Edge;
+        return b;
+    }
+
+    static void Lit(Button b, bool lit)
+    {
+        b.BackColor = lit ? Yellow : Field;
+        b.ForeColor = lit ? Back : Ink;
+        b.FlatAppearance.BorderColor = lit ? Yellow : Edge;
+    }
+
+    // "a, b ,c" -> ["a","b","c"], blanks dropped.
+    public static List<string> Words(string list)
+    {
+        List<string> words = new List<string>();
+        foreach (string w in (list ?? "").Split(','))
+            if (w.Trim().Length > 0) words.Add(w.Trim());
+        return words;
+    }
+}
