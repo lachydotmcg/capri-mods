@@ -1,0 +1,122 @@
+// capri-mod: 1
+// id: plain-pointer
+// name: Plain Pointer
+// version: 1.0.0
+// author: Quaisar_THM
+// description: Swaps her pink and red pointer for the normal Windows arrow on her, her bubble, her talk buttons and her windows, at every screen scale. Turning it off brings hers back.
+
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Windows.Forms;
+using CapriDesktop;
+
+public class NormalCursor : ICapriMod
+{
+    ICapriHost capri;
+    FieldInfo pointerField;              // up to 0.9.8: one cached pointer
+    Dictionary<int, Cursor> cache;       // 0.9.9 on: a pointer per cursor size
+    Dictionary<int, Cursor> saved;       // that cache as it was, to put back
+    readonly HashSet<Cursor> herCursors = new HashSet<Cursor>();
+    Cursor hers;
+    readonly HashSet<Control> swapped = new HashSet<Control>();
+    // Her talk pill and bubble are made before mods start but only open when
+    // you hover near her, so a one-off sweep misses them. This keeps sweeping.
+    System.Threading.Timer watch;
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        try
+        {
+            // Look.Pointer hands out whatever sits in this cache, so every
+            // window made from now on gets the normal arrow.
+            Type look = typeof(ICapriHost).Assembly.GetType("CapriDesktop.Look", true);
+            pointerField = look.GetField("pointer", BindingFlags.Static | BindingFlags.NonPublic);
+            PropertyInfo pointer = look.GetProperty("Pointer", BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            hers = (Cursor)pointer.GetValue(null, null);   // builds hers if it isn't yet
+            herCursors.Add(hers);
+            if (pointerField != null) pointerField.SetValue(null, Cursors.Default);
+            else
+            {
+                // 0.9.9 draws her pointer per screen scale and caches each size. Every
+                // size she could ask for gets the arrow, so any screen, any DPI, any
+                // window she makes later finds the arrow already waiting.
+                FieldInfo pointers = look.GetField("pointers", BindingFlags.Static | BindingFlags.NonPublic);
+                if (pointers == null) throw new MissingFieldException("Look", "pointers");
+                cache = (Dictionary<int, Cursor>)pointers.GetValue(null);
+                lock (cache)
+                {
+                    saved = new Dictionary<int, Cursor>(cache);
+                    foreach (Cursor c in saved.Values) herCursors.Add(c);
+                    for (int size = 1; size <= 1024; size++) cache[size] = Cursors.Default;
+                }
+            }
+
+            // Windows already made still hold hers: swap them now, and keep
+            // checking for ones that open later.
+            Sweep(hers, Cursors.Default, true);
+            watch = new System.Threading.Timer(delegate { Sweep(hers, Cursors.Default, true); }, null, 500, 500);
+            capri.Log("Plain Pointer: her pointer is now the Windows arrow.");
+        }
+        catch (Exception e)
+        {
+            capri.Log("Plain Pointer could not start: " + e.Message);
+        }
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        try
+        {
+            if (watch != null) { watch.Dispose(); watch = null; }
+            if (hers != null)
+            {
+                if (pointerField != null) pointerField.SetValue(null, hers);
+                if (cache != null && saved != null)
+                    lock (cache) { cache.Clear(); foreach (KeyValuePair<int, Cursor> kv in saved) cache[kv.Key] = kv.Value; }
+                Sweep(Cursors.Default, hers, false);
+            }
+        }
+        catch (Exception e)
+        {
+            if (capri != null) capri.Log("Plain Pointer could not restore her pointer: " + e.Message);
+        }
+    }
+
+    // Controls belong to the UI thread, and this runs from a timer thread,
+    // so each window is changed on its own thread with BeginInvoke.
+    void Sweep(Cursor from, Cursor to, bool remember)
+    {
+        List<Form> forms = new List<Form>();
+        try { foreach (Form f in Application.OpenForms) forms.Add(f); }
+        catch (InvalidOperationException) { return; }   // the list changed mid-read: next tick
+        foreach (Form form in forms)
+        {
+            Form f = form;
+            MethodInvoker swap = delegate { Swap(f, from, to, remember); };
+            try
+            {
+                if (f.IsDisposed || !f.IsHandleCreated) continue;
+                f.BeginInvoke(swap);
+            }
+            catch (InvalidOperationException) { }    // closed between the check and the call
+        }
+    }
+
+    void Swap(Control control, Cursor from, Cursor to, bool remember)
+    {
+        if (control.IsDisposed) return;
+        // Going back, only touch what this mod changed.
+        // Going to the arrow, any of her pointer's sizes counts; going back, only the arrow.
+        bool match = remember ? herCursors.Contains(control.Cursor) : control.Cursor == from;
+        if (match && (remember || swapped.Contains(control)))
+        {
+            control.Cursor = to;
+            if (remember) swapped.Add(control);
+        }
+        foreach (Control child in control.Controls) Swap(child, from, to, remember);
+    }
+}
