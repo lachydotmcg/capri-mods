@@ -1,0 +1,1452 @@
+// capri-mod: 1
+// id: capri-voice-hub
+// name: Capri Voice Hub Ultimate
+// version: 3.5.0
+// author: Jean
+// description: Lokale deutsche Befehle mit Zustandsprüfung, sicherer Sprachbrücke und schonender App-Steuerung.
+// permissions: chat, music, voice
+// requires: api 3
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Windows.Forms;
+using Microsoft.Win32;
+using CapriDesktop;
+
+// Pure parser; deliberately separate from execution. An LLM never supplies executable code.
+public sealed class VoiceIntent
+{
+    public string Action;
+    public string App;
+    public int Value;
+    public string Mod;
+    public string Command;
+    public string Key { get { return Action + ":" + App + ":" + Value + ":" + Mod + ":" + Command; } }
+    public VoiceIntent(string action, string app) { Action = action; App = app; }
+}
+
+public static class VoiceIntentParser
+{
+    public static readonly Dictionary<string, string> Apps = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+        {"steam", "Steam"}, {"spotify", "Spotify"}, {"discord", "Discord"}, {"obs", "OBS Studio"}, {"obs studio", "OBS Studio"},
+        {"blender", "Blender"}, {"unity hub", "Unity Hub"}, {"visual studio code", "Visual Studio Code"}, {"vs code", "Visual Studio Code"},
+        {"chrome", "Google Chrome"}, {"google chrome", "Google Chrome"}, {"edge", "Microsoft Edge"}, {"microsoft edge", "Microsoft Edge"},
+        {"firefox", "Firefox"}, {"vlc", "VLC media player"}, {"vlc player", "VLC media player"}, {"vlc media player", "VLC media player"},
+        {"whatsapp", "WhatsApp"}, {"telegram", "Telegram"}, {"word", "Microsoft Word"}, {"microsoft word", "Microsoft Word"},
+        {"excel", "Microsoft Excel"}, {"microsoft excel", "Microsoft Excel"}, {"outlook", "Microsoft Outlook"}, {"microsoft outlook", "Microsoft Outlook"},
+        {"editor", "Editor"}, {"notepad", "Editor"}, {"notepad plus plus", "Notepad++"}, {"rechner", "Rechner"}, {"taschenrechner", "Rechner"}
+    };
+    public static string Normalize(string text)
+    {
+        string s = (text ?? "").ToLowerInvariant().Replace("ä", "ae").Replace("ö", "oe").Replace("ü", "ue").Replace("ß", "ss");
+        return Regex.Replace(Regex.Replace(s, @"[^a-z0-9 ]", " "), @"\s+", " ").Trim();
+    }
+    public static bool Unsafe(string text)
+    {
+        string s = Normalize(text);
+        return s.Length < 2 || s.Length > 240 || Regex.IsMatch(s, @"\b(nicht|nie|niemals|kein\w*|ohne|vielleicht|falls|wenn|sagte|sagt|gesagt|erzaehl\w*|behaupt\w*|beispiel|zitat|angenommen|loesch\w*|installier\w*|deinstallier\w*|erzwing\w*|kill|taskkill)\b")
+            || Regex.IsMatch(s, @"\b(wie|warum|wieso|weshalb|erklaer\w*|anleitung|bedeutet|funktioniert)\b")
+            || Regex.IsMatch(s, @"^(was|wer|welch\w*|kann ich|kann man|kann capri|koennte ich|darf ich|ist es|geht es|ich weiss|ich glaube)\b")
+            || text.IndexOf('"') >= 0 || text.IndexOf('„') >= 0 || text.IndexOf('“') >= 0 || text.IndexOf('«') >= 0 || text.IndexOf('»') >= 0
+            || Regex.IsMatch(text, @"(?:^|\s)['‘][^'’]+['’](?:$|\s|[.,!?])");
+    }
+    public static string StripAddress(string s)
+    {
+        s = Regex.Replace(s, @"^(?:hey )?capri(?: ai)?\s+", "");
+        s = Regex.Replace(s, @"^(?:kannst|koenntest|wuerdest) du (?:mir )?", "");
+        s = Regex.Replace(s, @"^ich (?:moechte|will) ", "");
+        s = Regex.Replace(s, @"\b(bitte|mal|doch|eben|kurz|mir|jetzt)\b", " ");
+        return Regex.Replace(s, @"\s+", " ").Trim();
+    }
+    public static string NormalizeMediaSpeech(string s)
+    {
+        // A closed list of observed noun spellings and token boundaries only.
+        // Do not apply this to aliases/app registration or use fuzzy action verbs.
+        const string actions = "starten|abspielen|stoppen|pausieren|anhalten|beenden|unterbrechen|fortsetzen|weiterspielen";
+        s = Regex.Replace(s, @"\b(?:lied|lead|leed)\s*(?:wieder|wider)\s*gabe(?=\b|(?:" + actions + @")\b)", "liedwiedergabe");
+        s = Regex.Replace(s, @"\bmusik\s*(?:wieder|wider)\s*gabe(?=\b|(?:" + actions + @")\b)", "musikwiedergabe");
+        s = Regex.Replace(s, @"\bvideo\s*(?:wieder|wider)\s*gabe(?=\b|(?:" + actions + @")\b)", "videowiedergabe");
+        s = Regex.Replace(s, @"\byou\s+tube\b", "youtube");
+        s = Regex.Replace(s, @"\byoutube\s*(?:wieder|wider)\s*gabe(?=\b|(?:" + actions + @")\b)", "youtube wiedergabe");
+        return Regex.Replace(s, @"\b(liedwiedergabe|musikwiedergabe|videowiedergabe|wiedergabe|musik|video)(" + actions + @")\b", "$1 $2");
+    }
+    public static VoiceIntent Parse(string text, IDictionary<string, string> extraApps)
+    {
+        if (Unsafe(text)) return null;
+        string directive = StripAddress(Normalize(text));
+        string s = NormalizeMediaSpeech(directive);
+        // Normalization never removes negation or extra text. Both guards and
+        // the complete directive grammar must still accept the utterance.
+        if (Unsafe(s)) return null;
+        if (s == "voice hub status" || s == "sprachsteuerung status") return new VoiceIntent("status", null);
+        if (Regex.IsMatch(s, @"\b(und|danach|anschliessend)\b")) return null; // caller prevalidates bounded sequences
+        // Every branch below is a full directive grammar, never a substring command search.
+        if (Regex.IsMatch(s, @"^(mach(?:e)? |stell(?:e)? )?(?:die |das |den )?(?:musik |lautstaerke |spotify )?(?:etwas |ein bisschen )?(lauter|leiser)$"))
+        { VoiceIntent v = new VoiceIntent("media.volume", Word(s,"spotify")?"Spotify":null); v.Value = s.EndsWith("leiser") ? -10 : 10; return v; }
+        Match volume = Regex.Match(s, @"^(?:stell(?:e)? |setz(?:e)? )?(?:die )?(?:lautstaerke|musik|spotify) (?:auf )?(\d{1,3})(?: prozent)?$");
+        if (volume.Success)
+        { int n = int.Parse(volume.Groups[1].Value, CultureInfo.InvariantCulture); if (n > 100) return null; VoiceIntent v = new VoiceIntent("media.volume.set", Word(s,"spotify")?"Spotify":null); v.Value = n; return v; }
+        VoiceIntent media = ParseMedia(s);
+        if (media != null) return media;
+        // ASR noun correction belongs to media directives, never to app names.
+        s = directive;
+        Match appCommand = Regex.Match(s, @"\A(?<verb>oeffne|oeffnen|oeffn|starte|starten|start|schliesse|schliessen|schliess|beende|beenden|minimiere|minimieren|fokussiere|fokussieren) (?<target>.+)\z");
+        if (!appCommand.Success) appCommand = Regex.Match(s, @"\A(?<target>.+) (?<verb>oeffnen|starten|schliessen|beenden|minimieren|fokussieren)\z");
+        if (!appCommand.Success) appCommand = Regex.Match(s, @"\Amach(?:e)? (?<target>.+) (?<verb>auf|zu)\z");
+        if (!appCommand.Success) appCommand = Regex.Match(s, @"\A(?:bringe|bring|hole|hol) (?<target>.+) (?<verb>nach vorne|in den vordergrund)\z");
+        if (!appCommand.Success) return ParseFusedApp(s, extraApps);
+        string action = appCommand.Groups["verb"].Value;
+        string verb = Full(action, "oeffne|oeffnen|oeffn|starte|starten|start|auf") ? "app.open" : Full(action, "schliesse|schliessen|schliess|beende|beenden|zu") ? "app.close" : Full(action, "minimiere|minimieren") ? "app.minimize" : "app.focus";
+        string target = appCommand.Groups["target"].Value;
+        if (IsYouTubeName(target)) return null;
+        bool ambiguous;
+        string app = MatchAppName(target, extraApps, true, out ambiguous);
+        if (ambiguous) return AmbiguousApp(target);
+        if (app != null) return new VoiceIntent(verb, app);
+        target = Regex.Replace(target, @"^(?:(?:die|meine) (?:app|anwendung)|(?:das|mein) (?:programm|spiel)|app|anwendung|programm|spiel|meinen|mein|den|die|das) ", "");
+        if (IsYouTubeName(target)) return null;
+        if (target == "browser") return new VoiceIntent(verb, "Browser");
+        if (target == "fenster") return new VoiceIntent(verb == "app.close" ? "window.close" : verb == "app.minimize" ? "window.minimize" : "unknown", null);
+        if (target == "spiel") return new VoiceIntent("clarify", null);
+        app = MatchAppName(target, extraApps, false, out ambiguous);
+        return ambiguous ? AmbiguousApp(target) : app == null ? null : new VoiceIntent(verb, app);
+    }
+    private static bool Full(string text, string pattern) { return Regex.IsMatch(text, @"\A(?:" + pattern + @")\z"); }
+    private static VoiceIntent ParseMedia(string s)
+    {
+        const string player = "(?:spotify|vlc(?: media player| player)?|youtube)";
+        const string noun = "(?:musik|wiedergabe|liedwiedergabe|musikwiedergabe|videowiedergabe|video|lied|song|titel|track)";
+        const string item = "(?:(?:die|das|den|meine|mein|meinen) )?(?:(?:aktuelle|aktuellen|laufende|laufenden) )?(?:youtube )?" + noun;
+        const string track = "(?:lied|song|titel|track)";
+        string app = null;
+        MatchCollection targets = Regex.Matches(s, @"\b(?:in|auf|bei) (?<player>" + player + @")(?= |$)");
+        if (targets.Count > 1) return null;
+        if (targets.Count == 1) {
+            Match t = targets[0]; app = t.Groups["player"].Value == "spotify" ? "Spotify" : t.Groups["player"].Value == "youtube" ? "YouTube" : "VLC media player";
+            s = Regex.Replace(s.Remove(t.Index, t.Length), @"\s+", " ").Trim();
+        }
+        bool spotify = Word(s, "spotify"), vlc = Word(s, "vlc"), youtube = Word(s, "youtube");
+        bool video = Word(s, "video") || Word(s, "videowiedergabe");
+        string named = spotify ? "Spotify" : vlc ? "VLC media player" : youtube ? "YouTube" : null;
+        if ((spotify ? 1 : 0) + (vlc ? 1 : 0) + (youtube ? 1 : 0) > 1 || (named != null && app != null && named != app)) return null;
+        if (app == null) app = named;
+        if (video && app != null && app != "YouTube") return null;
+        if (video) app = "YouTube";
+        if (app != "YouTube" && Full(s, @"(?:spiel(?:e)? )?(?:(?:das|den) )?(?:naechste|naechstes|naechster|naechsten) " + track + @"(?: ab)?|(?:wechsle|wechsel|springe|spring|gehe|geh) (?:zum|zu dem) naechsten " + track + @"|(?:zum|zu dem) naechsten " + track + @"|(?:ueberspringe?|skip|skippe) (?:(?:das|den|dieses|diesen) )?" + track + @"|(?:(?:das|den) )?" + track + @" (?:ueberspringen|skippen)|(?:ein|einen) " + track + " weiter")) return new VoiceIntent("media.next", app);
+        if (app != "YouTube" && Full(s, @"(?:spiel(?:e)? )?(?:(?:das|den|der) )?(?:vorherige|vorheriges|vorheriger|vorherigen|vorige|voriges|voriger|vorigen) " + track + @"(?: ab)?|(?:wechsle|wechsel|springe|spring|gehe|geh) (?:zum|zu dem) (?:vorherigen|vorigen) " + track + @"|(?:zum|zu dem) (?:vorherigen|vorigen) " + track + @"|(?:ein|einen) " + track + " zurueck")) return new VoiceIntent("media.previous", app);
+        if (Full(s, @"pausiere|pausieren|pausier|pause|stoppe|stoppen|stopp|stop|(?:pausiere|pausieren|pausier|pause|stoppe|stoppen|stopp|stop|unterbreche|unterbrechen) (?:" + item + "|" + player + @")|(?:" + item + "|" + player + @") (?:pausieren|stoppen|anhalten|unterbrechen)|(?:beende|beenden) " + item + "|" + item + @" (?:beenden|aus)|halte? (?:" + item + "|" + player + @") an|(?:mach(?:e)?|schalte?|schalte) " + item + " aus")) return new VoiceIntent("media.pause", app);
+        if (Full(s, @"(?:starte?|starten|spiel|spiele|spielen) " + item + @"(?: weiter| ab)?|" + item + @" (?:starten|abspielen|weiter|fortsetzen|weiterspielen)|(?:spiel|spiele) (?:" + player + @" )?weiter|(?:setze?|setz) " + item + @" (?:wieder )?fort|(?:" + player + @") (?:fortsetzen|weiterspielen)|(?:mach(?:e)?|schalte?|schalte) " + item + @" (?:wieder )?an|(?:schalte?|schalte) " + item + " ein")) return new VoiceIntent("media.play", app);
+        if (app == "YouTube" && Full(s, @"(?:spiel|spiele|spielen) youtube(?: ab|weiter)?")) return new VoiceIntent("media.play", app);
+        return null;
+    }
+    private static VoiceIntent AmbiguousApp(string target) { VoiceIntent intent = new VoiceIntent("clarify", target); intent.Command = "app.ambiguous"; return intent; }
+    private static bool IsYouTubeName(string name) { return Normalize(name).Replace(" ", "") == "youtube"; }
+    private static VoiceIntent ParseFusedApp(string text, IDictionary<string,string> extraApps)
+    {
+        string[,] verbs = {{"oeffne","app.open"},{"oeffnen","app.open"},{"oeffn","app.open"},{"starte","app.open"},{"starten","app.open"},{"start","app.open"},
+            {"schliesse","app.close"},{"schliessen","app.close"},{"schliess","app.close"},{"beende","app.close"},{"beenden","app.close"},
+            {"minimiere","app.minimize"},{"minimieren","app.minimize"},{"fokussiere","app.focus"},{"fokussieren","app.focus"}};
+        VoiceIntent candidate = null;
+        for (int n = 0; n < verbs.GetLength(0); n++) {
+            string verb = verbs[n,0];
+            if (!text.StartsWith(verb, StringComparison.Ordinal) || text.Length <= verb.Length || text[verb.Length] == ' ') continue;
+            string target = text.Substring(verb.Length); bool ambiguous;
+            if (IsYouTubeName(target)) continue;
+            // A missing boundary is accepted only with an exact catalog name.
+            // Never combine this repair with a fuzzy or partially matched name.
+            string app = MatchAppName(target, extraApps, true, out ambiguous);
+            if (ambiguous) return AmbiguousApp(target);
+            if (app == null) continue;
+            if (candidate != null && (candidate.Action != verbs[n,1] || !string.Equals(candidate.App, app, StringComparison.OrdinalIgnoreCase))) return AmbiguousApp(text);
+            candidate = new VoiceIntent(verbs[n,1], app);
+        }
+        return candidate;
+    }
+    private static string NumberedAppName(string name)
+    {
+        string s = Normalize(name);
+        string[] numbers = {"eins|i", "zwei|ii", "drei|iii", "vier|iv", "fuenf|v", "sechs|vi", "sieben|vii", "acht|viii", "neun|ix", "zehn|x"};
+        for (int n = 0; n < numbers.Length; n++) s = Regex.Replace(s, @"\b(?:" + numbers[n] + @")$", (n + 1).ToString(CultureInfo.InvariantCulture));
+        return s;
+    }
+    private static string Digits(string name) { return Regex.Replace(name, @"[^0-9]", ""); }
+    private static string MatchAppName(string target, IDictionary<string,string> extraApps, bool exactOnly, out bool ambiguous)
+    {
+        ambiguous = false;
+        string requested = NumberedAppName(target);
+        List<KeyValuePair<string,string>> names = new List<KeyValuePair<string,string>>(Apps);
+        if (extraApps != null) names.AddRange(extraApps);
+        // Exact names first; then word-boundary variants; then one character
+        // within an otherwise complete name. A changed/missing sequel number,
+        // an extra word, or two distinct canonical identities is never guessed.
+        for (int mode = 0; mode < (exactOnly ? 1 : 3); mode++) {
+            string candidate = null;
+            foreach (KeyValuePair<string,string> pair in names) {
+                if (string.IsNullOrEmpty(pair.Key) || string.IsNullOrEmpty(pair.Value) || IsYouTubeName(pair.Key) || IsYouTubeName(pair.Value)) continue;
+                string known = NumberedAppName(pair.Key);
+                bool matches = mode == 0 ? requested == known : mode == 1 ? requested.Replace(" ", "") == known.Replace(" ", "") : requested.Length >= 5 && known.Length >= 5 && requested.Split(' ').Length == known.Split(' ').Length && Digits(requested) == Digits(known) && Distance(requested, known) == 1;
+                if (!matches) continue;
+                if (candidate != null && !string.Equals(candidate, pair.Value, StringComparison.OrdinalIgnoreCase)) { ambiguous = true; return null; }
+                candidate = pair.Value;
+            }
+            if (candidate != null) return candidate;
+        }
+        return null;
+    }
+    public static bool Word(string s, string w) { return Regex.IsMatch(s, @"\b" + Regex.Escape(w) + @"\b"); }
+    private static int Distance(string a, string b)
+    {
+        if (Math.Abs(a.Length - b.Length) > 1) return 9;
+        int i = 0, j = 0, changes = 0;
+        while (i < a.Length && j < b.Length) {
+            if (a[i] == b[j]) { i++; j++; continue; }
+            if (++changes > 1) return 9;
+            if (a.Length >= b.Length) i++;
+            if (b.Length >= a.Length) j++;
+        }
+        return changes + (i < a.Length || j < b.Length ? 1 : 0);
+    }
+}
+
+// Strict bounded JSON object codec: primitive values only, no duplicate keys, no trailing text.
+// No extra assembly is needed by Capri's C# 5 compiler.
+public static class VoiceJson
+{
+    public static string Quote(string s)
+    {
+        StringBuilder b = new StringBuilder("\"");
+        foreach (char c in s ?? "") { if (c == '"' || c == '\\') b.Append('\\').Append(c); else if (c < 32) b.Append("\\u").Append(((int)c).ToString("x4")); else b.Append(c); }
+        return b.Append('"').ToString();
+    }
+    public static Dictionary<string,string> Read(string s)
+    {
+        if (s == null || s.Length > 4096) throw new FormatException("JSON-Limit");
+        Dictionary<string,string> d = new Dictionary<string,string>(StringComparer.Ordinal);
+        int p = 0; White(s, ref p); Take(s, ref p, '{'); White(s, ref p);
+        if (p < s.Length && s[p] == '}') p++;
+        else while (true)
+        {
+            White(s, ref p); string k = Str(s, ref p); White(s, ref p); Take(s, ref p, ':'); White(s, ref p);
+            string v;
+            if (p < s.Length && s[p] == '"') v = Str(s, ref p);
+            else { int start = p; while (p < s.Length && s[p] != ',' && s[p] != '}' && !char.IsWhiteSpace(s[p])) p++; v = s.Substring(start, p-start); if (!Regex.IsMatch(v, @"^(?:true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)$")) throw new FormatException("JSON-Wert"); }
+            if (d.ContainsKey(k) || d.Count >= 24) throw new FormatException("JSON-Schlüssel"); d.Add(k,v); White(s, ref p);
+            if (p < s.Length && s[p] == '}') { p++; break; } Take(s, ref p, ',');
+        }
+        White(s, ref p); if (p != s.Length) throw new FormatException("JSON-Rest"); return d;
+    }
+    public static string Get(Dictionary<string,string> d, string k) { string v; return d.TryGetValue(k, out v) ? v : ""; }
+    private static void White(string s, ref int p) { while (p < s.Length && char.IsWhiteSpace(s[p])) p++; }
+    private static void Take(string s, ref int p, char c) { if (p >= s.Length || s[p++] != c) throw new FormatException("JSON-Syntax"); }
+    private static string Str(string s, ref int p)
+    {
+        Take(s, ref p, '"'); StringBuilder b = new StringBuilder();
+        while (p < s.Length)
+        {
+            char c = s[p++]; if (c == '"') return b.ToString(); if (c < 32) throw new FormatException("JSON-Zeichen");
+            if (c != '\\') { b.Append(c); continue; } if (p >= s.Length) throw new FormatException("JSON-Escape"); c = s[p++];
+            if (c == '"' || c == '\\' || c == '/') b.Append(c);
+            else if (c == 'n') b.Append('\n'); else if (c == 'r') b.Append('\r'); else if (c == 't') b.Append('\t'); else if (c == 'b') b.Append('\b'); else if (c == 'f') b.Append('\f');
+            else if (c == 'u') { if (p + 4 > s.Length) throw new FormatException("JSON-Unicode"); b.Append((char)int.Parse(s.Substring(p,4), NumberStyles.HexNumber, CultureInfo.InvariantCulture)); p += 4; }
+            else throw new FormatException("JSON-Escape");
+        }
+        throw new FormatException("JSON-Ende");
+    }
+}
+
+public class CapriVoiceHub : ICapriMod
+{
+    private ICapriHost capri;
+    private VoiceCompanionLifecycle companionLifecycle;
+    private string session, token, queueFolder, responseFolder, aliasFile;
+    private bool stopped, enabled = true, direct = true, native = false;
+    private bool callCommands = true;
+    private VoiceCallModeAdapter callAdapter;
+    private string callAdapterStatus = "Call-Mode-Anbindung wird geprüft.";
+    private ICapriTimer heartbeat;
+    private Action<CapriMessage> sending;
+    private Action<string,bool> heard;
+    private Action<string,string,string> received;
+    private sealed class CatalogEntry { public string Name, Route, Target, Arguments, Executable, InstallRoot, AppId; }
+    private sealed class CatalogSnapshot {
+        public readonly Dictionary<string,CatalogEntry> Entries;
+        public readonly Dictionary<string,string> Names;
+        public readonly HashSet<string> AmbiguousApps=new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        public CatalogSnapshot(Dictionary<string,CatalogEntry> entries) {
+            Entries=new Dictionary<string,CatalogEntry>(entries,StringComparer.Ordinal);
+            Names=new Dictionary<string,string>(StringComparer.Ordinal);
+            Dictionary<string,CatalogEntry> canonicalTargets=new Dictionary<string,CatalogEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach(KeyValuePair<string,CatalogEntry> entry in Entries) {
+                string canonical;
+                if(VoiceIntentParser.Apps.TryGetValue(entry.Key,out canonical)) {
+                    CatalogEntry previous;
+                    if(canonicalTargets.TryGetValue(canonical,out previous)
+                        && (!string.Equals(previous.Target,entry.Value.Target,StringComparison.OrdinalIgnoreCase) || !string.Equals(previous.Arguments,entry.Value.Arguments,StringComparison.Ordinal))) AmbiguousApps.Add(canonical);
+                    else canonicalTargets[canonical]=entry.Value;
+                    Names[entry.Key]=canonical;
+                } else Names[entry.Key]=entry.Value.Name;
+            }
+            // A conflicting built-in synonym must remain a parser ambiguity;
+            // otherwise e.g. an explicit Notepad could silently target Editor.
+            foreach(KeyValuePair<string,string> alias in VoiceIntentParser.Apps)
+                if(AmbiguousApps.Contains(alias.Value)) Names[alias.Key]="catalog-conflict:"+alias.Value;
+        }
+    }
+    // Dictionaries and entries are never mutated after publication. Native ASR
+    // and Capri's UI thread can safely read the same complete catalog snapshot.
+    private volatile CatalogSnapshot catalog = new CatalogSnapshot(new Dictionary<string,CatalogEntry>());
+    private CatalogSnapshot pendingCatalog;
+    private readonly object catalogLock=new object();
+    private int catalogScanning;
+    private string catalogStatus="App-Liste wird gelesen …";
+    private bool catalogReady;
+    private Label catalogLabel;
+    private Dictionary<string,string> aliases = new Dictionary<string,string>();
+    private DateTime aliasRead = DateTime.MinValue;
+    private readonly Dictionary<string,DateTime> seen = new Dictionary<string,DateTime>();
+    private readonly Dictionary<string,Operation> operations = new Dictionary<string,Operation>();
+    private readonly Dictionary<string,Registration> registrations = new Dictionary<string,Registration>();
+    private readonly Dictionary<string,PendingMod> modPending = new Dictionary<string,PendingMod>();
+    private string lastApp;
+    private DateTime lastAppAt;
+    private string lastResult = "Bereit";
+    private string lastSource = "";
+    private long lastResultAt;
+    private readonly Queue<string> history = new Queue<string>();
+    private string oldFollowing;
+    private string followedByHub;
+    private string lastMediaAppId;
+    private DateTime lastMediaAt;
+    private Func<string,string,int> youtubeWindowMatches = CountYouTubeWindows;
+    private int ticks;
+    private bool executing;
+    private sealed class Operation { public DateTime At; public List<Action<string,string>> Done = new List<Action<string,string>>(); public string Status, Message; }
+    private sealed class Registration { public string Owner, Action, Phrase; public int Priority; }
+    private sealed class PendingMod { public string Owner; public Action<string,string> Done; }
+    private delegate bool WindowEnumerator(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(WindowEnumerator callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent,WindowEnumerator callback,IntPtr parameter);
+    [DllImport("kernel32.dll",CharSet=CharSet.Unicode)] private static extern int GetApplicationUserModelId(IntPtr process,ref uint length,StringBuilder id);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr window, StringBuilder text, int length);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr window, int command);
+    [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", SetLastError=true)] private static extern bool PostMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+
+    public void Start(ICapriHost host)
+    {
+        if(companionLifecycle!=null) { companionLifecycle.Stop(); companionLifecycle=null; }
+        capri = host; stopped = false; session = Guid.NewGuid().ToString("N"); token = Guid.NewGuid().ToString("N");
+        Directory.CreateDirectory(host.Folder); queueFolder = Path.Combine(host.Folder,"queue"); responseFolder = Path.Combine(host.Folder,"responses");
+        Directory.CreateDirectory(queueFolder); Directory.CreateDirectory(responseFolder);
+        aliasFile = Path.Combine(host.Folder,"aliases.txt");
+        if (!File.Exists(aliasFile)) File.WriteAllText(aliasFile,"# Satz => media.play | media.pause | media.next | media.previous | app:Steam | app.close:Discord | mod:mod-id:action\r\n",new UTF8Encoding(false));
+        enabled = host.Store.Flag("ultimate.enabled", true); direct = host.Store.Flag("ultimate.direct", true); native = host.Store.Flag("ultimate.native", false);
+        callCommands = host.Store.Flag("ultimate.callmode", true);
+        VoiceCallModeAdapter.TryCreate(host.Ui.Window, CanRouteCall, out callAdapter, out callAdapterStatus);
+        oldFollowing = host.Music.Following;
+        sending = delegate(CapriMessage m) {
+            if(m==null || m.Cancel || m.Source=="mod") return;
+            string clean;
+            if(callAdapter!=null && callAdapter.TryUnwrap(m.Text,out clean)) {
+                // An adapter ticket must never reach the brain, including an
+                // expired ticket or a joined sentence that is now a negation.
+                m.Cancel=true;
+                if(clean==null) { Feedback("rejected","Der Call-Befehl ist abgelaufen oder nicht eindeutig.","Call Mode"); return; }
+                m.Text=clean;
+                if(!Handle(clean,null,"Call Mode")) Feedback("rejected","Kein eindeutiger freigegebener Call-Befehl erkannt.","Call Mode");
+                return;
+            }
+            if(Handle(m.Text,null)) m.Cancel=true;
+        };
+        heard = delegate(string words, bool forHer) { if (native && enabled && !host.Voice.Talking && (forHer || direct)) Handle(words,null); };
+        received = OnModMessage;
+        host.Chat.Sending += sending; host.Voice.Heard += heard; host.Mods.Received += received;
+        host.Ui.AddMenuItem("Voice Hub Ultimate: Einstellungen", delegate { host.Mainframe.ShowPage("Voice Hub Ultimate", MakeOptions); });
+        host.Ui.AddMenuItem("Voice Hub Ultimate: Mikrofonbefehle AN/AUS", delegate { enabled = !enabled; host.Store.Set("ultimate.enabled",enabled); WriteState(); host.Ui.Bubble("Sprachbefehle: " + (enabled ? "AN" : "AUS")); });
+        host.Ui.SetOptions("Voice Hub Ultimate", MakeOptions);
+        RequestCatalogScan();
+        heartbeat = host.Timers.Every(1,delegate {
+            if (stopped) return;
+            lock(catalogLock) { if(pendingCatalog!=null && !executing) { catalog=pendingCatalog; pendingCatalog=null; catalogReady=true; catalogStatus=catalog.Names.Count+" geprüfte Apps und Spiele · "+DateTime.Now.ToString("HH:mm:ss"); } }
+            if(catalogLabel!=null && !catalogLabel.IsDisposed) catalogLabel.Text=catalogStatus;
+            try { WriteState(); Poll(); if (++ticks % 30 == 0) Cleanup(); } catch(Exception e) { host.Log("Voice Hub: " + e.GetType().Name + ": " + e.Message); }
+        });
+        WriteState(); host.Mods.Send("voicehub.discover","{\"protocol\":3}"); host.Log("Voice Hub Ultimate 3.5.0 gestartet. " + callAdapterStatus + " Keine Audioaufzeichnung.");
+        // The linked process validates this already-published bridge session.
+        companionLifecycle=VoiceCompanionLifecycle.Begin(host.Ui.Window,session,host.Log);
+    }
+    private bool CanRouteCall(string raw)
+    {
+        if(string.IsNullOrWhiteSpace(raw) || VoiceIntentParser.Unsafe(raw)) return false;
+        string[] parts=Regex.Split(VoiceIntentParser.StripAddress(VoiceIntentParser.Normalize(raw)),@"\s+und(?: dann)?\s+");
+        if(parts.Length>2) return false;
+        CatalogSnapshot snapshot=catalog;
+        foreach(string part in parts) if(VoiceIntentParser.Parse(part,snapshot.Names)==null) return false;
+        return true;
+    }
+    private Control MakeOptions()
+    {
+        FlowLayoutPanel p = new FlowLayoutPanel { Dock=DockStyle.Fill, FlowDirection=FlowDirection.TopDown, WrapContents=false, AutoScroll=true };
+        p.Controls.Add(new Label { Text="Capri Voice Hub Ultimate 3.5.0 – Call Mode und lokale Sprachsteuerung", AutoSize=true });
+        CheckBox on = new CheckBox { Text="Sprachbefehle aktiv", Checked=enabled, AutoSize=true }; on.CheckedChanged += delegate { enabled=on.Checked; capri.Store.Set("ultimate.enabled",enabled); WriteState(); }; p.Controls.Add(on);
+        CheckBox wake = new CheckBox { Text="Befehle ohne Capri/Hey Capri", Checked=direct, AutoSize=true }; wake.CheckedChanged += delegate { direct=wake.Checked; capri.Store.Set("ultimate.direct",direct); WriteState(); }; p.Controls.Add(wake);
+        CheckBox internalMic = new CheckBox { Text="Zusätzlich Capris interne Erkennung nutzen (optional)", Checked=native, AutoSize=true }; internalMic.CheckedChanged += delegate { native=internalMic.Checked; capri.Store.Set("ultimate.native",native); }; p.Controls.Add(internalMic);
+        CheckBox calls = new CheckBox { Text="Befehle ohne Namenswort im Call Mode ausführen", Checked=callCommands, AutoSize=true }; calls.CheckedChanged += delegate { callCommands=calls.Checked; capri.Store.Set("ultimate.callmode",callCommands); WriteState(); }; p.Controls.Add(calls);
+        p.Controls.Add(new Label { Text=callAdapterStatus, AutoSize=true, MaximumSize=new System.Drawing.Size(580,0) });
+        catalogLabel=new Label { Text=catalogStatus, AutoSize=true }; p.Controls.Add(catalogLabel);
+        Button refreshApps=new Button { Text="App-Liste aktualisieren", AutoSize=true };
+        refreshApps.Click+=delegate { RequestCatalogScan(); catalogLabel.Text=catalogStatus; }; p.Controls.Add(refreshApps);
+        p.Controls.Add(new Label { Text="Mikrofon und Modell im Fenster Capri Sprachsteuerung wählen.\r\nNur konkrete, sichere Befehle werden ausgeführt. Keine Gewaltbeendigung.", AutoSize=true });
+        Button edit = new Button { Text="Eigene Befehle bearbeiten", AutoSize=true }; edit.Click += delegate { LaunchEditor(aliasFile); }; p.Controls.Add(edit);
+        Button allow = new Button { Text="Mod-Freigaben bearbeiten", AutoSize=true }; allow.Click += delegate { string f=Path.Combine(capri.Folder,"allowed-mods.txt"); if(!File.Exists(f)) File.WriteAllText(f,"# Je Zeile mod-id:action. Nur vertrauenswürdige lokale Aktionen freigeben.\r\n"); LaunchEditor(f); }; p.Controls.Add(allow);
+        Button status = new Button { Text="Status aktualisieren", AutoSize=true }; Label state = new Label { Text=lastResult, AutoSize=true }; status.Click += delegate { state.Text = "Mod aktiv · Protokoll 3 · " + lastResult + "\r\n" + string.Join("\r\n",history.ToArray()); }; p.Controls.Add(status); p.Controls.Add(state);
+        return p;
+    }
+    private static void LaunchEditor(string file) { Process.Start(new ProcessStartInfo("notepad.exe","\"" + file + "\"") { UseShellExecute=true }); }
+    private static long Millis() { return (long)(DateTime.UtcNow-new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalMilliseconds; }
+    private static void Atomic(string path,string data)
+    {
+        string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try { File.WriteAllText(temp,data,new UTF8Encoding(false)); if(File.Exists(path)) File.Replace(temp,path,null); else File.Move(temp,path); }
+        finally { if(File.Exists(temp)) File.Delete(temp); }
+    }
+    private void WriteState()
+    {
+        if(stopped) return;
+        if(callAdapter!=null) callAdapter.SetActive(enabled && direct && callCommands);
+        bool callMode=callAdapter!=null && callAdapter.CallMode;
+        bool callRouting=callMode && callCommands && direct;
+        Atomic(Path.Combine(capri.Folder,"bridge-state.json"),"{\"protocol\":3,\"version\":\"3.5.0\",\"session\":"+VoiceJson.Quote(session)+",\"token\":"+VoiceJson.Quote(token)+",\"pid\":"+Process.GetCurrentProcess().Id+",\"updatedAt\":"+Millis()+",\"enabled\":"+(enabled?"true":"false")+",\"direct\":"+(direct?"true":"false")+",\"talking\":"+(capri.Voice.Talking?"true":"false")+",\"callMode\":"+(callMode?"true":"false")+",\"nativeCallRouting\":"+(callRouting?"true":"false")+",\"appCount\":"+catalog.Names.Count+",\"catalogReady\":"+(catalogReady?"true":"false")+",\"lastSource\":"+VoiceJson.Quote(lastSource)+",\"lastResult\":"+VoiceJson.Quote(lastResult)+",\"lastResultAt\":"+lastResultAt+"}");
+    }
+    private void Respond(string id,string status,string message)
+    {
+        if(stopped) return;
+        try { Atomic(Path.Combine(responseFolder,id+".json"),"{\"id\":"+VoiceJson.Quote(id)+",\"session\":"+VoiceJson.Quote(session)+",\"status\":"+VoiceJson.Quote(status)+",\"message\":"+VoiceJson.Quote(message)+"}"); }
+        catch(Exception e) { capri.Log("Voice Hub: Antwort konnte nicht gespeichert werden: " + e.Message); }
+    }
+    private void Poll()
+    {
+        int n=0;
+        foreach(string file in Directory.EnumerateFiles(queueFolder,"*.json"))
+        {
+            if(++n>8) break;
+            Dictionary<string,string> d;
+            try { FileInfo info=new FileInfo(file); if(info.Length>4096 || info.Length<2) { File.Delete(file); continue; } d=VoiceJson.Read(File.ReadAllText(file)); File.Delete(file); }
+            catch(IOException) { continue; } catch(FormatException) { try { File.Delete(file); } catch {} continue; }
+            string id=VoiceJson.Get(d,"id"); Guid g;
+            if(!Guid.TryParseExact(id,"N",out g)) continue;
+            if(VoiceJson.Get(d,"protocol")!="3" || VoiceJson.Get(d,"session")!=session || VoiceJson.Get(d,"token")!=token) { Respond(id,"rejected","Veraltete oder ungültige Verbindung."); continue; }
+            long now=Millis(), time; if(!long.TryParse(VoiceJson.Get(d,"createdAt"),out time) || time<=0 || time<now-8000 || time>now+2000) { Respond(id,"rejected","Der Befehl ist abgelaufen."); continue; }
+            if(seen.ContainsKey(id)) continue; seen[id]=DateTime.UtcNow;
+            if(VoiceJson.Get(d,"kind")=="control") {
+                string requested=VoiceJson.Get(d,"enabled");
+                if(requested!="true" && requested!="false") { Respond(id,"rejected","Ungültiger Steuerungszustand."); continue; }
+                enabled=requested=="true"; capri.Store.Set("ultimate.enabled",enabled); WriteState();
+                Respond(id,"success","Sprachbefehle " + (enabled?"eingeschaltet.":"ausgeschaltet. Der Call kann weiterlaufen.")); continue;
+            }
+            if(VoiceJson.Get(d,"kind")!="") { Respond(id,"rejected","Unbekannter Auftragstyp."); continue; }
+            string inputSource=VoiceJson.Get(d,"source"); if(inputSource=="") inputSource="voice";
+            if(inputSource!="voice" && inputSource!="text") { Respond(id,"rejected","Unbekannte Eingabequelle."); continue; }
+            if(inputSource=="voice" && callAdapter!=null && callAdapter.CallMode && callCommands && direct) { Respond(id,"rejected","Call Mode nutzt Capris Mikrofon; die zusätzliche Spracheingabe wurde verworfen."); continue; }
+            string text=VoiceJson.Get(d,"text");
+            if(!enabled || (inputSource=="voice" && capri.Voice.Talking) || (!direct && !Regex.IsMatch(VoiceIntentParser.Normalize(text),@"^(hey )?capri\b"))) { Respond(id,"rejected","Sprachbefehle sind pausiert oder benötigen das Namenswort."); continue; }
+            Action<string,string> done=delegate(string status,string message) { Respond(id,status,message); };
+            if(!Handle(text,done)) done("no_command","Kein eindeutiger freigegebener Befehl erkannt.");
+        }
+    }
+    private void Cleanup()
+    {
+        List<string> remove=new List<string>(); foreach(KeyValuePair<string,DateTime> p in seen) if((DateTime.UtcNow-p.Value).TotalMinutes>2) remove.Add(p.Key); foreach(string k in remove) seen.Remove(k);
+        remove.Clear(); foreach(KeyValuePair<string,Operation> p in operations) if(p.Value.Status!=null && (DateTime.UtcNow-p.Value.At).TotalSeconds>10) remove.Add(p.Key); foreach(string k in remove) operations.Remove(k);
+        int n=0; foreach(string f in Directory.EnumerateFiles(responseFolder,"*.json")) { if(++n>256) break; if(DateTime.UtcNow-File.GetLastWriteTimeUtc(f)>TimeSpan.FromMinutes(2)) try { File.Delete(f); } catch {} }
+        remove.Clear(); foreach(KeyValuePair<string,Registration> p in registrations) if(!capri.Mods.IsRunning(p.Value.Owner)) remove.Add(p.Key); foreach(string k in remove) registrations.Remove(k);
+    }
+    private void Feedback(string status,string text,string origin=null)
+    {
+        lastResult=text; lastSource=origin??"Voice Hub"; lastResultAt=Millis(); history.Enqueue(DateTime.Now.ToString("HH:mm:ss")+" · "+(origin=="Call Mode"?"[Call Mode] ":"")+text); while(history.Count>20) history.Dequeue();
+        capri.Ui.Bubble(text); capri.Log("Voice Hub"+(origin=="Call Mode"?" [Call Mode]":"")+": " + status + " · " + text);
+        if(origin=="Call Mode" && !capri.Voice.Talking) capri.Voice.Speak(text);
+    }
+    private bool Handle(string raw,Action<string,string> done,string origin=null)
+    {
+        if(stopped || string.IsNullOrWhiteSpace(raw) || VoiceIntentParser.Unsafe(raw)) return false;
+        ReadAliases(); string normalized=VoiceIntentParser.StripAddress(VoiceIntentParser.Normalize(raw));
+        CatalogSnapshot snapshot=catalog;
+        string[] parts=Regex.Split(normalized,@"\s+und(?: dann)?\s+"); if(parts.Length>2) return false;
+        List<VoiceIntent> plan=new List<VoiceIntent>();
+        foreach(string part in parts)
+        {
+            VoiceIntent i=Alias(part,snapshot.Names); if(i==null) i=VoiceIntentParser.Parse(part,snapshot.Names);
+            if(i==null) return false;
+            if(i.App!=null && snapshot.AmbiguousApps.Contains(i.App)) i=new VoiceIntent("clarify",i.App) {Command="app.ambiguous"};
+            plan.Add(i);
+        }
+        // A question anywhere in a chain blocks every action in that chain.
+        // Resolve ambiguity before opening, closing, or changing media state.
+        VoiceIntent clarification=plan.Find(delegate(VoiceIntent item) { return item.Action=="clarify"; });
+        if(clarification!=null) plan=new List<VoiceIntent>{clarification};
+        // Chat.Sending sees both typed and addressed native speech as Source=you.
+        // Pause therefore blocks all recognized commands, rather than silently passing them to the brain.
+        if(!enabled) { string paused="Voice Hub ist pausiert. Aktiviere die Befehlssteuerung in den Einstellungen."; if(done!=null) done("rejected",paused); else capri.Ui.Bubble(paused); return true; }
+        string key=""; foreach(VoiceIntent i in plan) key+=i.Key+"|";
+        Operation existing;
+        if(operations.TryGetValue(key,out existing) && (existing.Status==null || (DateTime.UtcNow-existing.At).TotalSeconds<2.5))
+        { if(done!=null) { if(existing.Status==null) existing.Done.Add(done); else done(existing.Status,existing.Message); } return true; }
+        // A media follow change or app-close must never race an earlier verification.
+        if(executing) { string message="Ein Befehl wird noch geprüft. Bitte warte kurz und wiederhole den nächsten Befehl."; if(done!=null) done("rejected",message); else capri.Ui.Bubble(message); return true; }
+        Operation op=new Operation { At=DateTime.UtcNow }; if(done!=null) op.Done.Add(done); operations[key]=op;
+        executing=true;
+        Action<string,string> finish=delegate(string s,string m) { if(stopped || op.Status!=null) return; executing=false; op.Status=s; op.Message=m; Feedback(s,m,origin); foreach(Action<string,string> cb in op.Done) cb(s,m); op.Done.Clear(); };
+        RunPlan(plan,0,finish); return true;
+    }
+    private void RunPlan(List<VoiceIntent> plan,int index,Action<string,string> done)
+    {
+        try { Execute(plan[index],delegate(string s,string m) { if((s=="success" || s=="already") && index+1<plan.Count) RunPlan(plan,index+1,done); else done(s,m); }); }
+        catch(Exception e) { done("failed","Der Befehl konnte nicht ausgeführt werden: " + e.GetType().Name + "."); capri.Log("Voice Hub Ausführung: " + e.Message); }
+    }
+    private void Execute(VoiceIntent i,Action<string,string> done)
+    {
+        if(i.Action=="status") { done("success","Voice Hub Ultimate 3.5.0 ist aktiv. Die lokale Verbindung ist bereit."); return; }
+        if(i.Action=="clarify") { done("rejected",i.Command=="app.ambiguous" ? "Der App-Name „"+i.App+"“ passt zu mehreren Anwendungen. Bitte nenne den vollständigen eindeutigen Namen aus der App-Liste." : "Welches Spiel meinst du? Bitte nenne den installierten App-Namen."); return; }
+        if(i.Action.StartsWith("media.")) { RunMedia(i,done,0); return; }
+        if(i.Action=="mod") { RunMod(i,done); return; }
+        if(i.Action.StartsWith("window.")) { IntPtr w=GetForegroundWindow(); uint pid; GetWindowThreadProcessId(w,out pid); if(pid==(uint)Process.GetCurrentProcess().Id) { done("rejected","Capris eigenes Fenster wird nicht per Sprachbefehl geschlossen."); return; } ChangeWindows(new List<IntPtr>{w},"Das aktive Fenster",i.Action.Substring(7),done); return; }
+        if(i.App=="Browser") i.App=DefaultBrowser();
+        if(i.App==null) { done("failed","Die Standardanwendung konnte nicht bestimmt werden."); return; }
+        if(i.Action=="app.open") OpenApp(i.App,done);
+        else if(i.Action=="app.close" || i.Action=="app.minimize") ChangeWindows(Windows(i.App),i.App,i.Action.Substring(4),done);
+        else if(i.Action=="app.focus") { List<IntPtr> w=Windows(i.App); if(w.Count==0) done("failed","Kein sichtbares Fenster von " + i.App + " gefunden."); else Focus(w[0],i.App,true,done); }
+        else done("no_command","Kein ausführbarer Befehl.");
+    }
+    private void Later(double seconds,Action run) { capri.Timers.After(seconds,delegate { if(!stopped) run(); }); }
+    private void ReadAliases()
+    {
+        if((DateTime.UtcNow-aliasRead).TotalSeconds<2) return; aliasRead=DateTime.UtcNow;
+        try { if(new FileInfo(aliasFile).Length>32768) return; Dictionary<string,string> a=new Dictionary<string,string>(); int n=0; foreach(string line in File.ReadLines(aliasFile)) { if(++n>100) break; string l=line.Trim(); int p=l.IndexOf("=>",StringComparison.Ordinal); if(l.StartsWith("#") || p<1) continue; string phrase=l.Substring(0,p).Trim(), action=l.Substring(p+2).Trim(); if(phrase.Length>120 || action.Length>150) continue; a[phrase.StartsWith("re:")?phrase:VoiceIntentParser.StripAddress(VoiceIntentParser.Normalize(phrase))]=action; } aliases=a; } catch(IOException) {}
+    }
+    private VoiceIntent Alias(string phrase,IDictionary<string,string> extraApps)
+    {
+        foreach(KeyValuePair<string,string> a in aliases)
+        {
+            bool match=a.Key==phrase;
+            if(a.Key.StartsWith("re:")) try { match=Regex.IsMatch(phrase,"^(?:"+a.Key.Substring(3)+")$",RegexOptions.IgnoreCase,TimeSpan.FromMilliseconds(20)); } catch(ArgumentException) {} catch(RegexMatchTimeoutException) {}
+            if(!match) continue; string value=a.Value; string[] p=value.Split(new[]{':'},3);
+            if(Regex.IsMatch(value,@"^media\.(play|pause|next|previous)$")) return new VoiceIntent(value,null);
+            if(p.Length==2 && (p[0]=="app" || p[0]=="app.close" || p[0]=="app.focus" || p[0]=="app.minimize")) { string app; string n=VoiceIntentParser.Normalize(p[1]); if(VoiceIntentParser.Apps.TryGetValue(n,out app) || extraApps.TryGetValue(n,out app)) return new VoiceIntent(p[0]=="app"?"app.open":p[0],app); }
+            if(p.Length==3 && p[0]=="mod" && Regex.IsMatch(p[1],@"^[a-z0-9-]{1,48}$") && Regex.IsMatch(p[2],@"^[a-zA-Z0-9_-]{1,64}$")) return new VoiceIntent("mod",null) { Mod=p[1], Command=p[2] };
+        }
+        Registration best=null; bool tie=false;
+        foreach(Registration r in registrations.Values) if(r.Phrase==phrase && Allowed(r.Owner,r.Action)) { if(best==null || r.Priority>best.Priority) { best=r; tie=false; } else if(r.Priority==best.Priority && (r.Owner!=best.Owner || r.Action!=best.Action)) tie=true; }
+        if(best!=null && !tie) return new VoiceIntent("mod",null) { Mod=best.Owner, Command=best.Action };
+        return null;
+    }
+
+    private static string[] ProcessNames(string app)
+    {
+        switch(app) {
+            case "Steam": return new[]{"steam","steamwebhelper"}; case "Spotify": return new[]{"Spotify"}; case "Discord": return new[]{"Discord"};
+            case "OBS Studio": return new[]{"obs64","obs32"}; case "Blender": return new[]{"blender"}; case "Unity Hub": return new[]{"Unity Hub","UnityHub"};
+            case "Visual Studio Code": return new[]{"Code"}; case "Google Chrome": return new[]{"chrome"}; case "Microsoft Edge": return new[]{"msedge"};
+            case "Firefox": return new[]{"firefox"}; case "VLC media player": return new[]{"vlc"}; case "Telegram": return new[]{"Telegram"};
+            case "WhatsApp": return new[]{"WhatsApp"}; case "Editor": return new[]{"notepad"}; case "Notepad++": return new[]{"notepad++"};
+            case "Rechner": return new[]{"CalculatorApp","calc"}; case "Microsoft Word": return new[]{"WINWORD"}; case "Microsoft Excel": return new[]{"EXCEL"};
+            case "Microsoft Outlook": return new[]{"OUTLOOK","olk"}; default: return new[]{app.Replace(" ","")};
+        }
+    }
+    private HashSet<uint> Pids(string app)
+    {
+        HashSet<uint> ids=new HashSet<uint>(); CatalogSnapshot snapshot=catalog;
+        if(snapshot.AmbiguousApps.Contains(app)) return ids;
+        CatalogEntry entry=FindCatalogEntry(snapshot,app);
+        if(entry!=null) {
+            foreach(Process p in Process.GetProcesses()) using(p) { try {
+                string file="",appId="";
+                if(!string.IsNullOrEmpty(entry.AppId)) { uint length=1024; StringBuilder id=new StringBuilder((int)length); if(GetApplicationUserModelId(p.Handle,ref length,id)==0) appId=id.ToString(); }
+                else file=p.MainModule.FileName;
+                if(MatchesEntryProcess(entry,file,appId)) ids.Add((uint)p.Id);
+            } catch {} }
+            return ids;
+        }
+        // Only built-in applications have a fixed process-name fallback. A new
+        // catalog title is never guessed to be a process or executable name.
+        if(!VoiceIntentParser.Apps.ContainsValue(app)) return ids;
+        foreach(string name in ProcessNames(app)) foreach(Process p in Process.GetProcessesByName(name)) { using(p) { try { ids.Add((uint)p.Id); } catch {} } }
+        return ids;
+    }
+    private static bool MatchesEntryProcess(CatalogEntry entry,string file,string appId)
+    {
+        if(!string.IsNullOrEmpty(entry.AppId)) return string.Equals(entry.AppId,appId,StringComparison.OrdinalIgnoreCase);
+        if(string.IsNullOrEmpty(file)) return false;
+        try {
+            string full=Path.GetFullPath(file);
+            if(!string.IsNullOrEmpty(entry.Executable)) {
+                if(string.Equals(full,entry.Executable,StringComparison.OrdinalIgnoreCase)) return true;
+                // Steam's library UI is hosted by its own bundled CEF helper.
+                // Matching its known installation keeps games and unrelated
+                // same-name processes outside this window-control boundary.
+                return VoiceIntentParser.Normalize(entry.Name)=="steam" && Path.GetFileName(entry.Executable).Equals("steam.exe",StringComparison.OrdinalIgnoreCase)
+                    && Path.GetFileName(full).Equals("steamwebhelper.exe",StringComparison.OrdinalIgnoreCase)
+                    && full.StartsWith(Path.GetDirectoryName(entry.Executable).TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)
+                    && SafeInstallRoot(Path.GetDirectoryName(full)) && (File.GetAttributes(full)&FileAttributes.ReparsePoint)==0;
+            }
+            if(string.IsNullOrEmpty(entry.InstallRoot) || !Path.GetExtension(full).Equals(".exe",StringComparison.OrdinalIgnoreCase)) return false;
+            string name=Path.GetFileNameWithoutExtension(full);
+            if(MaintenanceName(name) || Regex.IsMatch(name,@"launcher|dowser|crash|errorreport|galaxyclient|^steam(?:webhelper)?$|overlay",RegexOptions.IgnoreCase)) return false;
+            return full.StartsWith(entry.InstallRoot.TrimEnd(Path.DirectorySeparatorChar)+Path.DirectorySeparatorChar,StringComparison.OrdinalIgnoreCase)
+                && SafeInstallRoot(Path.GetDirectoryName(full)) && (File.GetAttributes(full)&FileAttributes.ReparsePoint)==0;
+        } catch { return false; }
+    }
+    private static CatalogEntry FindCatalogEntry(CatalogSnapshot snapshot,string app)
+    {
+        if(snapshot.AmbiguousApps.Contains(app)) return null;
+        CatalogEntry entry; if(snapshot.Entries.TryGetValue(VoiceIntentParser.Normalize(app),out entry)) return entry;
+        foreach(KeyValuePair<string,string> alias in VoiceIntentParser.Apps) if(alias.Value==app && snapshot.Entries.TryGetValue(alias.Key,out entry)) return entry;
+        return null;
+    }
+    private List<IntPtr> Windows(string app)
+    {
+        HashSet<uint> ids=Pids(app); List<IntPtr> found=new List<IntPtr>();
+        EnumWindows(delegate(IntPtr w,IntPtr ignored) {
+            if(!IsWindowVisible(w)) return true; uint pid; GetWindowThreadProcessId(w,out pid);
+            if(!ids.Contains(pid)) {
+                CatalogEntry entry=FindCatalogEntry(catalog,app); bool childMatch=false;
+                if(entry!=null && !string.IsNullOrEmpty(entry.AppId)) {
+                    bool frame=false; try { using(Process p=Process.GetProcessById((int)pid)) frame=p.ProcessName.Equals("ApplicationFrameHost",StringComparison.OrdinalIgnoreCase); } catch {}
+                    if(frame) EnumChildWindows(w,delegate(IntPtr child,IntPtr unused) { uint childPid; GetWindowThreadProcessId(child,out childPid); if(ids.Contains(childPid)) childMatch=true; return !childMatch; },IntPtr.Zero);
+                }
+                if(!childMatch) return true;
+            }
+            StringBuilder title=new StringBuilder(512); GetWindowText(w,title,title.Capacity); if(title.Length==0) return true;
+            if(app=="Steam") { string name=""; try { using(Process p=Process.GetProcessById((int)pid)) name=p.ProcessName; } catch {} if(name=="steamwebhelper" && !Regex.IsMatch(title.ToString(),"Steam|Library|Bibliothek",RegexOptions.IgnoreCase)) return true; }
+            found.Add(w); return true;
+        },IntPtr.Zero); return found;
+    }
+    private void RequestCatalogScan()
+    {
+        if(Interlocked.CompareExchange(ref catalogScanning,1,0)!=0) return;
+        catalogStatus="App-Liste wird gelesen …";
+        ThreadPool.QueueUserWorkItem(delegate {
+            try { CatalogSnapshot result=ScanCatalog(); lock(catalogLock) { if(!stopped) pendingCatalog=result; } }
+            catch(Exception e) { catalogStatus="App-Liste konnte nicht gelesen werden: "+e.GetType().Name; }
+            finally { Interlocked.Exchange(ref catalogScanning,0); }
+        });
+    }
+    private static void AddCatalogEntry(Dictionary<string,CatalogEntry> entries,HashSet<string> ambiguous,CatalogEntry entry)
+    {
+        string name=VoiceIntentParser.Normalize(entry.Name);
+        if(name.Length<3 || name.Length>160 || MaintenanceName(name) || ambiguous.Contains(name)) return;
+        CatalogEntry previous;
+        if(entries.TryGetValue(name,out previous)) {
+            if(string.Equals(previous.Target,entry.Target,StringComparison.OrdinalIgnoreCase) && string.Equals(previous.Arguments,entry.Arguments,StringComparison.Ordinal)) return;
+            entries.Remove(name); ambiguous.Add(name); return;
+        }
+        entries.Add(name,entry);
+    }
+    private static CatalogSnapshot ScanCatalog()
+    {
+        Dictionary<string,CatalogEntry> entries=new Dictionary<string,CatalogEntry>(StringComparer.Ordinal);
+        HashSet<string> ambiguous=new HashSet<string>(StringComparer.Ordinal);
+        List<string> steamLibraries=SteamLibraries(); object shell=null; Type shellType=null;
+        try { shellType=Type.GetTypeFromProgID("WScript.Shell"); shell=Activator.CreateInstance(shellType); } catch {}
+        try {
+            foreach(string root in new[]{Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu)}) {
+                if(string.IsNullOrEmpty(root)) continue;
+                Queue<string> pending=new Queue<string>(); pending.Enqueue(root); int dirs=0,files=0;
+                while(pending.Count>0 && dirs++<500 && files<4000) {
+                    string dir=pending.Dequeue();
+                    try {
+                        foreach(string file in Directory.EnumerateFiles(dir)) {
+                            if(++files>4000) break; string extension=Path.GetExtension(file); CatalogEntry entry=null;
+                            if(extension.Equals(".url",StringComparison.OrdinalIgnoreCase)) entry=ReadGameUrl(file,steamLibraries);
+                            else if(extension.Equals(".lnk",StringComparison.OrdinalIgnoreCase) && shell!=null) entry=ReadCatalogShortcut(file,shellType,shell);
+                            if(entry!=null) AddCatalogEntry(entries,ambiguous,entry);
+                        }
+                        foreach(string child in Directory.EnumerateDirectories(dir)) try { if((File.GetAttributes(child)&FileAttributes.ReparsePoint)==0) pending.Enqueue(child); } catch {}
+                    } catch(UnauthorizedAccessException) {} catch(IOException) {}
+                }
+            }
+        } finally { if(shell!=null && Marshal.IsComObject(shell)) Marshal.FinalReleaseComObject(shell); }
+        // AppsFolder is Windows' existing startable-app catalog, not every Appx
+        // package (frameworks and DLC are deliberately not treated as apps).
+        object appShell=null,folder=null,items=null;
+        try {
+            Type t=Type.GetTypeFromProgID("Shell.Application"); appShell=Activator.CreateInstance(t);
+            folder=t.InvokeMember("NameSpace",BindingFlags.InvokeMethod,null,appShell,new object[]{"shell:AppsFolder"});
+            items=folder.GetType().InvokeMember("Items",BindingFlags.InvokeMethod,null,folder,null);
+            int count=Convert.ToInt32(items.GetType().InvokeMember("Count",BindingFlags.GetProperty,null,items,null));
+            for(int n=0;n<Math.Min(count,1000);n++) {
+                object item=null;
+                try {
+                    item=items.GetType().InvokeMember("Item",BindingFlags.InvokeMethod,null,items,new object[]{n});
+                    string name=Convert.ToString(item.GetType().InvokeMember("Name",BindingFlags.GetProperty,null,item,null));
+                    string id=Convert.ToString(item.GetType().InvokeMember("Path",BindingFlags.GetProperty,null,item,null));
+                    if(Regex.IsMatch(id,@"^[a-zA-Z0-9._-]+![a-zA-Z0-9._-]+$")) AddCatalogEntry(entries,ambiguous,new CatalogEntry {Name=name,Route="appx:"+id,Target="appx:"+id,AppId=id});
+                } catch {} finally { if(item!=null && Marshal.IsComObject(item)) Marshal.FinalReleaseComObject(item); }
+            }
+        } catch {} finally { foreach(object o in new[]{items,folder,appShell}) if(o!=null && Marshal.IsComObject(o)) Marshal.FinalReleaseComObject(o); }
+        return new CatalogSnapshot(entries);
+    }
+    private static CatalogEntry ReadCatalogShortcut(string file,Type type,object shell)
+    {
+        object shortcut=null;
+        try {
+            shortcut=type.InvokeMember("CreateShortcut",BindingFlags.InvokeMethod,null,shell,new object[]{file});
+            string target=Convert.ToString(shortcut.GetType().InvokeMember("TargetPath",BindingFlags.GetProperty,null,shortcut,null));
+            string args=Convert.ToString(shortcut.GetType().InvokeMember("Arguments",BindingFlags.GetProperty,null,shortcut,null));
+            if(string.IsNullOrEmpty(target) || !File.Exists(target) || !Path.GetExtension(target).Equals(".exe",StringComparison.OrdinalIgnoreCase)) return null;
+            target=Path.GetFullPath(target); string exe=Path.GetFileNameWithoutExtension(target).ToLowerInvariant();
+            CatalogEntry entry=new CatalogEntry {Name=Path.GetFileNameWithoutExtension(file),Route=file,Target=target,Arguments=args};
+            string discordRoot=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Discord");
+            if(VoiceIntentParser.Normalize(entry.Name)=="discord" && exe=="update" && string.Equals(Path.GetDirectoryName(target),discordRoot,StringComparison.OrdinalIgnoreCase) && Regex.IsMatch(args??"",@"^--processStart\s+""?Discord\.exe""?$",RegexOptions.IgnoreCase)) { entry.InstallRoot=discordRoot; return entry; }
+            string gameRoot;
+            if(exe=="galaxyclient" && IsGalaxyClient(target) && TryGogArguments(args,out gameRoot)) { entry.InstallRoot=gameRoot; return entry; }
+            if(MaintenanceName(exe) || Regex.IsMatch(exe,@"^(cmd|powershell|pwsh|wscript|cscript|msiexec|rundll32|reg|regedit|schtasks|mshta|installutil|explorer)$") || !string.IsNullOrWhiteSpace(args)) return null;
+            entry.Executable=target; return entry;
+        } catch { return null; } finally { if(shortcut!=null && Marshal.IsComObject(shortcut)) Marshal.FinalReleaseComObject(shortcut); }
+    }
+    private static bool TryGogArguments(string args,out string root)
+    {
+        root=null; Match match=Regex.Match(args??"",@"^/command=runGame /gameId=([0-9]{1,20}) /path=""([^""\r\n]+)""$",RegexOptions.IgnoreCase);
+        if(!match.Success) return false;
+        string candidate=match.Groups[2].Value;
+        try {
+            if(!SafeInstallRoot(candidate)) return false;
+            string id=match.Groups[1].Value, metadata=Path.Combine(candidate,"goggame-"+id+".info");
+            if(!File.Exists(metadata) || new FileInfo(metadata).Length>1048576) return false;
+            Match declared=Regex.Match(File.ReadAllText(metadata),"\"gameId\"\\s*:\\s*\"?([0-9]+)\"?(?=\\s*[,}])");
+            if(!declared.Success || declared.Groups[1].Value!=id) return false;
+            root=Path.GetFullPath(candidate).TrimEnd(Path.DirectorySeparatorChar); return true;
+        } catch { return false; }
+    }
+    private static bool SafeInstallRoot(string path)
+    {
+        try {
+            if(!Regex.IsMatch(path??"",@"^[a-zA-Z]:\\") || path.IndexOf("..",StringComparison.Ordinal)>=0 || !Directory.Exists(path)) return false;
+            string full=Path.GetFullPath(path); if(string.Equals(full.TrimEnd('\\'),Path.GetPathRoot(full).TrimEnd('\\'),StringComparison.OrdinalIgnoreCase)) return false;
+            for(DirectoryInfo dir=new DirectoryInfo(full);dir!=null;dir=dir.Parent) if((dir.Attributes&FileAttributes.ReparsePoint)!=0) return false;
+            return true;
+        } catch { return false; }
+    }
+    private static bool IsGalaxyClient(string target)
+    {
+        foreach(RegistryKey hive in new[]{Registry.CurrentUser,Registry.LocalMachine}) foreach(string name in new[]{@"Software\GOG.com\GalaxyClient",@"Software\WOW6432Node\GOG.com\GalaxyClient"}) try {
+            using(RegistryKey key=hive.OpenSubKey(name)) if(key!=null) { string exe=Convert.ToString(key.GetValue("clientExecutable")); if(!string.IsNullOrEmpty(exe) && string.Equals(Path.GetFullPath(exe),target,StringComparison.OrdinalIgnoreCase)) return true; }
+        } catch {}
+        foreach(RegistryKey hive in new[]{Registry.CurrentUser,Registry.LocalMachine}) foreach(string name in new[]{@"Software\GOG.com\GalaxyClient\paths",@"Software\WOW6432Node\GOG.com\GalaxyClient\paths"}) try {
+            using(RegistryKey key=hive.OpenSubKey(name)) if(key!=null) foreach(string value in new[]{"client","path"}) {
+                string path=Convert.ToString(key.GetValue(value)); if(string.IsNullOrEmpty(path)) continue;
+                string exe=Path.GetExtension(path).Equals(".exe",StringComparison.OrdinalIgnoreCase)?path:Path.Combine(path,"GalaxyClient.exe");
+                if(string.Equals(Path.GetFullPath(exe),target,StringComparison.OrdinalIgnoreCase)) return true;
+            }
+        } catch {}
+        foreach(string root in new[]{Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)}) foreach(string folder in new[]{"GOG Galaxy",Path.Combine("GOG.com","Galaxy")})
+            if(string.Equals(Path.Combine(root,folder,"GalaxyClient.exe"),target,StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+    private static CatalogEntry ReadGameUrl(string file,List<string> libraries)
+    {
+        try {
+            if(new FileInfo(file).Length>8192) return null;
+            string url=null; bool section=false;
+            foreach(string line in File.ReadAllLines(file)) {
+                string value=line.Trim();
+                if(value.StartsWith("[")) { section=value.Equals("[InternetShortcut]",StringComparison.OrdinalIgnoreCase); continue; }
+                if(section && value.StartsWith("URL=",StringComparison.OrdinalIgnoreCase)) { if(url!=null) return null; url=value.Substring(4); }
+            }
+            Match match=Regex.Match(url??"",@"^steam://rungameid/([0-9]{1,12})$"); if(!match.Success) return null;
+            string root=SteamGameRoot(libraries,match.Groups[1].Value);
+            return new CatalogEntry {Name=Path.GetFileNameWithoutExtension(file),Route=url,Target=url,InstallRoot=root};
+        } catch { return null; }
+    }
+    private static List<string> SteamLibraries()
+    {
+        List<string> roots=new List<string>();
+        foreach(RegistryKey hive in new[]{Registry.CurrentUser,Registry.LocalMachine}) foreach(string name in new[]{@"Software\Valve\Steam",@"Software\WOW6432Node\Valve\Steam"}) try {
+            using(RegistryKey key=hive.OpenSubKey(name)) if(key!=null) { string root=Convert.ToString(key.GetValue("SteamPath")??key.GetValue("InstallPath")); if(!string.IsNullOrEmpty(root) && Directory.Exists(root)) AddRoute(roots,Path.GetFullPath(root)); }
+        } catch {}
+        foreach(string root in roots.ToArray()) try {
+            string file=Path.Combine(root,"steamapps","libraryfolders.vdf"); if(!File.Exists(file) || new FileInfo(file).Length>1048576) continue;
+            foreach(Match match in Regex.Matches(File.ReadAllText(file),"\"path\"\\s*\"([^\"]+)\"")) {
+                string path=match.Groups[1].Value.Replace("\\\\","\\"); if(Directory.Exists(path)) AddRoute(roots,Path.GetFullPath(path));
+            }
+        } catch {}
+        return roots;
+    }
+    private static string SteamGameRoot(List<string> libraries,string id)
+    {
+        string found=null;
+        foreach(string library in libraries) try {
+            string manifest=Path.Combine(library,"steamapps","appmanifest_"+id+".acf");
+            if(!File.Exists(manifest) || new FileInfo(manifest).Length>1048576) continue;
+            string text=File.ReadAllText(manifest); Match app=Regex.Match(text,"\"appid\"\\s*\"([0-9]+)\""), folder=Regex.Match(text,"\"installdir\"\\s*\"([^\"]+)\"");
+            if(!app.Success || app.Groups[1].Value!=id || !folder.Success) continue;
+            string leaf=folder.Groups[1].Value; if(leaf=="." || leaf==".." || leaf.IndexOfAny(new[]{'\\','/',':'})>=0) continue;
+            string root=Path.GetFullPath(Path.Combine(library,"steamapps","common",leaf)); if(!SafeInstallRoot(root)) continue;
+            if(found!=null && !string.Equals(found,root,StringComparison.OrdinalIgnoreCase)) return null; found=root;
+        } catch {}
+        return found;
+    }
+
+    private static bool MaintenanceName(string name) { return Regex.IsMatch(name??"",@"install|deinstall|uninstall|updat|setup|repair|reset|remove|reparatur|zuruecksetz",RegexOptions.IgnoreCase); }
+    private List<string> Routes(string app)
+    {
+        List<string> r=new List<string>(); CatalogSnapshot snapshot=catalog;
+        if(snapshot.AmbiguousApps.Contains(app)) return r;
+        CatalogEntry entry=FindCatalogEntry(snapshot,app);
+        if(entry!=null) { AddRoute(r,entry.Route); return r; }
+        if(!VoiceIntentParser.Apps.ContainsValue(app)) return r;
+        if(app=="Steam") AddRoute(r,"steam://open/main");
+        if(app=="Spotify") AddRoute(r,"spotify:");
+        if(app=="Microsoft Edge") AddRoute(r,"microsoft-edge:");
+        if(app=="Editor") AddRoute(r,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"notepad.exe"));
+        if(app=="Rechner") AddRoute(r,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System),"calc.exe"));
+        foreach(string process in ProcessNames(app)) {
+            foreach(RegistryKey hive in new[]{Registry.CurrentUser,Registry.LocalMachine}) foreach(string prefix in new[]{@"Software\Microsoft\Windows\CurrentVersion\App Paths\",@"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\"})
+                try { using(RegistryKey key=hive.OpenSubKey(prefix+process+".exe")) { if(key!=null) { string exe=Convert.ToString(key.GetValue("")); if(!string.IsNullOrEmpty(exe)) { exe=exe.Trim('"'); if(File.Exists(exe) && Path.GetExtension(exe).Equals(".exe",StringComparison.OrdinalIgnoreCase)) AddRoute(r,exe); } } } } catch {}
+        }
+        string local=Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), pf=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), pf86=Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+        string known=null;
+        if(app=="Steam") known=Path.Combine(pf86,"Steam","steam.exe");
+        else if(app=="Spotify") known=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),"Spotify","Spotify.exe");
+        else if(app=="Visual Studio Code") known=Path.Combine(local,"Programs","Microsoft VS Code","Code.exe");
+        else if(app=="Unity Hub") known=Path.Combine(pf,"Unity Hub","Unity Hub.exe");
+        else if(app=="OBS Studio") known=Path.Combine(pf,"obs-studio","bin","64bit","obs64.exe");
+        else if(app=="VLC media player") known=Path.Combine(pf,"VideoLAN","VLC","vlc.exe");
+        if(known!=null && File.Exists(known)) AddRoute(r,known);
+        return r;
+    }
+    private static void AddRoute(List<string> routes,string target) { if(!string.IsNullOrEmpty(target) && !routes.Contains(target)) routes.Add(target); }
+    private static string DefaultBrowser()
+    {
+        try { using(RegistryKey k=Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice")) { string id=k==null?"":Convert.ToString(k.GetValue("ProgId")); if(id.IndexOf("Chrome",StringComparison.OrdinalIgnoreCase)>=0) return "Google Chrome"; if(id.IndexOf("Firefox",StringComparison.OrdinalIgnoreCase)>=0) return "Firefox"; if(id.IndexOf("Edge",StringComparison.OrdinalIgnoreCase)>=0) return "Microsoft Edge"; } } catch {} return null;
+    }
+    private void OpenApp(string app,Action<string,string> done)
+    {
+        List<IntPtr> existing=Windows(app); if(existing.Count>0) { lastApp=app; lastAppAt=DateTime.UtcNow; Focus(existing[0],app,true,done); return; }
+        List<string> routes=Routes(app); if(routes.Count==0) { done("failed","Für " + app + " wurde kein sicherer Startweg gefunden."); return; }
+        LaunchRoute(app,routes,0,done);
+    }
+    private void LaunchRoute(string app,List<string> routes,int route,Action<string,string> done)
+    {
+        if(route>=routes.Count || route>2) { done("failed",app + " konnte nicht gestartet werden."); return; }
+        try { string target=routes[route]; ProcessStartInfo start;
+            CatalogEntry entry=FindCatalogEntry(catalog,app);
+            // Launch the validated captured target, never re-read a mutable
+            // shortcut or turn a spoken name into executable arguments.
+            if(entry!=null && entry.Route==target && !target.StartsWith("appx:")) start=new ProcessStartInfo(entry.Target,entry.Arguments??"");
+            else if(target.StartsWith("appx:")) { string id=target.Substring(5); if(!Regex.IsMatch(id,@"^[a-zA-Z0-9._-]+![a-zA-Z0-9._-]+$")) throw new InvalidOperationException("Ungültige App-ID"); start=new ProcessStartInfo("explorer.exe","shell:AppsFolder\\"+id); }
+            else start=new ProcessStartInfo(target);
+            start.UseShellExecute=true; Process p=Process.Start(start); if(p!=null) p.Dispose(); }
+        catch(Exception e) { capri.Log("Voice Hub: Startweg für " + app + " fehlgeschlagen: " + e.GetType().Name); LaunchRoute(app,routes,route+1,done); return; }
+        VerifyLaunch(app,routes,route,0,done);
+    }
+    private void VerifyLaunch(string app,List<string> routes,int route,int attempt,Action<string,string> done)
+    {
+        Later(1,delegate {
+            List<IntPtr> w=Windows(app); if(w.Count>0) { lastApp=app; lastAppAt=DateTime.UtcNow; Focus(w[0],app,false,done); return; }
+            if(attempt<7) { VerifyLaunch(app,routes,route,attempt+1,done); return; }
+            // Do not repeat a launch when a process is already starting or sitting in the tray.
+            if(Pids(app).Count==0 && route+1<routes.Count && route<1) { LaunchRoute(app,routes,route+1,done); return; }
+            done("unverified",Pids(app).Count>0 ? app + " läuft, aber ein sichtbares Fenster konnte nicht bestätigt werden." : "Der Start von " + app + " ist noch nicht bestätigt.");
+        });
+    }
+    private void Focus(IntPtr window,string app,bool existing,Action<string,string> done)
+    {
+        ShowWindowAsync(window,9); SetForegroundWindow(window);
+        Later(0.4,delegate { if(!IsWindow(window) || !IsWindowVisible(window)) { done("unverified",app+": Das Fenster ist nicht mehr sichtbar."); return; } bool front=GetForegroundWindow()==window;
+            done(existing?"already":"success",app + (front ? " ist geöffnet und im Vordergrund." : " ist geöffnet; Windows hat den Vordergrundwechsel nicht bestätigt.")); });
+    }
+    private void ChangeWindows(List<IntPtr> windows,string app,string action,Action<string,string> done)
+    {
+        if(windows.Count==0) {
+            CatalogEntry entry=FindCatalogEntry(catalog,app);
+            if(entry!=null && string.IsNullOrEmpty(entry.Executable) && string.IsNullOrEmpty(entry.InstallRoot) && string.IsNullOrEmpty(entry.AppId)) { done("unverified","Für "+app+" ist kein eindeutiger Spielprozess bekannt. Es wird kein Launcher oder fremdes Fenster geschlossen."); return; }
+            bool running=app!="Das aktive Fenster" && Pids(app).Count>0; done(running?"unverified":"already",running ? app + " läuft im Hintergrund. Ohne sichtbares Fenster wird kein erzwungenes Beenden ausgeführt." : app + " hat kein geöffnetes Fenster."); return;
+        }
+        int failed=0;
+        foreach(IntPtr w in windows) { if(w==IntPtr.Zero || !IsWindow(w)) { failed++; continue; } if(action=="close") { if(!PostMessage(w,0x0010,IntPtr.Zero,IntPtr.Zero)) failed++; } else if(action=="minimize") ShowWindowAsync(w,6); else { done("rejected","Diese Fensteraktion ist nicht freigegeben."); return; } }
+        if(failed==windows.Count) { done("failed","Windows hat die Fensteraktion abgelehnt."); return; }
+        Later(2,delegate {
+            int remaining=0; foreach(IntPtr w in windows) if(IsWindow(w) && IsWindowVisible(w) && (action=="close" || !IsIconic(w))) remaining++;
+            if(remaining>0) { done("unverified",app + " wartet möglicherweise auf eine Rückfrage zum Speichern oder reagiert noch nicht."); return; }
+            bool background=action=="close" && app!="Das aktive Fenster" && Pids(app).Count>0;
+            done("success",action=="minimize" ? app + " wurde minimiert." : app + ": Fenster geschlossen." + (background ? " Die Anwendung läuft weiterhin im Hintergrund." : ""));
+        });
+    }
+    private static string KnownMusicPlayer(CapriTrack track)
+    {
+        if(track==null) return null;
+        string app=track.App??"", id=track.AppId??"";
+        if(string.Equals(app,"Spotify",StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(id,@"^(?:spotify(?:\.exe)?|SpotifyAB\.SpotifyMusic_[a-zA-Z0-9]+![a-zA-Z0-9._-]+)$",RegexOptions.IgnoreCase)) return "Spotify";
+        if(string.Equals(app,"VLC",StringComparison.OrdinalIgnoreCase) || string.Equals(app,"VLC media player",StringComparison.OrdinalIgnoreCase) || Regex.IsMatch(id,@"^(?:vlc(?:\.exe)?|org\.videolan\.vlc|VideoLAN\.VLC_[a-zA-Z0-9]+![a-zA-Z0-9._-]+)$",RegexOptions.IgnoreCase)) return "VLC media player";
+        return null;
+    }
+    private CapriTrack ChooseTrack(string app,out bool ambiguous)
+    {
+        ambiguous=false;
+        CapriTrack[] sessions=capri.Music.Sessions??new CapriTrack[0];
+        if(app=="YouTube") return ChooseYouTubeTrack(sessions,out ambiguous);
+        CapriTrack selected=null; HashSet<string> ids=new HashSet<string>(StringComparer.Ordinal);
+        if(!string.IsNullOrEmpty(app))
+        {
+            foreach(CapriTrack t in sessions) if(t!=null && !string.IsNullOrEmpty(t.AppId) && (KnownMusicPlayer(t)==app || string.Equals(t.App,app,StringComparison.OrdinalIgnoreCase)))
+            { if(!ids.Add(t.AppId)) continue; if(selected!=null) { ambiguous=true; return null; } selected=t; }
+            return selected; // An explicit missing target never falls back to a browser.
+        }
+        double age=(DateTime.UtcNow-lastMediaAt).TotalSeconds;
+        if(lastMediaAppId!=null && age>=0 && age<120)
+            foreach(CapriTrack t in sessions) if(t!=null && t.AppId==lastMediaAppId) return t;
+        foreach(CapriTrack t in sessions) if(KnownMusicPlayer(t)!=null && !string.IsNullOrEmpty(t.AppId))
+        { if(!ids.Add(t.AppId)) continue; if(selected!=null) { ambiguous=true; return null; } selected=t; }
+        return selected??capri.Music.Now;
+    }
+    private static string BrowserProcess(string appId)
+    {
+        switch((appId??"").ToLowerInvariant()) {
+            case "msedge": case "msedge.exe": case "microsoft.microsoftedge_8wekyb3d8bbwe!microsoftedge": return "msedge";
+            case "chrome": case "chrome.exe": return "chrome";
+            case "firefox": case "firefox.exe": return "firefox";
+            case "brave": case "brave.exe": return "brave";
+            case "opera": case "opera.exe": return "opera";
+            default:return null;
+        }
+    }
+    private static bool YouTubeCaptionMatches(string caption,string title,string browser)
+    {
+        title=Regex.Replace(title??"",@"\p{Cf}","").Trim();
+        caption=Regex.Replace(caption??"",@"\p{Cf}","").Trim();
+        if(title.Length<1 || title.Length>1024 || !caption.StartsWith(title,StringComparison.Ordinal)) return false;
+        string suffix=browser=="msedge"?"Microsoft Edge":browser=="chrome"?"Google Chrome":browser=="firefox"?"Mozilla Firefox":browser=="brave"?"Brave":browser=="opera"?"Opera(?: GX)?":null;
+        if(suffix==null) return false;
+        // Match the complete media title and browser caption shape, including
+        // Edge's German tab-group count. This is caption attribution, not a URL.
+        return Regex.IsMatch(caption.Substring(title.Length),@"^ [–—-] YouTube(?: und [1-9][0-9]{0,2} weitere Seiten?| and [1-9][0-9]{0,2} (?:more )?(?:pages?|tabs?))?(?: [–—-] [^\r\n]{1,160})? [–—-] "+suffix+@"$");
+    }
+    private static int CountYouTubeWindows(string browser,string title)
+    {
+        int matches=0,visited=0;
+        try {
+            EnumWindows(delegate(IntPtr window,IntPtr unused) {
+                if(++visited>1024 || matches>1) return false;
+                if(!IsWindowVisible(window)) return true; // minimized windows remain eligible
+                uint pid; GetWindowThreadProcessId(window,out pid);
+                try { using(Process process=Process.GetProcessById((int)pid)) {
+                    if(!process.ProcessName.Equals(browser,StringComparison.OrdinalIgnoreCase)) return true;
+                } } catch { return true; }
+                StringBuilder caption=new StringBuilder(2048); GetWindowText(window,caption,caption.Capacity);
+                if(YouTubeCaptionMatches(caption.ToString(),title,browser)) matches++;
+                return matches<2;
+            },IntPtr.Zero);
+        } catch { return 0; }
+        return visited>1024?0:matches;
+    }
+    private static int SessionCount(CapriTrack[] sessions,string appId)
+    {
+        int count=0; foreach(CapriTrack item in sessions) if(item!=null && item.AppId==appId) count++; return count;
+    }
+    private CapriTrack ChooseYouTubeTrack(CapriTrack[] sessions,out bool ambiguous)
+    {
+        ambiguous=false; CapriTrack selected=null;
+        foreach(CapriTrack track in sessions) {
+            if(track==null || string.IsNullOrEmpty(track.Key)) continue;
+            string browser=BrowserProcess(track.AppId); if(browser==null) continue;
+            int matches=youtubeWindowMatches(browser,track.Title); if(matches==0) continue;
+            if(matches!=1 || SessionCount(sessions,track.AppId)!=1 || selected!=null) { ambiguous=true; return null; }
+            selected=track;
+        }
+        return selected;
+    }
+    private bool SameYouTubeTarget(CapriTrack track,string appId,string key)
+    {
+        if(track==null || track.AppId!=appId || track.Key!=key || string.IsNullOrEmpty(key)) return false;
+        CapriTrack[] sessions=capri.Music.Sessions??new CapriTrack[0];
+        if(SessionCount(sessions,appId)!=1) return false;
+        foreach(CapriTrack item in sessions) if(item!=null && item.AppId==appId && item.Key!=key) return false;
+        string browser=BrowserProcess(appId);
+        return browser!=null && youtubeWindowMatches(browser,track.Title)==1;
+    }
+    private void RememberMedia(string appId) { lastMediaAppId=appId; lastMediaAt=DateTime.UtcNow; }
+    private void RunMedia(VoiceIntent i,Action<string,string> done,int wait)
+    {
+        string app=i.App; bool ambiguous;
+        CapriTrack track=ChooseTrack(app,out ambiguous);
+        if(app=="YouTube" && (ambiguous || track==null)) {
+            done(ambiguous?"rejected":"unverified",ambiguous?"Mehrere passende Browser-Videositzungen gefunden. Bitte lasse nur das gewünschte YouTube-Video bereit.":"Keine eindeutig zugeordnete YouTube-Wiedergabe gefunden. Lass den gewünschten YouTube-Tab im Browser ausgewählt und starte das Video dort zunächst einmal."); return;
+        }
+        if(ambiguous) { done("rejected",app==null ? "Mehrere Musik-Apps sind bereit. Welche soll ich steuern: Spotify oder VLC?" : "Mehrere Sitzungen von " + app + " sind bereit. Bitte lasse nur die gewünschte Sitzung geöffnet."); return; }
+        if(track==null)
+        {
+            if(i.Action=="media.play" && app!=null && wait==0 && Windows(app).Count==0) { OpenApp(app,delegate(string s,string m) { if(s=="success" || s=="already") Later(1,delegate { RunMedia(i,done,1); }); else done(s,m); }); return; }
+            if(i.Action=="media.play" && wait>0 && wait<4) { Later(1,delegate { RunMedia(i,done,wait+1); }); return; }
+            done("unverified",app==null ? "Keine aktive Mediensitzung gefunden. Öffne Spotify und wähle einen Titel." : app + " stellt noch keine Mediensitzung bereit. Wähle dort zuerst einen Titel."); return;
+        }
+        string appId=track.AppId;
+        if(string.IsNullOrEmpty(appId)) { done("unverified","Die Medienanwendung meldet keine eindeutige Sitzung."); return; }
+        string videoKey=i.App=="YouTube"?track.Key:null;
+        if(capri.Music.Following!=appId) { capri.Music.Follow(appId); followedByHub=appId; }
+        MediaPress(i,appId,done,0,videoKey);
+    }
+    private void MediaPress(VoiceIntent i,string appId,Action<string,string> done,int followAttempt,string videoKey=null)
+    {
+        CapriTrack before=capri.Music.Now;
+        if(before==null || before.AppId!=appId || capri.Music.Following!=appId)
+        {
+            // Follow updates asynchronously. Poll only the originally selected
+            // identity, never reselect or press a different session while waiting.
+            if(followAttempt<12) { Later(0.25,delegate { MediaPress(i,appId,done,followAttempt+1,videoKey); }); return; }
+            done("unverified","Die gewünschte Mediensitzung ist nicht aktiv; es wurde keine andere Anwendung gesteuert."); return;
+        }
+        if(videoKey!=null && !SameYouTubeTarget(before,appId,videoKey)) { done("unverified","Die YouTube-Sitzung hat sich geändert; es wurde kein Videobefehl gesendet."); return; }
+        if(i.Action=="media.play" && before.Playing) { if(videoKey==null) RememberMedia(appId); done("already",videoKey==null?"Die Wiedergabe läuft bereits.":"Das YouTube-Video läuft bereits."); return; }
+        if(i.Action=="media.pause" && !before.Playing) { if(videoKey==null) RememberMedia(appId); done("already",videoKey==null?"Die Wiedergabe ist bereits pausiert.":"Das YouTube-Video ist bereits pausiert."); return; }
+        if(i.Action=="media.play" && string.IsNullOrWhiteSpace(before.Title)) { done("unverified","Wähle zuerst einen Titel in der Medienanwendung."); return; }
+        if(i.Action=="media.volume" || i.Action=="media.volume.set")
+        {
+            double previous=capri.Music.Volume; if(previous<0) { done("unverified","Für diese Anwendung ist noch keine Lautstärkeregelung verfügbar."); return; }
+            double requested=i.Action=="media.volume.set"?i.Value/100.0:Math.Max(0,Math.Min(1,previous+i.Value/100.0)); capri.Music.Volume=requested;
+            Later(1,delegate { CapriTrack now=capri.Music.Now; bool ok=now!=null && now.AppId==appId && capri.Music.Following==appId && Math.Abs(capri.Music.Volume-requested)<0.025; if(ok) RememberMedia(appId); done(ok?"success":"unverified",ok ? "Lautstärke von " + before.App + ": " + Math.Round(requested*100) + " Prozent." : "Die Lautstärkeänderung konnte nicht bestätigt werden."); }); return;
+        }
+        bool accepted=false;
+        if(i.Action=="media.play") accepted=capri.Music.Play(); else if(i.Action=="media.pause") accepted=capri.Music.Pause();
+        else if(i.Action=="media.next") { if(!before.CanSkip) { done("failed","Die Anwendung erlaubt gerade keinen nächsten Titel."); return; } accepted=capri.Music.Next(); }
+        else if(i.Action=="media.previous") { if(!before.CanBack) { done("failed","Die Anwendung erlaubt gerade keinen vorherigen Titel."); return; } accepted=capri.Music.Previous(); }
+        if(!accepted) { done("failed","Die Medienanwendung hat den Befehl nicht angenommen."); return; }
+        VerifyMedia(i.Action,appId,before.Key,before.At(),0,done,videoKey);
+    }
+    private void VerifyMedia(string action,string appId,string oldKey,double oldPosition,int attempt,Action<string,string> done,string videoKey=null)
+    {
+        Later(1,delegate {
+            CapriTrack now=capri.Music.Now;
+            bool match=now!=null && now.AppId==appId && capri.Music.Following==appId && (videoKey==null || SameYouTubeTarget(now,appId,videoKey));
+            bool ok=match && ((action=="media.play" && now.Playing) || (action=="media.pause" && !now.Playing) || ((action=="media.next" || action=="media.previous") && now.Key!=oldKey) || (action=="media.previous" && oldPosition>5 && now.At()<3));
+            if(ok) { if(videoKey==null) RememberMedia(appId); done("success",videoKey!=null?(action=="media.play"?"Das YouTube-Video läuft.":"Das YouTube-Video ist pausiert."):action=="media.play"?"Die Wiedergabe läuft.":action=="media.pause"?"Die Wiedergabe ist pausiert.":action=="media.next"?"Der nächste Titel wurde ausgewählt.":"Der vorherige Titel oder Titelanfang wurde ausgewählt."); return; }
+            if(attempt<4) { VerifyMedia(action,appId,oldKey,oldPosition,attempt+1,done,videoKey); return; }
+            done("unverified","Der Medienbefehl wurde gesendet; der gewünschte Zustand ist nicht bestätigt.");
+        });
+    }
+    private bool Allowed(string owner,string action)
+    {
+        // An explicit legacy alias is an existing user grant for that exact mod/action.
+        foreach(string value in aliases.Values) if(value=="mod:"+owner+":"+action) return true;
+        string f=Path.Combine(capri.Folder,"allowed-mods.txt");
+        try { if(File.Exists(f) && new FileInfo(f).Length<=16384) foreach(string line in File.ReadLines(f)) if(line.Trim()==owner+":"+action) return true; } catch(IOException) {}
+        return false;
+    }
+    private void OnModMessage(string from,string topic,string data)
+    {
+        if(stopped || string.IsNullOrEmpty(from) || data==null || data.Length>4096) return;
+        try {
+            Dictionary<string,string> d=VoiceJson.Read(data);
+            if(topic=="voicehub.register")
+            {
+                string action=VoiceJson.Get(d,"action"), phrase=VoiceIntentParser.StripAddress(VoiceIntentParser.Normalize(VoiceJson.Get(d,"phrase"))), permission=VoiceJson.Get(d,"permission"); int priority=0; int.TryParse(VoiceJson.Get(d,"priority"),out priority);
+                bool valid=VoiceJson.Get(d,"protocol")=="3" && Regex.IsMatch(from,@"^[a-z0-9-]{1,48}$") && Regex.IsMatch(action,@"^[a-zA-Z0-9_-]{1,64}$") && permission=="local" && phrase.Length>=3 && phrase.Length<=120 && !VoiceIntentParser.Unsafe(phrase) && capri.Mods.IsRunning(from) && registrations.Count<128;
+                if(valid) { string key=from+":"+action; registrations[key]=new Registration { Owner=from, Action=action, Phrase=phrase, Priority=Math.Max(-10,Math.Min(10,priority)) }; }
+                capri.Mods.SendTo(from,"voicehub.registered","{\"protocol\":3,\"action\":"+VoiceJson.Quote(action)+",\"status\":"+VoiceJson.Quote(valid?(Allowed(from,action)?"registered":"permission_required"):"rejected")+"}");
+            }
+            else if(topic=="voicehub.result")
+            {
+                string id=VoiceJson.Get(d,"id"); PendingMod p;
+                if(modPending.TryGetValue(id,out p) && p.Owner==from) { string status=VoiceJson.Get(d,"status"), message=VoiceJson.Get(d,"message"); if(status!="success" && status!="failed" && status!="unverified") return; modPending.Remove(id); p.Done(status,"Mod " + from + " meldet: " + (message.Length>200?message.Substring(0,200):message)); }
+            }
+            else if(topic=="voicehub.unregister") { string key=from+":"+VoiceJson.Get(d,"action"); registrations.Remove(key); }
+        } catch(FormatException) {} catch(Exception e) { capri.Log("Voice Hub: Mod-Nachricht abgewiesen: " + e.GetType().Name); }
+    }
+    private void RunMod(VoiceIntent i,Action<string,string> done)
+    {
+        if(!Allowed(i.Mod,i.Command)) { done("rejected","Diese Mod-Aktion ist noch nicht freigegeben: " + i.Mod + ":" + i.Command); return; }
+        if(!capri.Mods.IsRunning(i.Mod)) { done("failed","Diese Mod ist nicht aktiv: " + i.Mod); return; }
+        string id=Guid.NewGuid().ToString("N"); Registration registered;
+        if(!registrations.TryGetValue(i.Mod+":"+i.Command,out registered))
+        { capri.Mods.SendTo(i.Mod,"voicehub.command",i.Command+"|"); done("unverified","Der Befehl wurde an die ältere Mod " + i.Mod + " gesendet; sie liefert keine Ausführungsbestätigung."); return; }
+        modPending[id]=new PendingMod { Owner=i.Mod, Done=done };
+        capri.Mods.SendTo(i.Mod,"voicehub.execute","{\"protocol\":3,\"id\":"+VoiceJson.Quote(id)+",\"action\":"+VoiceJson.Quote(i.Command)+"}");
+        Later(8,delegate { PendingMod pending; if(modPending.TryGetValue(id,out pending)) { modPending.Remove(id); pending.Done("unverified","Die Mod " + i.Mod + " hat die Ausführung nicht bestätigt."); } });
+    }
+    public bool Heard(string words) { return Handle(words,null); }
+    public void Stop()
+    {
+        stopped=true; if(heartbeat!=null) heartbeat.Cancel();
+        if(companionLifecycle!=null) { companionLifecycle.Stop(); companionLifecycle=null; }
+        if(callAdapter!=null) callAdapter.Dispose();
+        if(capri!=null) {
+            if(sending!=null) capri.Chat.Sending-=sending; if(heard!=null) capri.Voice.Heard-=heard; if(received!=null) capri.Mods.Received-=received;
+            try { string file=Path.Combine(capri.Folder,"bridge-state.json"); if(File.Exists(file)) { Dictionary<string,string> d=VoiceJson.Read(File.ReadAllText(file)); if(VoiceJson.Get(d,"session")==session) File.Delete(file); } } catch {}
+            try { if(followedByHub!=null && capri.Music.Following==followedByHub) capri.Music.Follow(oldFollowing); } catch {} capri.Log("Voice Hub Ultimate sauber beendet.");
+        }
+        modPending.Clear(); registrations.Clear(); operations.Clear(); seen.Clear();
+    }
+}
+
+// One launch per mod lifetime. Python owns the single-instance lock, the Capri
+// process handle and current-bridge/session checks; this class never kills or
+// automatically restarts a process. All installation I/O runs off the UI thread.
+public sealed class VoiceCompanionLifecycle
+{
+    private readonly object gate=new object();
+    private readonly string root,ownerSession;
+    private readonly int ownerPid;
+    private readonly long ownerStartFileTime;
+    private readonly Action<ProcessStartInfo> launch;
+    private readonly Action<Action> queue;
+    private readonly Action<string> log;
+    private LaunchPlan plan;
+    private bool stopped,started,stopQueued;
+    private sealed class LaunchPlan { public string Root,VersionRoot,Runtime,Script; }
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window,out uint processId);
+
+    public static VoiceCompanionLifecycle Begin(Form window,string bridgeSession,Action<string> log)
+    {
+        if(!Authorized(window)) return null;
+        try {
+            using(Process owner=Process.GetCurrentProcess()) {
+                string root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"CapriUltimate");
+                return new VoiceCompanionLifecycle(root,owner.Id,bridgeSession,owner.StartTime.ToUniversalTime().ToFileTimeUtc(),
+                    delegate(ProcessStartInfo info) { using(Process child=Process.Start(info)) {} },
+                    delegate(Action action) { ThreadPool.QueueUserWorkItem(delegate { action(); }); },log);
+            }
+        } catch(Exception e) { if(log!=null) try { log("Voice Hub: Companion-Start nicht vorbereitet: "+e.Message); } catch {} return null; }
+    }
+    private static bool Authorized(Form window)
+    {
+        try {
+            if(window==null || window.GetType().FullName!="CapriDesktop.Companion" || window.GetType().Assembly!=typeof(ICapriHost).Assembly) return false;
+            // A test may load the real Capri assembly and an inert Companion
+            // object. Its entry executable still must not launch installed code.
+            using(Process current=Process.GetCurrentProcess()) {
+                if(!string.Equals(current.ProcessName,"Capri",StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(Path.GetFullPath(current.MainModule.FileName),Path.GetFullPath(typeof(ICapriHost).Assembly.Location),StringComparison.OrdinalIgnoreCase)) return false;
+                if(window.IsDisposed || !window.IsHandleCreated) return false;
+                uint windowPid; GetWindowThreadProcessId(window.Handle,out windowPid);
+                return windowPid==(uint)current.Id;
+            }
+        } catch { return false; }
+    }
+    // Private dependency injection is used only by the isolated test assembly;
+    // production callers must pass the real-host authorization above.
+    private VoiceCompanionLifecycle(string root,int ownerPid,string ownerSession,long ownerStartFileTime,
+                                    Action<ProcessStartInfo> launch,Action<Action> queue,Action<string> log)
+    {
+        Guid session;
+        if(ownerPid<=0 || ownerStartFileTime<=0 || !Guid.TryParseExact(ownerSession,"N",out session)) throw new ArgumentException("Ungueltige Capri-Prozessbindung.");
+        this.root=root; this.ownerPid=ownerPid; this.ownerSession=ownerSession; this.ownerStartFileTime=ownerStartFileTime;
+        this.launch=launch; this.queue=queue; this.log=log;
+        queue(StartWorker);
+    }
+    private void StartWorker()
+    {
+        try {
+            lock(gate) { if(stopped) return; }
+            LaunchPlan prepared=ReadPlan(root);
+            ProcessStartInfo info=MakeStartInfo(prepared,false);
+            lock(gate) { if(stopped) return; plan=prepared; }
+            queue(delegate { LaunchWorker(info); });
+        } catch(Exception e) { Report("Companion konnte nicht vorbereitet werden",e); }
+    }
+    private void LaunchWorker(ProcessStartInfo info)
+    {
+        try {
+            ValidateFiles(plan);
+            lock(gate) { if(stopped) return; }
+            // Stop may race with this one OS call. In that case it queues an
+            // owner/session-scoped tombstone immediately after launch returns.
+            launch(info);
+            bool stopNow;
+            lock(gate) { started=true; stopNow=stopped && !stopQueued; if(stopNow) stopQueued=true; }
+            if(stopNow) queue(StopWorker);
+        } catch(Exception e) { Report("Companion konnte nicht gestartet werden",e); }
+    }
+    public void Stop()
+    {
+        bool schedule;
+        lock(gate) { stopped=true; schedule=started && !stopQueued; if(schedule) stopQueued=true; }
+        if(schedule) queue(StopWorker);
+    }
+    private void StopWorker()
+    {
+        try { launch(MakeStartInfo(plan,true)); }
+        catch(Exception e) { Report("Companion-Stopp konnte nicht angefordert werden",e); }
+    }
+    private void Report(string message,Exception error)
+    { if(log!=null) try { log("Voice Hub: "+message+": "+error.Message); } catch {} }
+    private ProcessStartInfo MakeStartInfo(LaunchPlan selected,bool shutdown)
+    {
+        ValidateFiles(selected);
+        string args=QuoteArgument(selected.Script)+" --data-dir "+QuoteArgument(selected.Root)+(shutdown?" --shutdown-owned":" --linked")+
+            " --owner-pid "+ownerPid.ToString(CultureInfo.InvariantCulture)+" --owner-session "+QuoteArgument(ownerSession)+
+            " --owner-start-filetime "+ownerStartFileTime.ToString(CultureInfo.InvariantCulture);
+        return new ProcessStartInfo(selected.Runtime,args) { UseShellExecute=false,CreateNoWindow=true,WindowStyle=ProcessWindowStyle.Hidden,WorkingDirectory=selected.Root };
+    }
+    private static LaunchPlan ReadPlan(string installRoot)
+    {
+        if(string.IsNullOrEmpty(installRoot) || !Path.IsPathRooted(installRoot)) throw new IOException("Installationspfad fehlt.");
+        string root=Path.GetFullPath(installRoot).TrimEnd(Path.DirectorySeparatorChar);
+        SafeEntry(root,true);
+        string manifest=Path.Combine(root,"install-state.json"); SafeEntry(manifest,false);
+        byte[] bytes=new byte[4097]; int count=0;
+        using(FileStream file=new FileStream(manifest,FileMode.Open,FileAccess.Read,FileShare.ReadWrite)) {
+            int read; while(count<bytes.Length && (read=file.Read(bytes,count,bytes.Length-count))>0) count+=read;
+        }
+        if(count==0 || count>4096) throw new IOException("Installationsinformation ist zu gross oder leer.");
+        string json=new UTF8Encoding(false,true).GetString(bytes,0,count).TrimStart('\uFEFF');
+        Dictionary<string,string> state=VoiceJson.Read(json); Version version;
+        if(!Version.TryParse(VoiceJson.Get(state,"version"),out version) || version<new Version(3,5,0)) throw new IOException("Companion ab Version 3.5 wird benoetigt.");
+        string active=VoiceJson.Get(state,"activeVersion");
+        if(string.IsNullOrWhiteSpace(active) || !Path.IsPathRooted(active)) throw new IOException("Aktive Companion-Version fehlt.");
+        active=Path.GetFullPath(active).TrimEnd(Path.DirectorySeparatorChar);
+        string versions=Path.Combine(root,"versions");
+        if(!string.Equals(Path.GetDirectoryName(active),versions,StringComparison.OrdinalIgnoreCase)) throw new IOException("Aktive Version liegt ausserhalb des eigenen Versionsordners.");
+        LaunchPlan selected=new LaunchPlan { Root=root,VersionRoot=active,Runtime=Path.Combine(active,@".venv\Scripts\pythonw.exe"),Script=Path.Combine(active,@"companion\capri_voice.py") };
+        ValidateFiles(selected); return selected;
+    }
+    private static void ValidateFiles(LaunchPlan selected)
+    {
+        SafeEntry(selected.Root,true); SafeEntry(Path.Combine(selected.Root,"versions"),true); SafeEntry(selected.VersionRoot,true);
+        SafeEntry(Path.Combine(selected.VersionRoot,".venv"),true); SafeEntry(Path.Combine(selected.VersionRoot,@".venv\Scripts"),true);
+        SafeEntry(Path.Combine(selected.VersionRoot,"companion"),true); SafeEntry(selected.Runtime,false); SafeEntry(selected.Script,false);
+    }
+    private static void SafeEntry(string path,bool directory)
+    {
+        FileAttributes attributes=File.GetAttributes(path);
+        if((attributes&FileAttributes.ReparsePoint)!=0 || ((attributes&FileAttributes.Directory)!=0)!=directory) throw new IOException("Verknuepftes oder falsches Installationsziel: "+path);
+    }
+    private static string QuoteArgument(string text)
+    {
+        if(text==null || text.IndexOf('\0')>=0) throw new ArgumentException("Ungueltiges Prozessargument.");
+        StringBuilder quoted=new StringBuilder("\""); int slashes=0;
+        foreach(char c in text) {
+            if(c=='\\') { slashes++; continue; }
+            if(c=='\"') { quoted.Append('\\',slashes*2+1).Append(c); slashes=0; continue; }
+            quoted.Append('\\',slashes).Append(c); slashes=0;
+        }
+        return quoted.Append('\\',slashes*2).Append('"').ToString();
+    }
+}
+
+// Compatibility adapter for the audited Capri Store 1.9.0.0 binary only.
+// It never executes commands. Complete native CallTranscript provenance and
+// final Chat.Sending validation remain mandatory. This is not a public Capri API.
+public sealed class VoiceCallModeAdapter : System.IDisposable
+{
+    private const string KnownSha256 = "C10BEA0E083249DFC9D73E24533A57EE533E55D4FE61AB12E691C6EB9B984207";
+    private static readonly System.Guid KnownMvid = new System.Guid("4EAA900C-8347-4EB2-A8E3-7A64751E5F44");
+    private const long LifetimeMs = 12000;
+    private const int MaxPending = 32;
+    private readonly object gate = new object();
+    private readonly object window;
+    private readonly System.Reflection.FieldInfo runField;
+    private readonly System.Reflection.PropertyInfo callProperty;
+    private readonly System.Func<string, bool> safe;
+    private readonly System.Func<long> now;
+    private readonly System.Func<short[], string> original;
+    private readonly System.Func<short[], string> wrapper;
+    private delegate System.Func<short[], string> Swap(System.Func<short[], string> value, System.Func<short[], string> comparand);
+    private readonly Swap exchange;
+    private readonly string marker = "capribefehl" + System.Guid.NewGuid().ToString("N");
+    private readonly System.Collections.Generic.Dictionary<string, Pending> pending = new System.Collections.Generic.Dictionary<string, Pending>(System.StringComparer.Ordinal);
+    private readonly System.Text.RegularExpressions.Regex tickets;
+    private bool active, callMode, disposed;
+
+    private sealed class Pending
+    {
+        internal string Words;
+        internal long At;
+    }
+
+    public bool CallMode { get { lock (gate) return callMode; } }
+
+    // Must be called on Capri's UI thread. The callback must be a pure parser
+    // over immutable/snapshotted data; it is later called on an ASR worker.
+    public static bool TryCreate(System.Windows.Forms.Form capriWindow, System.Func<string, bool> isSafeCommand,
+                                 out VoiceCallModeAdapter adapter, out string reason)
+    {
+        adapter = null;
+        reason = "Native Call-Kompatibilitaet ist fuer diese Capri-Version nicht verfuegbar.";
+        if (capriWindow == null || isSafeCommand == null || capriWindow.GetType().FullName != "CapriDesktop.Companion") return false;
+        try
+        {
+            System.Type companion = capriWindow.GetType();
+            System.Reflection.Assembly assembly = companion.Assembly;
+            if (!KnownAssembly(assembly)) return false;
+            System.Type hearing = assembly.GetType("CapriDesktop.Hearing", false);
+            System.Reflection.FieldInfo field = hearing == null ? null : hearing.GetField("Run", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+            System.Reflection.PropertyInfo property = companion.GetProperty("CallModeOn", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (field == null || field.IsInitOnly || field.FieldType != typeof(System.Func<short[], string>) || !PureCallGetter(property, companion)) return false;
+            System.Func<short[], string> previous = field.GetValue(null) as System.Func<short[], string>;
+            // An unknown wrapper is not overwritten or silently trusted.
+            if (previous == null || previous.Target != null || previous.Method.DeclaringType != hearing || previous.Method.Name != "Recognize")
+            { reason = "Ein anderer nativer Erkennungsadapter ist aktiv; die vorhandene Erkennung bleibt unveraendert."; return false; }
+            adapter = new VoiceCallModeAdapter(capriWindow, field, property, isSafeCommand, MonotonicMs);
+            reason = "Native Call-Kompatibilitaet fuer Capri Store 1.9 aktivierbar.";
+            return true;
+        }
+        catch (System.Exception error)
+        {
+            reason = "Native Call-Kompatibilitaet konnte nicht eingerichtet werden: " + error.GetType().Name;
+            return false;
+        }
+    }
+
+    private static bool KnownAssembly(System.Reflection.Assembly assembly)
+    {
+        if (assembly == null || assembly.GetName().Name != "Capri" || assembly.ManifestModule.ModuleVersionId != KnownMvid || assembly.GetName().Version != new System.Version(0,9,0,0)) return false;
+        using (System.IO.Stream stream = System.IO.File.OpenRead(assembly.Location))
+        using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            return System.BitConverter.ToString(sha.ComputeHash(stream)).Replace("-", "") == KnownSha256;
+    }
+
+    private static bool PureCallGetter(System.Reflection.PropertyInfo property, System.Type companion)
+    {
+        if (property == null || property.PropertyType != typeof(bool) || property.GetIndexParameters().Length != 0) return false;
+        System.Reflection.MethodInfo getter = property.GetGetMethod(true);
+        if (getter == null || getter.IsStatic || getter.GetParameters().Length != 0 || getter.GetMethodBody() == null) return false;
+        byte[] il = getter.GetMethodBody().GetILAsByteArray();
+        // Audited getter: ldarg.0; ldfld callSession; callvirt get_Enabled; ret.
+        if (il.Length != 12 || il[0] != 2 || il[1] != 0x7b || il[6] != 0x6f || il[11] != 0x2a) return false;
+        System.Reflection.FieldInfo field = getter.Module.ResolveField(System.BitConverter.ToInt32(il, 2));
+        System.Reflection.MethodInfo enabled = getter.Module.ResolveMethod(System.BitConverter.ToInt32(il, 7)) as System.Reflection.MethodInfo;
+        return field.DeclaringType == companion && !field.IsStatic && field.Name == "callSession" && field.FieldType.FullName == "CapriDesktop.CallSession"
+            && enabled != null && enabled.DeclaringType == field.FieldType && enabled.Name == "get_Enabled" && !enabled.IsStatic
+            && enabled.ReturnType == typeof(bool) && enabled.GetParameters().Length == 0;
+    }
+
+    private static long MonotonicMs() { return (long)(System.Diagnostics.Stopwatch.GetTimestamp() * 1000.0 / System.Diagnostics.Stopwatch.Frequency); }
+
+    private VoiceCallModeAdapter(object capriWindow, System.Reflection.FieldInfo field, System.Reflection.PropertyInfo property,
+                                  System.Func<string, bool> isSafeCommand, System.Func<long> clock)
+    {
+        window = capriWindow; runField = field; callProperty = property; safe = isSafeCommand; now = clock;
+        original = (System.Func<short[], string>)field.GetValue(null);
+        if (original == null) throw new System.InvalidOperationException("Native ASR delegate fehlt.");
+        wrapper = Wrap;
+        tickets = new System.Text.RegularExpressions.Regex("Capri " + marker + " ([a-f0-9]{32})(?![a-zA-Z0-9])", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+        exchange = MakeExchange(field);
+        if (!object.ReferenceEquals(exchange(wrapper, original), original)) throw new System.InvalidOperationException("Native ASR delegate wurde gleichzeitig geaendert.");
+    }
+
+    private static Swap MakeExchange(System.Reflection.FieldInfo field)
+    {
+        // Managed compare-and-exchange on the audited delegate field. No native
+        // code patch or Capri method replacement: a racing foreign owner wins.
+        System.Type type = typeof(System.Func<short[], string>);
+        System.Reflection.MethodInfo compare = null;
+        foreach (System.Reflection.MethodInfo method in typeof(System.Threading.Interlocked).GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static))
+            if (method.Name == "CompareExchange" && method.IsGenericMethodDefinition && method.GetParameters().Length == 3) { compare = method.MakeGenericMethod(type); break; }
+        if (compare == null) throw new System.NotSupportedException("Managed delegate CAS fehlt.");
+        System.Reflection.Emit.DynamicMethod operation = new System.Reflection.Emit.DynamicMethod("VoiceCallDelegateCAS", type, new System.Type[] { type, type }, field.DeclaringType, true);
+        System.Reflection.Emit.ILGenerator il = operation.GetILGenerator();
+        il.Emit(System.Reflection.Emit.OpCodes.Ldsflda, field);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+        il.Emit(System.Reflection.Emit.OpCodes.Call, compare);
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        return (Swap)operation.CreateDelegate(typeof(Swap));
+    }
+
+    // UI thread only. State is refreshed even when the direct feature is off.
+    public void SetActive(bool enabled)
+    {
+        bool on = false;
+        try { on = (bool)callProperty.GetValue(window, null); } catch { on = false; }
+        lock (gate)
+        {
+            callMode = on;
+            active = !disposed && enabled && on && object.ReferenceEquals(runField.GetValue(null), wrapper);
+            if (!active) pending.Clear();
+        }
+    }
+
+    private string Wrap(short[] samples)
+    {
+        // Native recognizer failures retain their normal handling. Never replace
+        // an exception with invented text or an empty successful recognition.
+        string raw = original(samples);
+        lock (gate) { if (!active || disposed) return raw; }
+        string words = System.Text.RegularExpressions.Regex.Replace(raw ?? "", @"\s+", " ").Trim();
+        if (words.Length < 2 || words.Length > 240 || System.Text.RegularExpressions.Regex.IsMatch(words, @"^(?:hey\s+)?capri\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return raw;
+        bool recognized;
+        try { recognized = safe(words); } catch { return raw; }
+        if (!recognized) return raw;
+        lock (gate)
+        {
+            // Recheck after potentially slow native ASR and parser: Stop cannot
+            // publish a new ticket after the adapter has been disabled.
+            if (!active || disposed) return raw;
+            long at = now();
+            Expire(at);
+            if (pending.Count >= MaxPending) return raw;
+            string id = System.Guid.NewGuid().ToString("N");
+            pending[id] = new Pending { Words = words, At = at };
+            // Only a RAM ticket reaches native CallTranscript. If the mod unloads
+            // before delivery, an orphaned ticket contains no original command.
+            return "Capri " + marker + " " + id;
+        }
+    }
+
+    private void Expire(long at)
+    {
+        System.Collections.Generic.List<string> expired = new System.Collections.Generic.List<string>();
+        foreach (System.Collections.Generic.KeyValuePair<string, Pending> entry in pending)
+            if (at < entry.Value.At || at - entry.Value.At > LifetimeMs) expired.Add(entry.Key);
+        foreach (string id in expired) pending.Remove(id);
+    }
+
+    // true ALWAYS means cancel Chat.Sending. A null clean value means rejected,
+    // expired, disabled, malformed or replayed. Never forward such text to Brain.
+    // Even valid output must pass the complete command parser again on the UI.
+    public bool TryUnwrap(string text, out string clean)
+    {
+        clean = null;
+        if (text == null || text.IndexOf(marker, System.StringComparison.OrdinalIgnoreCase) < 0) return false;
+        lock (gate)
+        {
+            Expire(now());
+            if (!active || disposed || text.Length > 1200) return true;
+            string line = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+            int markers = System.Text.RegularExpressions.Regex.Matches(line, System.Text.RegularExpressions.Regex.Escape(marker), System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+            System.Text.RegularExpressions.MatchCollection matches = tickets.Matches(line);
+            if (markers < 1 || markers > 2 || matches.Count != markers) { pending.Clear(); return true; }
+            System.Collections.Generic.HashSet<string> used = new System.Collections.Generic.HashSet<string>(System.StringComparer.Ordinal);
+            System.Text.StringBuilder result = new System.Text.StringBuilder();
+            int start = 0;
+            foreach (System.Text.RegularExpressions.Match match in matches)
+            {
+                string id = match.Groups[1].Value;
+                Pending record;
+                if (!used.Add(id) || !pending.TryGetValue(id, out record)) { pending.Clear(); return true; }
+                result.Append(line, start, match.Index - start);
+                result.Append(record.Words);
+                start = match.Index + match.Length;
+            }
+            result.Append(line, start, line.Length - start);
+            foreach (string id in used) pending.Remove(id);
+            clean = result.ToString().Trim();
+            return true;
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (disposed) return;
+            disposed = true; active = false; pending.Clear();
+            // Another mod may have installed its own wrapper after this one.
+            // Its callback is never replaced by our shutdown.
+            exchange(original, wrapper);
+        }
+    }
+}
