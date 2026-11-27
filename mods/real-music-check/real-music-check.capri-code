@@ -1,0 +1,399 @@
+// capri-mod: 1
+// id: real-music-check
+// name: Real Music Check
+// version: 1.0.0
+// author: Quaisar_THM
+// description: She only dances to real music, not podcasts or talk, including audio files and MP4s in any player. Checked with a local AI music classifier if you run one, otherwise a steady beat.
+// requires: api 3
+
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Reflection;
+using System.Threading;
+using CapriDesktop;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+
+public class RealMusicCheck : ICapriMod
+{
+    const BindingFlags Any = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic;
+    const string DefaultAddress = "http://127.0.0.1:8765/music";
+
+    ICapriHost capri;
+    Opts opts;
+    FieldInfo slot;                 // Companion.MusicPlaying: what she asks before dancing
+    Func<bool> theirs;
+    object groove;                  // a second copy of her own beat tracker, just for this check
+    MethodInfo want, locked;
+    readonly Stopwatch clock = Stopwatch.StartNew();
+    System.Threading.Timer poll;
+
+    volatile bool candidate;        // a player says something is playing
+    volatile int answer = -1;       // the classifier: -1 no answer, 0 not music, 1 music
+    double answeredAt = -100;
+    int asking;
+    volatile bool useClassifier = true, useBeat = true;
+    volatile string address = DefaultAddress;
+    volatile int waitMs = 800;
+    volatile bool anyPlayer = true;
+    MethodInfo shared;              // Tunes.Shared(): Windows' media sessions, which Capri already reads
+    FieldInfo tunePlaying, tuneChanging;
+    FieldInfo menuOpen;             // Computer.MenuOpen: one of her menus is open
+    bool said;                      // the last answer she was given
+    double saidAt = -100;
+    volatile bool filePlayerOpen;   // a player that doesn't tell Windows what it plays
+    double playersLooked = -100;
+    static readonly string[] FilePlayers = { "vlc", "mpc-hc64", "mpc-hc", "mpc-be64", "mpc-be", "PotPlayerMini64", "PotPlayerMini", "mpv", "wmplayer", "smplayer", "KMPlayer64X", "KMPlayer", "GOM" };
+
+    public void Start(ICapriHost host)
+    {
+        capri = host;
+        if (opts == null)
+        {
+            opts = new Opts(host, "Real Music Check");
+            opts.Section("How she checks");
+            opts.Toggle("Ask a local AI music classifier first, if one is running", "classifier", true, delegate(bool v) { useClassifier = v; answer = -1; });
+            opts.Text("Classifier address", "address", DefaultAddress, delegate(string v) { address = v.Trim().Length > 0 ? v.Trim() : DefaultAddress; answer = -1; });
+            opts.Toggle("Also check audio files and videos (MP3s, MP4s and the like) in any player", "anyplayer", true, delegate(bool v) { anyPlayer = v; });
+            opts.Toggle("Otherwise, music needs a steady beat (Capri's own beat tracker)", "beat", true, delegate(bool v) { useBeat = v; });
+            opts.Number("Wait for the classifier (milliseconds)", "wait", 800, 200, 3000, 100, 0, delegate(double v) { waitMs = (int)v; });
+            opts.Note("Only checks while something is playing: a music app, or with the option above any player, including audio files and MP4s. The classifier answers {\"music\": true or false}; with none running, a song has to hold a steady beat for a few seconds before she dances, which podcasts and videos don't.");
+        }
+        useClassifier = opts.Flag("classifier", true);
+        useBeat = opts.Flag("beat", true);
+        anyPlayer = opts.Flag("anyplayer", true);
+        string a = opts.Str("address", DefaultAddress).Trim();
+        address = a.Length > 0 ? a : DefaultAddress;
+        waitMs = (int)opts.Num("wait", 800, 200, 3000);
+        try
+        {
+            Assembly app = typeof(ICapriHost).Assembly;
+            slot = app.GetType("CapriDesktop.Companion", true).GetField("MusicPlaying", Any);
+            if (slot == null) throw new MissingFieldException("Companion", "MusicPlaying");
+            Type g = app.GetType("CapriDesktop.Groove", false);
+            ConstructorInfo make = g == null ? null : g.GetConstructor(Any, null, new[] { typeof(Func<double>) }, null);
+            if (make != null)
+            {
+                groove = make.Invoke(new object[] { (Func<double>)delegate { return clock.Elapsed.TotalSeconds; } });
+                want = g.GetMethod("Want", Any);
+                locked = g.GetMethod("Locked", Any);
+            }
+            Type computer = app.GetType("CapriDesktop.Computer", false);
+            if (computer != null) menuOpen = computer.GetField("MenuOpen", Any);
+            Type tunes = app.GetType("CapriDesktop.Tunes", false), tune = app.GetType("CapriDesktop.Tune", false);
+            if (tunes != null && tune != null)
+            {
+                shared = tunes.GetMethod("Shared", Any, null, Type.EmptyTypes, null);
+                tunePlaying = tune.GetField("Playing", Any);
+                tuneChanging = tune.GetField("Changing", Any);
+            }
+            if (shared == null || tunePlaying == null) capri.Log("Real Music Check: Windows' media list isn't there, so other players are only noticed by name.");
+            if (groove == null) capri.Log("Real Music Check: Capri's beat tracker isn't there, so only the classifier is used.");
+            theirs = (Func<bool>)slot.GetValue(null);
+            slot.SetValue(null, (Func<bool>)Decide);
+            poll = new System.Threading.Timer(delegate { Poll(); }, null, 1000, 1000);
+            capri.Log("Real Music Check: she only dances to real music.");
+        }
+        catch (Exception e)
+        {
+            capri.Log("Real Music Check could not start: " + e.Message);
+            Stop();
+        }
+    }
+
+    public bool Heard(string words) { return false; }
+
+    public void Stop()
+    {
+        try
+        {
+            if (poll != null) { poll.Dispose(); poll = null; }
+            if (slot != null && theirs != null) slot.SetValue(null, theirs);
+            Listen(false);
+        }
+        catch (Exception e) { if (capri != null) capri.Log("Real Music Check could not stop: " + e.Message); }
+    }
+
+    // What she asks before she dances. Cheap: the classifier is asked in the
+    // background, and the beat tracker just reports what it has locked onto.
+    bool Decide()
+    {
+        bool now = Judge();
+        if (now == said) return now;
+        // Each change starts or stops her dance, and that closes a menu you have open, so
+        // the answer holds while one is open, and changes at most every 4 seconds.
+        bool menu = false;
+        try { menu = menuOpen != null && (bool)menuOpen.GetValue(null); } catch (Exception) { }
+        double at = clock.Elapsed.TotalSeconds;
+        if (menu || at - saidAt < 4) return said;
+        said = now;
+        saidAt = at;
+        return now;
+    }
+
+    bool Judge()
+    {
+        bool musicApp = theirs();
+        bool playing = musicApp || (anyPlayer && OtherPlayerPlaying());
+        if (!playing) { candidate = false; Listen(false); return false; }
+        candidate = true;
+        // Something only this mod noticed, with nothing to check it with: leave it as Capri had it.
+        if (!musicApp && !useClassifier && !(useBeat && groove != null)) return false;
+        if (useClassifier && answer >= 0 && clock.Elapsed.TotalSeconds - answeredAt < 5) return answer == 1;
+        if (useBeat && groove != null)
+        {
+            Listen(true);
+            object[] got = { 0.0, 0.0 };
+            return (bool)locked.Invoke(groove, got);
+        }
+        return true;        // nothing to check with: same as without the mod
+    }
+
+    // Any media session Windows knows is playing (Media Player, VLC 4, Films & TV, a
+    // browser video), or a file player that doesn't report one while your speakers have sound.
+    bool OtherPlayerPlaying()
+    {
+        try
+        {
+            if (shared != null && tunePlaying != null)
+            {
+                System.Collections.IEnumerable list = shared.Invoke(null, null) as System.Collections.IEnumerable;
+                if (list != null)
+                    foreach (object t in list)
+                        if ((bool)tunePlaying.GetValue(t) && !(tuneChanging != null && (bool)tuneChanging.GetValue(t))) return true;
+            }
+        }
+        catch (Exception) { }
+        try { return filePlayerOpen && capri.Music.Loudness > 0.02; } catch (Exception) { return false; }
+    }
+
+    // Every 10 seconds, off her window's thread: is a file player open?
+    void LookForPlayers()
+    {
+        if (!anyPlayer || clock.Elapsed.TotalSeconds - playersLooked < 10) return;
+        playersLooked = clock.Elapsed.TotalSeconds;
+        bool found = false;
+        foreach (Process p in Process.GetProcesses())
+        {
+            try { if (!found) foreach (string name in FilePlayers) if (string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)) { found = true; break; } }
+            catch (Exception) { }
+            p.Dispose();
+        }
+        filePlayerOpen = found;
+    }
+
+    void Listen(bool on)
+    {
+        if (groove == null) return;
+        try { want.Invoke(groove, new object[] { on }); } catch (Exception) { }
+    }
+
+    void Poll()
+    {
+        try { LookForPlayers(); } catch (Exception) { }
+        if (!candidate || !useClassifier || Interlocked.Exchange(ref asking, 1) == 1) return;
+        try
+        {
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(address);
+            request.Timeout = waitMs;
+            request.ReadWriteTimeout = waitMs;
+            request.Proxy = null;
+            using (WebResponse response = request.GetResponse())
+            using (StreamReader reader = new StreamReader(response.GetResponseStream()))
+            {
+                string json = reader.ReadToEnd();
+                answer = json.Contains("\"music\": true") || json.Contains("\"music\":true") ? 1
+                       : json.Contains("\"music\": false") || json.Contains("\"music\":false") ? 0 : -1;
+                answeredAt = clock.Elapsed.TotalSeconds;
+            }
+        }
+        catch (Exception) { answer = -1; }      // no classifier running: the beat tracker decides
+        finally { Interlocked.Exchange(ref asking, 0); }
+    }
+}
+
+// ---- Options page (Quaisar_THM's shared toolkit) -------------------------------
+// An Options page under Mainframe > Mods, in her colours. Every value lives in
+// this mod's own Store, so it survives restarts and updates. Toggles and
+// numbers apply as you change them; text applies on Enter or when you click away.
+sealed class Opts
+{
+    static readonly Color Back = Color.FromArgb(16, 15, 8), Ink = Color.FromArgb(236, 236, 241),
+        Dim = Color.FromArgb(150, 146, 120), Yellow = Color.FromArgb(252, 239, 3),
+        Cyan = Color.FromArgb(5, 202, 237), Field = Color.FromArgb(30, 29, 14), Edge = Color.FromArgb(90, 86, 10);
+    const int Wide = 690, Right = 470;
+
+    delegate int Row(Control page, int y);
+    readonly ICapriHost host;
+    readonly List<Row> rows = new List<Row>();
+
+    public Opts(ICapriHost host, string title)
+    {
+        this.host = host;
+        host.Ui.SetOptions(title, Build);
+    }
+
+    // Reading values, with sane fallbacks for anything missing or out of range.
+    public bool Flag(string key, bool def) { try { return host.Store.Flag(key, def); } catch (Exception) { return def; } }
+    public double Num(string key, double def, double min, double max)
+    {
+        double v;
+        try { v = host.Store.Number(key, def); } catch (Exception) { v = def; }
+        return double.IsNaN(v) ? def : Math.Max(min, Math.Min(max, v));
+    }
+    public string Str(string key, string def)
+    {
+        try { string v = host.Store.Get(key, def); return v ?? def; } catch (Exception) { return def; }
+    }
+
+    public void Section(string title)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            System.Windows.Forms.Label l = Text(title.ToUpperInvariant(), 18, y + (y > 14 ? 10 : 0), Wide);
+            l.ForeColor = Cyan;
+            l.Font = new Font("Segoe UI Semibold", 9.5f);
+            p.Controls.Add(l);
+            return l.Bottom + 8;
+        });
+    }
+
+    public void Note(string text)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            System.Windows.Forms.Label l = Text(text, 18, y, Wide);
+            l.ForeColor = Dim;
+            l.Font = new Font("Segoe UI", 8.5f);
+            l.Height = TextRenderer.MeasureText(text, l.Font, new Size(Wide, 0), TextFormatFlags.WordBreak).Height + 4;
+            p.Controls.Add(l);
+            return l.Bottom + 8;
+        });
+    }
+
+    public void Toggle(string label, string key, bool def, Action<bool> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y + 7, Right - 30));
+            Button off = Pill("OFF", Right + 50, y), on = Pill("ON", Right + 140, y);
+            MethodInvoker paint = delegate
+            {
+                bool v = Flag(key, def);
+                Lit(on, v);
+                Lit(off, !v);
+            };
+            off.Click += delegate { Save(key, false); paint(); Tell(changed, false); };
+            on.Click += delegate { Save(key, true); paint(); Tell(changed, true); };
+            paint();
+            p.Controls.Add(off);
+            p.Controls.Add(on);
+            return y + 42;
+        });
+    }
+
+    public void Number(string label, string key, double def, double min, double max, double step, int decimals, Action<double> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y + 7, Right - 30));
+            NumericUpDown box = new NumericUpDown
+            {
+                Left = Right + 50, Top = y + 2, Width = 170, DecimalPlaces = decimals,
+                Minimum = (decimal)min, Maximum = (decimal)max, Increment = (decimal)step,
+                BackColor = Field, ForeColor = Ink, BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 10f), TextAlign = HorizontalAlignment.Center,
+            };
+            box.Value = (decimal)Num(key, def, min, max);
+            box.ValueChanged += delegate
+            {
+                double v = (double)box.Value;
+                try { host.Store.Set(key, v); } catch (Exception) { }
+                Tell(changed, v);
+            };
+            p.Controls.Add(box);
+            return y + 42;
+        });
+    }
+
+    public void Text(string label, string key, string def, Action<string> changed)
+    {
+        rows.Add(delegate(Control p, int y)
+        {
+            p.Controls.Add(Text(label, 18, y, Wide));
+            TextBox box = new TextBox
+            {
+                Left = 18, Top = y + 24, Width = Wide, Text = Str(key, def),
+                BackColor = Field, ForeColor = Ink, BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Segoe UI", 10f),
+            };
+            string applied = box.Text;
+            MethodInvoker apply = delegate
+            {
+                if (box.Text == applied) return;
+                applied = box.Text;
+                try { host.Store.Set(key, applied); } catch (Exception) { }
+                Tell(changed, applied);
+            };
+            box.Leave += delegate { apply(); };
+            box.KeyDown += delegate(object s, KeyEventArgs e)
+            {
+                if (e.KeyCode != Keys.Enter) return;
+                e.SuppressKeyPress = true;
+                apply();
+            };
+            p.Controls.Add(box);
+            return box.Bottom + 12;
+        });
+    }
+
+    Control Build()
+    {
+        Panel page = new Panel { Width = Wide + 36, BackColor = Back, ForeColor = Ink, Font = new Font("Segoe UI", 9.5f) };
+        int y = 14;
+        foreach (Row r in rows) y = r(page, y);
+        page.Height = y + 10;
+        return page;
+    }
+
+    void Save(string key, bool v) { try { host.Store.Set(key, v); } catch (Exception) { } }
+
+    // A setting that fails to apply is logged, never thrown into her window.
+    void Tell<T>(Action<T> changed, T value)
+    {
+        if (changed == null) return;
+        try { changed(value); }
+        catch (Exception e) { try { host.Log("Options: " + e.Message); } catch (Exception) { } }
+    }
+
+    static System.Windows.Forms.Label Text(string text, int x, int y, int width)
+    {
+        return new System.Windows.Forms.Label { Text = text, Left = x, Top = y, Width = width, AutoSize = false, Height = 22, ForeColor = Ink, BackColor = Color.Transparent };
+    }
+
+    static Button Pill(string text, int x, int y)
+    {
+        Button b = new Button { Text = text, Left = x, Top = y, Width = 84, Height = 30, FlatStyle = FlatStyle.Flat, Cursor = Cursors.Default, Font = new Font("Segoe UI Semibold", 9f) };
+        b.FlatAppearance.BorderColor = Edge;
+        return b;
+    }
+
+    static void Lit(Button b, bool lit)
+    {
+        b.BackColor = lit ? Yellow : Field;
+        b.ForeColor = lit ? Back : Ink;
+        b.FlatAppearance.BorderColor = lit ? Yellow : Edge;
+    }
+
+    // "a, b ,c" -> ["a","b","c"], blanks dropped.
+    public static List<string> Words(string list)
+    {
+        List<string> words = new List<string>();
+        foreach (string w in (list ?? "").Split(','))
+            if (w.Trim().Length > 0) words.Add(w.Trim());
+        return words;
+    }
+}
