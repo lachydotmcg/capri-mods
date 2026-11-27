@@ -1,7 +1,7 @@
 // capri-mod: 1
 // id: music-notes
 // name: Music Notes
-// version: 1.0.0
+// version: 1.0.1
 // author: Quaisar_THM
 // description: Music notes float up around her while she's dancing to your music.
 // requires: api 3
@@ -101,6 +101,8 @@ public class FloatingNotes : ICapriMod
                         try
                         {
                             window = new NoteWindow(f, capri);
+                            // Made now, not when the music starts: making a window then closes her menu.
+                            IntPtr made = window.Handle;
                             her = f;
                             capri.Log("Music Notes: ready for music.");
                         }
@@ -125,6 +127,7 @@ sealed class NoteWindow : Form
     static readonly Color Clear = Color.FromArgb(1, 2, 3);
 
     [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr window, uint affinity);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window, int how);
 
     sealed class Note { public string Glyph; public Color Ink; public double X, Born, Sway; }
 
@@ -218,7 +221,9 @@ sealed class NoteWindow : Form
                 return;
             }
             Location = new Point(her.Left + her.Width / 2 - Across / 2, her.Top - High / 2);
-            if (!Visible) Show();
+            // Straight to Windows, "show, don't activate": WinForms' Show() closes her right-click
+            // menu if it's open when she starts dancing.
+            if (!Visible) ShowWindow(Handle, 4);
             Invalidate();
         }
         catch (Exception error)
